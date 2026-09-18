@@ -76,7 +76,9 @@ type CompiledQoS struct {
 	IngressMbps uint32 `json:"ingressMbps,omitempty"`
 }
 
-// CompiledFirewall holds pre-compiled ingress and egress rules for a NIC.
+// CompiledFirewall holds pre-compiled ingress and egress rules for a NIC. Each list is in
+// first-match-wins order: priorities are already resolved into the order, and rules that a
+// higher-precedence rule fully covers have been dropped.
 type CompiledFirewall struct {
 	// Ingress is the ordered list of ingress firewall rules.
 	// +optional
@@ -86,9 +88,10 @@ type CompiledFirewall struct {
 	Egress []CompiledFwRule `json:"egress,omitempty"`
 }
 
-// CompiledFwRule is a single compiled firewall rule (destination CIDR + proto + port + action).
+// CompiledFwRule is a single compiled firewall rule (peer CIDR + proto + port + action).
 type CompiledFwRule struct {
-	// CIDR is the destination CIDR to match ("0.0.0.0/0" = any).
+	// CIDR is the peer CIDR to match: the SOURCE for an ingress rule, the DESTINATION for an egress
+	// rule ("0.0.0.0/0" = any IPv4, "::/0" = any IPv6).
 	CIDR string `json:"cidr"`
 	// Proto is the IP protocol ("TCP", "UDP", "ICMP", or "" for any).
 	// +optional

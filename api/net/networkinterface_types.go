@@ -79,6 +79,8 @@ type NetworkInterfaceStatus struct {
 	// ObservedGeneration is the Spec generation the allocation reflects. Compile
 	// is gated on ObservedGeneration == metadata.generation.
 	ObservedGeneration int64
+	// Conditions report compile-time observations about this interface (FirewallCompiled).
+	Conditions []metav1.Condition
 }
 
 // +genclient

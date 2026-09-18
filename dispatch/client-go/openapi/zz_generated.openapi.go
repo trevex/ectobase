@@ -703,7 +703,7 @@ func schema_ectobase_api_compiled_v1alpha1_CompiledFirewall(ref common.Reference
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
-				Description: "CompiledFirewall holds pre-compiled ingress and egress rules for a NIC.",
+				Description: "CompiledFirewall holds pre-compiled ingress and egress rules for a NIC. Each list is in first-match-wins order: priorities are already resolved into the order, and rules that a higher-precedence rule fully covers have been dropped.",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
 					"ingress": {
@@ -746,12 +746,12 @@ func schema_ectobase_api_compiled_v1alpha1_CompiledFwRule(ref common.ReferenceCa
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
-				Description: "CompiledFwRule is a single compiled firewall rule (destination CIDR + proto + port + action).",
+				Description: "CompiledFwRule is a single compiled firewall rule (peer CIDR + proto + port + action).",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
 					"cidr": {
 						SchemaProps: spec.SchemaProps{
-							Description: "CIDR is the destination CIDR to match (\"0.0.0.0/0\" = any).",
+							Description: "CIDR is the peer CIDR to match: the SOURCE for an ingress rule, the DESTINATION for an egress rule (\"0.0.0.0/0\" = any IPv4, \"::/0\" = any IPv6).",
 							Default:     "",
 							Type:        []string{"string"},
 							Format:      "",
@@ -2273,7 +2273,7 @@ func schema_ectobase_api_net_v1alpha1_FirewallPolicy(ref common.ReferenceCallbac
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
-				Description: "FirewallPolicy is a scaffold-only resource. Selector-based distributed firewall (§3.4).",
+				Description: "FirewallPolicy is a set of prioritized allow/deny rules applied to the NetworkInterfaces its selector matches; the distributed firewall enforces it per interface in the datapath.",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
 					"kind": {
@@ -2374,7 +2374,7 @@ func schema_ectobase_api_net_v1alpha1_FirewallPolicyRule(ref common.ReferenceCal
 				Properties: map[string]spec.Schema{
 					"cidr": {
 						SchemaProps: spec.SchemaProps{
-							Description: "CIDR is the source (ingress) or destination (egress) CIDR to match. \"0.0.0.0/0\" matches all addresses.",
+							Description: "CIDR is the source (ingress) or destination (egress) CIDR to match. \"0.0.0.0/0\" matches all IPv4 addresses, \"::/0\" all IPv6 addresses.",
 							Default:     "",
 							Type:        []string{"string"},
 							Format:      "",
@@ -2382,14 +2382,14 @@ func schema_ectobase_api_net_v1alpha1_FirewallPolicyRule(ref common.ReferenceCal
 					},
 					"proto": {
 						SchemaProps: spec.SchemaProps{
-							Description: "Proto is the IP protocol to match (\"TCP\", \"UDP\", \"ICMP\", or \"\" for any).",
+							Description: "Proto is the IP protocol to match (\"TCP\", \"UDP\", \"ICMP\", or \"\" for any). ICMP means the ICMP of the CIDR's family (ICMPv6 for an IPv6 CIDR).",
 							Type:        []string{"string"},
 							Format:      "",
 						},
 					},
 					"port": {
 						SchemaProps: spec.SchemaProps{
-							Description: "Port is the destination port to match (0 = any).",
+							Description: "Port is the destination port to match (0 = any). Requires Proto TCP or UDP.",
 							Type:        []string{"integer"},
 							Format:      "int32",
 						},
@@ -2400,6 +2400,13 @@ func schema_ectobase_api_net_v1alpha1_FirewallPolicyRule(ref common.ReferenceCal
 							Default:     "",
 							Type:        []string{"string"},
 							Format:      "",
+						},
+					},
+					"priority": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Priority orders this rule against the other rules of equally-prioritized policies: lower wins. 0-65535; unset means 32768. Rules of equal priority keep their list order.",
+							Type:        []string{"integer"},
+							Format:      "int32",
 						},
 					},
 				},
@@ -2420,6 +2427,13 @@ func schema_ectobase_api_net_v1alpha1_FirewallPolicySpec(ref common.ReferenceCal
 						SchemaProps: spec.SchemaProps{
 							Description: "InterfaceSelector selects the NetworkInterfaces this policy applies to via label matching.",
 							Ref:         ref(metav1.LabelSelector{}.OpenAPIModelName()),
+						},
+					},
+					"priority": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Priority orders this policy against the other policies selecting the same interface: lower wins. 0-65535; unset means 32768. Policies of equal priority are ordered by their rules' priorities, then by policy name.",
+							Type:        []string{"integer"},
+							Format:      "int32",
 						},
 					},
 					"ingress": {
@@ -2462,7 +2476,7 @@ func schema_ectobase_api_net_v1alpha1_FirewallPolicyStatus(ref common.ReferenceC
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
-				Description: "FirewallPolicyStatus is the observed state of a FirewallPolicy.\n\nSCAFFOLD ONLY: intentionally empty.",
+				Description: "FirewallPolicyStatus is the observed state of a FirewallPolicy. Intentionally empty: the outcome of compiling a policy is reported per interface, on the NetworkInterface's FirewallCompiled condition.",
 				Type:        []string{"object"},
 			},
 		},
@@ -3484,11 +3498,35 @@ func schema_ectobase_api_net_v1alpha1_NetworkInterfaceStatus(ref common.Referenc
 							Format:      "",
 						},
 					},
+					"conditions": {
+						VendorExtensible: spec.VendorExtensible{
+							Extensions: spec.Extensions{
+								"x-kubernetes-list-map-keys": []interface{}{
+									"type",
+								},
+								"x-kubernetes-list-type":       "map",
+								"x-kubernetes-patch-merge-key": "type",
+								"x-kubernetes-patch-strategy":  "merge",
+							},
+						},
+						SchemaProps: spec.SchemaProps{
+							Description: "Conditions report compile-time observations about this interface. FirewallCompiled is False when the policies selecting it cannot be programmed (e.g. over the per-interface rule budget); the last good rule set then stays applied.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref(metav1.Condition{}.OpenAPIModelName()),
+									},
+								},
+							},
+						},
+					},
 				},
 			},
 		},
 		Dependencies: []string{
-			netv1alpha1.PortStatus{}.OpenAPIModelName()},
+			netv1alpha1.PortStatus{}.OpenAPIModelName(), metav1.Condition{}.OpenAPIModelName()},
 	}
 }
 
@@ -4043,7 +4081,7 @@ func schema_ectobase_api_net_v1alpha1_VPCSpec(ref common.ReferenceCallback) comm
 					},
 					"defaultPolicy": {
 						SchemaProps: spec.SchemaProps{
-							Description: "DefaultPolicy overrides the global default firewall posture for this VPC. One of Allow (k8s semantics) or Deny (VPC-wide default-deny).",
+							Description: "DefaultPolicy sets what happens to traffic no firewall rule matches. Allow: it passes (rules carve out denies). Deny: it drops, in every direction (rules carve out allows). Unset keeps Kubernetes NetworkPolicy semantics per direction: a direction no policy governs is open, a governed direction admits only what its rules allow. The VPC's FirewallDefault condition reports the posture in effect.",
 							Type:        []string{"string"},
 							Format:      "",
 						},
@@ -4075,9 +4113,35 @@ func schema_ectobase_api_net_v1alpha1_VPCStatus(ref common.ReferenceCallback) co
 							Format:      "",
 						},
 					},
+					"conditions": {
+						VendorExtensible: spec.VendorExtensible{
+							Extensions: spec.Extensions{
+								"x-kubernetes-list-map-keys": []interface{}{
+									"type",
+								},
+								"x-kubernetes-list-type":       "map",
+								"x-kubernetes-patch-merge-key": "type",
+								"x-kubernetes-patch-strategy":  "merge",
+							},
+						},
+						SchemaProps: spec.SchemaProps{
+							Description: "Conditions report observations about the VPC. FirewallDefault states the default firewall posture in effect (reason Allow, Deny or PerDirection).",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref(metav1.Condition{}.OpenAPIModelName()),
+									},
+								},
+							},
+						},
+					},
 				},
 			},
 		},
+		Dependencies: []string{
+			metav1.Condition{}.OpenAPIModelName()},
 	}
 }
 

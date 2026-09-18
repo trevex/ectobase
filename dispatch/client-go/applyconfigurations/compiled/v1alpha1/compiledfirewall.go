@@ -5,7 +5,9 @@ package v1alpha1
 // CompiledFirewallApplyConfiguration represents a declarative configuration of the CompiledFirewall type for use
 // with apply.
 //
-// CompiledFirewall holds pre-compiled ingress and egress rules for a NIC.
+// CompiledFirewall holds pre-compiled ingress and egress rules for a NIC. Each list is in
+// first-match-wins order: priorities are already resolved into the order, and rules that a
+// higher-precedence rule fully covers have been dropped.
 type CompiledFirewallApplyConfiguration struct {
 	// Ingress is the ordered list of ingress firewall rules.
 	Ingress []CompiledFwRuleApplyConfiguration `json:"ingress,omitempty"`

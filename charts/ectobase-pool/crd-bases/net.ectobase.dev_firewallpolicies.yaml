@@ -19,8 +19,9 @@ spec:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: FirewallPolicy is a scaffold-only resource. Selector-based distributed
-          firewall (§3.4).
+        description: |-
+          FirewallPolicy is a set of prioritized allow/deny rules applied to the NetworkInterfaces its
+          selector matches; the distributed firewall enforces it per interface in the datapath.
         properties:
           apiVersion:
             description: |-
@@ -51,19 +52,38 @@ spec:
                   properties:
                     action:
                       description: Action is "Allow" or "Deny".
+                      enum:
+                      - Allow
+                      - Deny
                       type: string
                     cidr:
                       description: |-
                         CIDR is the source (ingress) or destination (egress) CIDR to match.
-                        "0.0.0.0/0" matches all addresses.
+                        "0.0.0.0/0" matches all IPv4 addresses, "::/0" all IPv6 addresses.
                       type: string
                     port:
                       description: Port is the destination port to match (0 = any).
+                        Requires Proto TCP or UDP.
                       format: int32
+                      maximum: 65535
+                      minimum: 0
+                      type: integer
+                    priority:
+                      description: |-
+                        Priority orders this rule against the other rules of equally-prioritized policies: lower
+                        wins. 0-65535; unset means 32768. Rules of equal priority keep their list order.
+                      format: int32
+                      maximum: 65535
+                      minimum: 0
                       type: integer
                     proto:
-                      description: Proto is the IP protocol to match ("TCP", "UDP",
-                        "ICMP", or "" for any).
+                      description: |-
+                        Proto is the IP protocol to match ("TCP", "UDP", "ICMP", or "" for any). ICMP means the ICMP
+                        of the CIDR's family (ICMPv6 for an IPv6 CIDR).
+                      enum:
+                      - TCP
+                      - UDP
+                      - ICMP
                       type: string
                   required:
                   - action
@@ -79,19 +99,38 @@ spec:
                   properties:
                     action:
                       description: Action is "Allow" or "Deny".
+                      enum:
+                      - Allow
+                      - Deny
                       type: string
                     cidr:
                       description: |-
                         CIDR is the source (ingress) or destination (egress) CIDR to match.
-                        "0.0.0.0/0" matches all addresses.
+                        "0.0.0.0/0" matches all IPv4 addresses, "::/0" all IPv6 addresses.
                       type: string
                     port:
                       description: Port is the destination port to match (0 = any).
+                        Requires Proto TCP or UDP.
                       format: int32
+                      maximum: 65535
+                      minimum: 0
+                      type: integer
+                    priority:
+                      description: |-
+                        Priority orders this rule against the other rules of equally-prioritized policies: lower
+                        wins. 0-65535; unset means 32768. Rules of equal priority keep their list order.
+                      format: int32
+                      maximum: 65535
+                      minimum: 0
                       type: integer
                     proto:
-                      description: Proto is the IP protocol to match ("TCP", "UDP",
-                        "ICMP", or "" for any).
+                      description: |-
+                        Proto is the IP protocol to match ("TCP", "UDP", "ICMP", or "" for any). ICMP means the ICMP
+                        of the CIDR's family (ICMPv6 for an IPv6 CIDR).
+                      enum:
+                      - TCP
+                      - UDP
+                      - ICMP
                       type: string
                   required:
                   - action
@@ -145,12 +184,21 @@ spec:
                     type: object
                 type: object
                 x-kubernetes-map-type: atomic
+              priority:
+                description: |-
+                  Priority orders this policy against the other policies selecting the same interface: lower
+                  wins. 0-65535; unset means 32768. Policies of equal priority are ordered by their rules'
+                  priorities, then by policy name.
+                format: int32
+                maximum: 65535
+                minimum: 0
+                type: integer
             type: object
           status:
             description: |-
-              FirewallPolicyStatus is the observed state of a FirewallPolicy.
-
-              SCAFFOLD ONLY: intentionally empty.
+              FirewallPolicyStatus is the observed state of a FirewallPolicy. Intentionally empty: the outcome
+              of compiling a policy is reported per interface, on the NetworkInterface's FirewallCompiled
+              condition.
             type: object
         type: object
     served: true

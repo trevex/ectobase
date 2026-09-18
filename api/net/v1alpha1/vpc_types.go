@@ -12,9 +12,11 @@ import (
 type VPCPolicy string
 
 const (
-	// VPCPolicyAllow keeps k8s semantics: interfaces are open until selected by a policy.
+	// VPCPolicyAllow ends every interface's ingress and egress with an implicit lowest-priority
+	// allow-all: traffic flows unless a rule denies it, so a lone Deny rule denies just its match.
 	VPCPolicyAllow VPCPolicy = "Allow"
-	// VPCPolicyDeny makes the VPC default-deny: traffic is dropped unless explicitly allowed.
+	// VPCPolicyDeny makes the VPC default-deny: traffic is dropped unless a rule allows it, in both
+	// directions, whether or not any policy selects the interface.
 	VPCPolicyDeny VPCPolicy = "Deny"
 )
 
@@ -24,9 +26,13 @@ type VPCSpec struct {
 	// allocated by the central cluster from the global VNI space.
 	// +optional
 	VNI *int32 `json:"vni,omitempty" protobuf:"varint,1,opt,name=vni"`
-	// DefaultPolicy overrides the global default firewall posture for this VPC.
-	// One of Allow (k8s semantics) or Deny (VPC-wide default-deny).
+	// DefaultPolicy sets what happens to traffic no firewall rule matches. Allow: it passes (rules
+	// carve out denies). Deny: it drops, in every direction (rules carve out allows). Unset keeps
+	// Kubernetes NetworkPolicy semantics per direction: a direction no policy governs is open, a
+	// governed direction admits only what its rules allow. The VPC's FirewallDefault condition
+	// reports the posture in effect.
 	// +optional
+	// +kubebuilder:validation:Enum=Allow;Deny
 	DefaultPolicy *string `json:"defaultPolicy,omitempty" protobuf:"bytes,2,opt,name=defaultPolicy"`
 }
 
@@ -38,6 +44,14 @@ type VPCStatus struct {
 	// State is the current lifecycle state (e.g. Pending, Ready).
 	// +optional
 	State string `json:"state,omitempty" protobuf:"bytes,2,opt,name=state"`
+	// Conditions report observations about the VPC. FirewallDefault states the default firewall
+	// posture in effect (reason Allow, Deny or PerDirection).
+	// +optional
+	// +listType=map
+	// +listMapKey=type
+	// +patchStrategy=merge
+	// +patchMergeKey=type
+	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type" protobuf:"bytes,3,rep,name=conditions"`
 }
 
 // +genclient

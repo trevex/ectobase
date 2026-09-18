@@ -11,6 +11,9 @@ import (
 type FirewallPolicySpec struct {
 	// InterfaceSelector selects the NetworkInterfaces this policy applies to via label matching.
 	InterfaceSelector *metav1.LabelSelector
+	// Priority orders this policy against the other policies selecting the same interface: lower
+	// wins. 0-65535; unset means 32768.
+	Priority *int32
 	// Ingress is the ordered list of ingress rules to apply to selected interfaces.
 	Ingress []FirewallPolicyRule
 	// Egress is the ordered list of egress rules to apply to selected interfaces.
@@ -21,24 +24,29 @@ type FirewallPolicySpec struct {
 type FirewallPolicyRule struct {
 	// CIDR is the source (ingress) or destination (egress) CIDR to match.
 	CIDR string
-	// Proto is the IP protocol to match ("TCP", "UDP", "ICMP", or "" for any).
+	// Proto is the IP protocol to match ("TCP", "UDP", "ICMP", or "" for any). ICMP means the ICMP
+	// of the CIDR's family.
 	Proto string
-	// Port is the destination port to match (0 = any).
+	// Port is the destination port to match (0 = any). Requires Proto TCP or UDP.
 	Port int32
 	// Action is "Allow" or "Deny".
 	Action string
+	// Priority orders this rule against the other rules of equally-prioritized policies: lower
+	// wins. 0-65535; unset means 32768.
+	Priority *int32
 }
 
-// FirewallPolicyStatus is the observed state of a FirewallPolicy.
-//
-// SCAFFOLD ONLY: intentionally empty.
+// FirewallPolicyStatus is the observed state of a FirewallPolicy. Intentionally empty: the outcome
+// of compiling a policy is reported per interface, on the NetworkInterface's FirewallCompiled
+// condition.
 type FirewallPolicyStatus struct {
 }
 
 // +genclient
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
-// FirewallPolicy is a scaffold-only resource. Selector-based distributed firewall (§3.4).
+// FirewallPolicy is a set of prioritized allow/deny rules applied to the NetworkInterfaces its
+// selector matches; the distributed firewall enforces it per interface in the datapath.
 type FirewallPolicy struct {
 	metav1.TypeMeta
 	metav1.ObjectMeta

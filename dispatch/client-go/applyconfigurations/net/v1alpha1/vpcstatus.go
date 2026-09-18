@@ -2,6 +2,10 @@
 
 package v1alpha1
 
+import (
+	v1 "k8s.io/client-go/applyconfigurations/meta/v1"
+)
+
 // VPCStatusApplyConfiguration represents a declarative configuration of the VPCStatus type for use
 // with apply.
 //
@@ -11,6 +15,9 @@ type VPCStatusApplyConfiguration struct {
 	VNI *int32 `json:"vni,omitempty"`
 	// State is the current lifecycle state (e.g. Pending, Ready).
 	State *string `json:"state,omitempty"`
+	// Conditions report observations about the VPC. FirewallDefault states the default firewall
+	// posture in effect (reason Allow, Deny or PerDirection).
+	Conditions []v1.ConditionApplyConfiguration `json:"conditions,omitempty"`
 }
 
 // VPCStatusApplyConfiguration constructs a declarative configuration of the VPCStatus type for use with
@@ -32,5 +39,18 @@ func (b *VPCStatusApplyConfiguration) WithVNI(value int32) *VPCStatusApplyConfig
 // If called multiple times, the State field is set to the value of the last call.
 func (b *VPCStatusApplyConfiguration) WithState(value string) *VPCStatusApplyConfiguration {
 	b.State = &value
+	return b
+}
+
+// WithConditions adds the given value to the Conditions field in the declarative configuration
+// and returns the receiver, so that objects can be build by chaining "With" function invocations.
+// If called multiple times, values provided by each call will be appended to the Conditions field.
+func (b *VPCStatusApplyConfiguration) WithConditions(values ...*v1.ConditionApplyConfiguration) *VPCStatusApplyConfiguration {
+	for i := range values {
+		if values[i] == nil {
+			panic("nil value passed to WithConditions")
+		}
+		b.Conditions = append(b.Conditions, *values[i])
+	}
 	return b
 }

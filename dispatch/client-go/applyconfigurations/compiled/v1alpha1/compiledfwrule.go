@@ -5,9 +5,10 @@ package v1alpha1
 // CompiledFwRuleApplyConfiguration represents a declarative configuration of the CompiledFwRule type for use
 // with apply.
 //
-// CompiledFwRule is a single compiled firewall rule (destination CIDR + proto + port + action).
+// CompiledFwRule is a single compiled firewall rule (peer CIDR + proto + port + action).
 type CompiledFwRuleApplyConfiguration struct {
-	// CIDR is the destination CIDR to match ("0.0.0.0/0" = any).
+	// CIDR is the peer CIDR to match: the SOURCE for an ingress rule, the DESTINATION for an egress
+	// rule ("0.0.0.0/0" = any IPv4, "::/0" = any IPv6).
 	CIDR *string `json:"cidr,omitempty"`
 	// Proto is the IP protocol ("TCP", "UDP", "ICMP", or "" for any).
 	Proto *string `json:"proto,omitempty"`

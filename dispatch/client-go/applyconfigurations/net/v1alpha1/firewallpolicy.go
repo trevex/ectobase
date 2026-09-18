@@ -12,7 +12,8 @@ import (
 // FirewallPolicyApplyConfiguration represents a declarative configuration of the FirewallPolicy type for use
 // with apply.
 //
-// FirewallPolicy is a scaffold-only resource. Selector-based distributed firewall (§3.4).
+// FirewallPolicy is a set of prioritized allow/deny rules applied to the NetworkInterfaces its
+// selector matches; the distributed firewall enforces it per interface in the datapath.
 type FirewallPolicyApplyConfiguration struct {
 	v1.TypeMetaApplyConfiguration    `json:",inline"`
 	*v1.ObjectMetaApplyConfiguration `json:"metadata,omitempty"`

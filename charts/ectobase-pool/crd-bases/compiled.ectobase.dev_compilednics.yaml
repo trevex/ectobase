@@ -70,14 +70,15 @@ spec:
                     description: Egress is the ordered list of egress firewall rules.
                     items:
                       description: CompiledFwRule is a single compiled firewall rule
-                        (destination CIDR + proto + port + action).
+                        (peer CIDR + proto + port + action).
                       properties:
                         action:
                           description: 'Action is the rule action: "Allow" or "Deny".'
                           type: string
                         cidr:
-                          description: CIDR is the destination CIDR to match ("0.0.0.0/0"
-                            = any).
+                          description: |-
+                            CIDR is the peer CIDR to match: the SOURCE for an ingress rule, the DESTINATION for an egress
+                            rule ("0.0.0.0/0" = any IPv4, "::/0" = any IPv6).
                           type: string
                         port:
                           description: Port is the destination port (0 = any).
@@ -96,14 +97,15 @@ spec:
                     description: Ingress is the ordered list of ingress firewall rules.
                     items:
                       description: CompiledFwRule is a single compiled firewall rule
-                        (destination CIDR + proto + port + action).
+                        (peer CIDR + proto + port + action).
                       properties:
                         action:
                           description: 'Action is the rule action: "Allow" or "Deny".'
                           type: string
                         cidr:
-                          description: CIDR is the destination CIDR to match ("0.0.0.0/0"
-                            = any).
+                          description: |-
+                            CIDR is the peer CIDR to match: the SOURCE for an ingress rule, the DESTINATION for an egress
+                            rule ("0.0.0.0/0" = any IPv4, "::/0" = any IPv6).
                           type: string
                         port:
                           description: Port is the destination port (0 = any).

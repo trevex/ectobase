@@ -2,6 +2,10 @@
 
 package v1alpha1
 
+import (
+	v1 "k8s.io/client-go/applyconfigurations/meta/v1"
+)
+
 // NetworkInterfaceStatusApplyConfiguration represents a declarative configuration of the NetworkInterfaceStatus type for use
 // with apply.
 //
@@ -27,6 +31,10 @@ type NetworkInterfaceStatusApplyConfiguration struct {
 	// (or the pinned Spec.MAC). CompiledNIC.Spec.MAC is sourced from this, never
 	// Spec.MAC. Empty until the interface reaches State=="Allocated".
 	AllocatedMAC *string `json:"allocatedMAC,omitempty"`
+	// Conditions report compile-time observations about this interface. FirewallCompiled is False
+	// when the policies selecting it cannot be programmed (e.g. over the per-interface rule
+	// budget); the last good rule set then stays applied.
+	Conditions []v1.ConditionApplyConfiguration `json:"conditions,omitempty"`
 }
 
 // NetworkInterfaceStatusApplyConfiguration constructs a declarative configuration of the NetworkInterfaceStatus type for use with
@@ -90,5 +98,18 @@ func (b *NetworkInterfaceStatusApplyConfiguration) WithObservedGeneration(value 
 // If called multiple times, the AllocatedMAC field is set to the value of the last call.
 func (b *NetworkInterfaceStatusApplyConfiguration) WithAllocatedMAC(value string) *NetworkInterfaceStatusApplyConfiguration {
 	b.AllocatedMAC = &value
+	return b
+}
+
+// WithConditions adds the given value to the Conditions field in the declarative configuration
+// and returns the receiver, so that objects can be build by chaining "With" function invocations.
+// If called multiple times, values provided by each call will be appended to the Conditions field.
+func (b *NetworkInterfaceStatusApplyConfiguration) WithConditions(values ...*v1.ConditionApplyConfiguration) *NetworkInterfaceStatusApplyConfiguration {
+	for i := range values {
+		if values[i] == nil {
+			panic("nil value passed to WithConditions")
+		}
+		b.Conditions = append(b.Conditions, *values[i])
+	}
 	return b
 }

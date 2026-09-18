@@ -104,6 +104,15 @@ type NetworkInterfaceStatus struct {
 	// Spec.MAC. Empty until the interface reaches State=="Allocated".
 	// +optional
 	AllocatedMAC string `json:"allocatedMAC,omitempty" protobuf:"bytes,7,opt,name=allocatedMAC"`
+	// Conditions report compile-time observations about this interface. FirewallCompiled is False
+	// when the policies selecting it cannot be programmed (e.g. over the per-interface rule
+	// budget); the last good rule set then stays applied.
+	// +optional
+	// +listType=map
+	// +listMapKey=type
+	// +patchStrategy=merge
+	// +patchMergeKey=type
+	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type" protobuf:"bytes,8,rep,name=conditions"`
 }
 
 // +genclient

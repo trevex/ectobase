@@ -557,6 +557,7 @@ func autoConvert_v1alpha1_FirewallPolicyRule_To_net_FirewallPolicyRule(in *Firew
 	out.Proto = in.Proto
 	out.Port = in.Port
 	out.Action = in.Action
+	out.Priority = (*int32)(unsafe.Pointer(in.Priority))
 	return nil
 }
 
@@ -570,6 +571,7 @@ func autoConvert_net_FirewallPolicyRule_To_v1alpha1_FirewallPolicyRule(in *net.F
 	out.Proto = in.Proto
 	out.Port = in.Port
 	out.Action = in.Action
+	out.Priority = (*int32)(unsafe.Pointer(in.Priority))
 	return nil
 }
 
@@ -580,6 +582,7 @@ func Convert_net_FirewallPolicyRule_To_v1alpha1_FirewallPolicyRule(in *net.Firew
 
 func autoConvert_v1alpha1_FirewallPolicySpec_To_net_FirewallPolicySpec(in *FirewallPolicySpec, out *net.FirewallPolicySpec, s conversion.Scope) error {
 	out.InterfaceSelector = (*v1.LabelSelector)(unsafe.Pointer(in.InterfaceSelector))
+	out.Priority = (*int32)(unsafe.Pointer(in.Priority))
 	out.Ingress = *(*[]net.FirewallPolicyRule)(unsafe.Pointer(&in.Ingress))
 	out.Egress = *(*[]net.FirewallPolicyRule)(unsafe.Pointer(&in.Egress))
 	return nil
@@ -592,6 +595,7 @@ func Convert_v1alpha1_FirewallPolicySpec_To_net_FirewallPolicySpec(in *FirewallP
 
 func autoConvert_net_FirewallPolicySpec_To_v1alpha1_FirewallPolicySpec(in *net.FirewallPolicySpec, out *FirewallPolicySpec, s conversion.Scope) error {
 	out.InterfaceSelector = (*v1.LabelSelector)(unsafe.Pointer(in.InterfaceSelector))
+	out.Priority = (*int32)(unsafe.Pointer(in.Priority))
 	out.Ingress = *(*[]FirewallPolicyRule)(unsafe.Pointer(&in.Ingress))
 	out.Egress = *(*[]FirewallPolicyRule)(unsafe.Pointer(&in.Egress))
 	return nil
@@ -1238,6 +1242,7 @@ func autoConvert_v1alpha1_NetworkInterfaceStatus_To_net_NetworkInterfaceStatus(i
 	out.AllocatedIPs = *(*[]string)(unsafe.Pointer(&in.AllocatedIPs))
 	out.ObservedGeneration = in.ObservedGeneration
 	out.AllocatedMAC = in.AllocatedMAC
+	out.Conditions = *(*[]v1.Condition)(unsafe.Pointer(&in.Conditions))
 	return nil
 }
 
@@ -1254,6 +1259,7 @@ func autoConvert_net_NetworkInterfaceStatus_To_v1alpha1_NetworkInterfaceStatus(i
 	out.AllocatedIPs = *(*[]string)(unsafe.Pointer(&in.AllocatedIPs))
 	out.AllocatedMAC = in.AllocatedMAC
 	out.ObservedGeneration = in.ObservedGeneration
+	out.Conditions = *(*[]v1.Condition)(unsafe.Pointer(&in.Conditions))
 	return nil
 }
 
@@ -1625,6 +1631,7 @@ func Convert_net_VPCSpec_To_v1alpha1_VPCSpec(in *net.VPCSpec, out *VPCSpec, s co
 func autoConvert_v1alpha1_VPCStatus_To_net_VPCStatus(in *VPCStatus, out *net.VPCStatus, s conversion.Scope) error {
 	out.VNI = in.VNI
 	out.State = in.State
+	out.Conditions = *(*[]v1.Condition)(unsafe.Pointer(&in.Conditions))
 	return nil
 }
 
@@ -1636,6 +1643,7 @@ func Convert_v1alpha1_VPCStatus_To_net_VPCStatus(in *VPCStatus, out *net.VPCStat
 func autoConvert_net_VPCStatus_To_v1alpha1_VPCStatus(in *net.VPCStatus, out *VPCStatus, s conversion.Scope) error {
 	out.VNI = in.VNI
 	out.State = in.State
+	out.Conditions = *(*[]v1.Condition)(unsafe.Pointer(&in.Conditions))
 	return nil
 }
 

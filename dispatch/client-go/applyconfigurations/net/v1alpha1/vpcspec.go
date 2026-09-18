@@ -10,8 +10,11 @@ type VPCSpecApplyConfiguration struct {
 	// VNI optionally pins the VXLAN network identifier. When nil or 0, the VNI is
 	// allocated by the central cluster from the global VNI space.
 	VNI *int32 `json:"vni,omitempty"`
-	// DefaultPolicy overrides the global default firewall posture for this VPC.
-	// One of Allow (k8s semantics) or Deny (VPC-wide default-deny).
+	// DefaultPolicy sets what happens to traffic no firewall rule matches. Allow: it passes (rules
+	// carve out denies). Deny: it drops, in every direction (rules carve out allows). Unset keeps
+	// Kubernetes NetworkPolicy semantics per direction: a direction no policy governs is open, a
+	// governed direction admits only what its rules allow. The VPC's FirewallDefault condition
+	// reports the posture in effect.
 	DefaultPolicy *string `json:"defaultPolicy,omitempty"`
 }
 
