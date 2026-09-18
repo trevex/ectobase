@@ -182,6 +182,10 @@ type Bus struct {
 	// seen[vni] is the set of prefixes (re)learned in the CURRENT session's snapshot; reset at each
 	// session open. On EndOfRIB(vni) any installed[vni] prefix not in seen[vni] is stale → withdrawn.
 	seen map[uint32]map[string]bool
+	// rxRoutes[vni] counts route ADDs received for that VNI since we asked the reflector for its
+	// table. It must equal EndOfRIB's record_count for the prune to be safe — same guard, same
+	// reason, as globalRecords (see EndOfRIB in routebus.proto).
+	rxRoutes map[uint32]uint32
 
 	// reconcileEvery is how often Run recomputes the desired announcement set and pushes deltas onto
 	// the live stream. Tests override it for fast convergence.
@@ -327,6 +331,7 @@ func NewBus(nodeID, underlay string, dp Dataplane, isEdge bool) *Bus {
 		eorSeen:        map[uint32]bool{},
 		installed:      map[uint32]map[string]bool{},
 		seen:           map[uint32]map[string]bool{},
+		rxRoutes:       map[uint32]uint32{},
 		peerImports:    map[uint32][]PeerImport{},
 		origin:         map[uint32]map[string]string{},
 		learnedPeer:    map[uint32]map[string]string{},
@@ -358,6 +363,7 @@ func (b *Bus) Run(ctx context.Context, cc rbv1.RouteBusClient, reconcile func(co
 	// the per-session "seen" set so prune-on-EndOfRIB removes routes that left the RIB while we were
 	// disconnected (installed[] persists across sessions; the dataplane still holds those routes).
 	b.seen = map[uint32]map[string]bool{}
+	b.rxRoutes = map[uint32]uint32{}
 	// Same for the GLOBAL channel: registering replays every NAT block and public record, then
 	// EndOfGlobal. (installedNat/edgeLbs persist for the same reason installed[] does.)
 	b.resetGlobalSnapshot()
@@ -494,6 +500,9 @@ func vniSet(vnis []uint32) map[uint32]bool {
 // handleServerMsg applies one inbound server message to the local dataplane.
 func (b *Bus) handleServerMsg(ctx context.Context, msg *rbv1.ServerMsg) {
 	if ru := msg.GetRouteUpdate(); ru != nil {
+		if ru.Op == rbv1.RouteOp_ROUTE_OP_ADD {
+			b.rxRoutes[ru.Vni]++
+		}
 		b.apply(ctx, ru)
 	}
 	if nu := msg.GetNatUpdate(); nu != nil {
@@ -505,7 +514,7 @@ func (b *Bus) handleServerMsg(ctx context.Context, msg *rbv1.ServerMsg) {
 		b.applyPublic(ctx, pu.GetPrefix(), pu.GetOp())
 	}
 	if eor := msg.GetEndOfRib(); eor != nil {
-		b.pruneVNI(ctx, eor.GetVni())
+		b.pruneVNI(ctx, eor.GetVni(), eor.GetRecordCount())
 		b.noteEndOfRIB(eor.GetVni())
 	}
 	if eog := msg.GetEndOfGlobal(); eog != nil {
@@ -515,10 +524,25 @@ func (b *Bus) handleServerMsg(ctx context.Context, msg *rbv1.ServerMsg) {
 	// KeepAlive: no-op.
 }
 
+// resetRouteSnapshot starts a new replay epoch for one VNI: called when we ask the reflector for
+// its table, so the count compared at EndOfRIB covers exactly that replay and is not inflated by
+// ADDs received before we subscribed.
+func (b *Bus) resetRouteSnapshot(vni uint32) {
+	b.rxRoutes[vni] = 0
+	b.seen[vni] = map[string]bool{}
+}
+
 // pruneVNI removes any directly-installed route in vni that was NOT (re)seen in this session's
 // snapshot — i.e. a route that left the RIB (peer withdrew, or its owner disconnected) while this
 // node was disconnected, and would otherwise linger on the dataplane as a stale blackhole/misroute.
-func (b *Bus) pruneVNI(ctx context.Context, vni uint32) {
+func (b *Bus) pruneVNI(ctx context.Context, vni uint32, want uint32) {
+	// A lossy replay must not prune: the sink drops on overflow, and withdrawing a live route is
+	// strictly worse than keeping a stale one. Same guard as pruneGlobal.
+	if got := b.rxRoutes[vni]; got != want {
+		log.Printf("EndOfRIB(vni=%d): snapshot incomplete (got %d routes, reflector sent %d) — skipping prune; will retry on the next resync",
+			vni, got, want)
+		return
+	}
 	inst := b.installed[vni]
 	seen := b.seen[vni]
 	for prefix := range inst {
@@ -559,6 +583,9 @@ func (b *Bus) markWithdrawn(vni uint32, prefix string) {
 // and upsert changed records), then withdraws + unsubscribes. Returns the first Send error.
 func (b *Bus) sendDelta(stream rbv1.RouteBus_SessionClient, d busDelta) error {
 	for _, v := range d.subscribe {
+		// About to be replayed this VNI's whole table: start its count/seen epoch here so the
+		// EndOfRIB guard compares against exactly that replay.
+		b.resetRouteSnapshot(v)
 		if err := stream.Send(&rbv1.ClientMsg{Msg: &rbv1.ClientMsg_Subscribe{Subscribe: &rbv1.Subscribe{Vni: v}}}); err != nil {
 			return err
 		}

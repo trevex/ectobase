@@ -964,9 +964,16 @@ func (x *RouteUpdate) GetExternal() bool {
 	return false
 }
 
+// EndOfRIB marks the end of one VNI's replayed table: the prune trigger for its routes.
+//
+// record_count is how many routes were replayed before this marker, and is used exactly as
+// EndOfGlobal.record_count is — the consumer prunes only if it received that many, because a sink
+// drops on overflow and pruning against a lossy snapshot withdraws LIVE routes. Counted and sent
+// while the RIB lock is held, so a concurrent fanout cannot interleave or inflate the count.
 type EndOfRIB struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Vni           uint32                 `protobuf:"varint,1,opt,name=vni,proto3" json:"vni,omitempty"`
+	RecordCount   uint32                 `protobuf:"varint,2,opt,name=record_count,json=recordCount,proto3" json:"record_count,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1004,6 +1011,13 @@ func (*EndOfRIB) Descriptor() ([]byte, []int) {
 func (x *EndOfRIB) GetVni() uint32 {
 	if x != nil {
 		return x.Vni
+	}
+	return 0
+}
+
+func (x *EndOfRIB) GetRecordCount() uint32 {
+	if x != nil {
+		return x.RecordCount
 	}
 	return 0
 }
@@ -1553,9 +1567,10 @@ const file_routebus_proto_rawDesc = "" +
 	"\x06prefix\x18\x02 \x01(\tR\x06prefix\x12\x1a\n" +
 	"\bnexthops\x18\x03 \x03(\tR\bnexthops\x12$\n" +
 	"\x02op\x18\x04 \x01(\x0e2\x14.routebus.v1.RouteOpR\x02op\x12\x1a\n" +
-	"\bexternal\x18\x05 \x01(\bR\bexternal\"\x1c\n" +
+	"\bexternal\x18\x05 \x01(\bR\bexternal\"?\n" +
 	"\bEndOfRIB\x12\x10\n" +
-	"\x03vni\x18\x01 \x01(\rR\x03vni\"0\n" +
+	"\x03vni\x18\x01 \x01(\rR\x03vni\x12!\n" +
+	"\frecord_count\x18\x02 \x01(\rR\vrecordCount\"0\n" +
 	"\vEndOfGlobal\x12!\n" +
 	"\frecord_count\x18\x01 \x01(\rR\vrecordCount\"\v\n" +
 	"\tKeepAlive\"\xb0\x01\n" +

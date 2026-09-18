@@ -15,6 +15,18 @@ func TestNodePrefixesFromNodes(t *testing.T) {
 	if len(got) != 2 || got[0] != "2001:db8:0:1::/64" || got[1] != "2001:db8:0:2::/64" {
 		t.Fatalf("unexpected prefixes: %v", got)
 	}
+
+	// The usual topology: every node in a cluster shares one /64 and reports it individually. The
+	// result is a SET of fence coordinates, so that is one entry, not one per node — central counts
+	// distinct coordinates to judge whether its fence coverage is complete.
+	shared := []NodeFact{
+		{Name: "n1", Prefix: "2001:db8:0:1::/64"},
+		{Name: "n2", Prefix: "2001:db8:0:1::/64"},
+		{Name: "n3", Prefix: "2001:db8:0:1::/64"},
+	}
+	if got := NodePrefixesFromNodes(shared); len(got) != 1 || got[0] != "2001:db8:0:1::/64" {
+		t.Fatalf("want the shared /64 once, got %v", got)
+	}
 }
 
 func TestPlacementForVM(t *testing.T) {

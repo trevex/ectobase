@@ -179,14 +179,19 @@ self-contained increments.
    `--health-addr` `/readyz`. But nothing consumes it yet: the lab advertises the public
    prefixes from static VyOS `network` statements, so a lab edge still attracts ECMP before
    converging. **Remaining:** gate a real deployment's advertisement on `/readyz`.
-3. **Tier-2 fence completeness depends on stale broker state.** Failover fences exactly
-   `pool.Status.NodePrefixes` as last reported before the partition
-   (`dispatch/pkg/failover/failover.go:67-85`). A node added *during* the partition is
-   never fenced, yet may run VMs whose disks are about to be re-attached elsewhere —
-   a split-brain disk-corruption path through the one mechanism meant to prevent it.
-   **Fix:** fence the pool as a unit (cluster-level prefix aggregate, or refuse failover
-   when the prefix set could be stale — e.g. compare against the scheduler's placement
-   view and block on mismatch).
+3. ~~**Tier-2 fence completeness depends on stale broker state.**~~ **FIXED** (`a4dd915`),
+   and the finding was only CONDITIONALLY real. Each node stamps its own underlay masked to a
+   `/64`, so in the single-`/64`-per-cluster topology every node's identity is a `/128` inside
+   one shared prefix and fencing it already covered nodes central never observed. The real
+   exposure was a cluster spanning several `/64`s, which nothing enforced or documented.
+   Central now decides explicitly: a new `ClusterPool.spec.underlayPrefix` declares the
+   cluster's underlay aggregate (complete by construction, central config rather than
+   broker-reported — a fence coordinate must not come from the entity being fenced); with it
+   unset, one distinct reported `/64` still counts complete, and several do not. The
+   unprovable case fences what is known and blocks the **rebind** — containment is free,
+   reattaching the disk is the step that corrupts. Also note: a placement cross-check was
+   considered and rejected — `CompiledVM.status.placement` comes from the same broker, so it
+   freezes at the same instant and cannot see the node either.
 4. **dispatch-controller has no leader election** (`dispatch/cmd/controller/main.go:83-89`)
    while the compiler does. Safe only at `replicas: 1`; the day someone scales it for HA,
    Tier-2 failover double-fires. Add election now, while it's free.

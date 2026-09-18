@@ -14,6 +14,12 @@ type ClusterPoolSpec struct {
 	Region string
 	// Endpoint is the reachable API endpoint of the attached cluster.
 	Endpoint string
+	// UnderlayPrefix is this cluster's underlay aggregate — a CIDR containing every node's underlay
+	// address. Declaring it makes Tier-2 fencing complete by construction: central fences this one
+	// prefix instead of enumerating broker-reported node /64s, so a node it never observed (one that
+	// joined while the pool was unreachable) is fenced too. See the v1alpha1 type for the full
+	// rationale and the fallback behaviour when it is empty.
+	UnderlayPrefix string
 }
 
 // ClusterPoolStatus defines the observed state of a ClusterPool.
