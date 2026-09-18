@@ -100,7 +100,16 @@ message RouteUpdate {
   RouteOp op = 4;
   bool external = 5;             // if set, matching source traffic egress-SNATs (e.g. an external default route)
 }
-message EndOfRIB { uint32 vni = 1; }
+// EndOfRIB marks the end of one VNI's replayed table: the prune trigger for its routes.
+//
+// record_count is how many routes were replayed before this marker, and is used exactly as
+// EndOfGlobal.record_count is — the consumer prunes only if it received that many, because a sink
+// drops on overflow and pruning against a lossy snapshot withdraws LIVE routes. Counted and sent
+// while the RIB lock is held, so a concurrent fanout cannot interleave or inflate the count.
+message EndOfRIB {
+  uint32 vni = 1;
+  uint32 record_count = 2;
+}
 
 // EndOfGlobal marks the end of the GLOBAL (non-per-VNI) snapshot: the NAT blocks and
 // PublicPrefix records a session is replayed when it registers. It is the prune trigger for

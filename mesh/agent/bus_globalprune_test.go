@@ -167,3 +167,62 @@ func TestEndOfGlobalPruningLastBackendRemovesTheLoadBalancer(t *testing.T) {
 		t.Fatalf("pruning the last backend must delete the LB too; dels=%v", dp.lbDels)
 	}
 }
+
+// The route channel's sibling guard. prune-on-EndOfRIB had the same lossy-snapshot exposure the
+// global channel just got fixed for: a replayed ADD dropped by the sink's outbound queue, followed
+// by a delivered marker, withdrew a LIVE route. The count makes that a safe no-op instead.
+func TestPruneOnEndOfRIBSkipsWhenSnapshotWasLossy(t *testing.T) {
+	ctx := context.Background()
+	dp := newRecordingDP()
+	b := NewBus("nodeB", "fd00::b", dp, false)
+
+	add := func(prefix string) *rbv1.ServerMsg {
+		return &rbv1.ServerMsg{Msg: &rbv1.ServerMsg_RouteUpdate{RouteUpdate: &rbv1.RouteUpdate{
+			Vni: 100, Prefix: prefix, Nexthops: []string{"fd00::a"}, Op: rbv1.RouteOp_ROUTE_OP_ADD,
+		}}}
+	}
+	b.handleServerMsg(ctx, add("10.0.0.1/32"))
+	b.handleServerMsg(ctx, add("10.0.0.2/32"))
+
+	// Reconnect where the replay of 10.0.0.1 was DROPPED: the reflector says it sent 2, we got 1.
+	b.seen = map[uint32]map[string]bool{}
+	b.resetRouteSnapshot(100)
+	b.handleServerMsg(ctx, add("10.0.0.2/32"))
+	b.handleServerMsg(ctx, &rbv1.ServerMsg{Msg: &rbv1.ServerMsg_EndOfRib{
+		EndOfRib: &rbv1.EndOfRIB{Vni: 100, RecordCount: 2},
+	}})
+
+	if dp.withdrew[key(100, "10.0.0.1/32")] {
+		t.Fatalf("a lossy route snapshot must NOT prune: the route may still be live")
+	}
+}
+
+// And the complete case still prunes, so the guard has not simply disabled the feature.
+func TestPruneOnEndOfRIBStillPrunesOnACompleteSnapshot(t *testing.T) {
+	ctx := context.Background()
+	dp := newRecordingDP()
+	b := NewBus("nodeB", "fd00::b", dp, false)
+
+	add := func(prefix string) *rbv1.ServerMsg {
+		return &rbv1.ServerMsg{Msg: &rbv1.ServerMsg_RouteUpdate{RouteUpdate: &rbv1.RouteUpdate{
+			Vni: 100, Prefix: prefix, Nexthops: []string{"fd00::a"}, Op: rbv1.RouteOp_ROUTE_OP_ADD,
+		}}}
+	}
+	b.handleServerMsg(ctx, add("10.0.0.1/32"))
+	b.handleServerMsg(ctx, add("10.0.0.2/32"))
+
+	// Reconnect: 10.0.0.1 genuinely left the RIB, and the snapshot is complete (1 record, 1 claimed).
+	b.seen = map[uint32]map[string]bool{}
+	b.resetRouteSnapshot(100)
+	b.handleServerMsg(ctx, add("10.0.0.2/32"))
+	b.handleServerMsg(ctx, &rbv1.ServerMsg{Msg: &rbv1.ServerMsg_EndOfRib{
+		EndOfRib: &rbv1.EndOfRIB{Vni: 100, RecordCount: 1},
+	}})
+
+	if !dp.withdrew[key(100, "10.0.0.1/32")] {
+		t.Fatalf("a complete snapshot must still prune the route that left the RIB")
+	}
+	if dp.withdrew[key(100, "10.0.0.2/32")] {
+		t.Fatalf("replayed route must survive")
+	}
+}

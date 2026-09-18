@@ -123,11 +123,16 @@ func (r *RIB) Subscribe(vni uint32, s Sink) {
 		}
 	}
 	sort.Slice(keys, func(i, j int) bool { return keys[i].prefix < keys[j].prefix })
+	var n uint32
 	for _, k := range keys {
 		e := r.routes[k]
 		s.Send(routeUpdate(k, mergeNexthops(e.origins), pb.RouteOp_ROUTE_OP_ADD, e.external))
+		n++
 	}
-	s.Send(&pb.ServerMsg{Msg: &pb.ServerMsg_EndOfRib{EndOfRib: &pb.EndOfRIB{Vni: vni}}})
+	// The count lets the subscriber tell a complete replay from one its outbound queue dropped
+	// records from, and prune only on the former — see EndOfRIB in routebus.proto. Sent while r.mu
+	// is still held, so a concurrent fanout cannot slip in ahead of it and inflate that count.
+	s.Send(&pb.ServerMsg{Msg: &pb.ServerMsg_EndOfRib{EndOfRib: &pb.EndOfRIB{Vni: vni, RecordCount: n}}})
 }
 
 func (r *RIB) Unsubscribe(vni uint32, sinkID string) {
