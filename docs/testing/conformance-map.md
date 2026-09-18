@@ -192,7 +192,7 @@ map to ectobase/flowplane: flowplane has no HA-peer protocol; state survives via
   `lb_scenario_test::ew_lb_reforward_converges_no_loop` (same Maglev selection after
   flow age-out) and `TestRestartContinuity` (`test/lab/livetest/restart_test.go`, live
   restart smoke).
-- CT/NAT state survival — covered by the `make ha` pinned-maps kill+adopt smoke and
+- CT/NAT state survival — covered by the `make ha` restart-adopt contract test and
   `TestRestartContinuity` (graceful-restart: state written to journal, re-loaded on bring-up).
 - MAC sync across two instances — not applicable (no HA peer; MAC is in `PortMeta`
   static config).

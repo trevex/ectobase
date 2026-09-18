@@ -29,7 +29,7 @@ controller-runtime envtest integration tests can spin a real apiserver under `go
 | `make sim-anchor` | `BPF_PROG_TEST_RUN` byte-parity anchor (native core vs bytecode). | sudo |
 | `make verifier` | Load the programs through the kernel verifier. | sudo |
 | `make e2e` | 3-node netns overlay end-to-end. | sudo |
-| `make ha` | HA pinned-maps kill+adopt smoke. | sudo |
+| `make ha` | Pinned-maps restart-adopt contract test. | sudo |
 | `make docs` / `make docs-serve` | Build (`mkdocs build --strict`) / live-serve this site. | no |
 
 The `sudo` targets need passwordless sudo (loading/attaching eBPF programs and mounting bpffs for

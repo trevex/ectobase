@@ -20,6 +20,8 @@ use crate::maps::{
 
 // The `impl Control` blocks are split by domain into these child modules. Each is pure code
 // movement out of this file; they reach `Inner`'s private state via `super`.
+#[cfg(test)]
+mod adopt_test;
 mod aya_writer;
 mod bringup;
 mod firewall;

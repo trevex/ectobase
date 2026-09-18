@@ -115,5 +115,8 @@ show`. The pin-survived + prog-id-changed combination is the signature that dist
 zero-gap re-point from a detach/reattach. The loss threshold is sized for the pod stop + reschedule +
 adopt window on the clab fabric, not for a datapath detach: the link stays attached throughout.
 
-The `make ha` target runs the pinned-maps kill+adopt smoke (state survival); the continuity scenario
-adds the forwarding-gap assertion on top.
+The `make ha` target runs the restart-adopt contract test (`control/adopt_test.rs`): a real `Control`
+brings up the datapath in private network and mount namespaces, attaches a guest and programs its
+firewall, exits, then adopts — the pinned maps are re-bound, the `IFACE_META` journal rebuilds the
+bookkeeping and the pinned guest link is re-pointed with no second attach (state survival). The
+continuity scenario adds the forwarding-gap assertion on top.

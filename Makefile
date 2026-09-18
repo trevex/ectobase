@@ -270,8 +270,11 @@ e2e: ## 3-node netns end-to-end overlay test (needs sudo)
 	./test/netns-e2e.sh run
 
 .PHONY: ha
-ha: ## HA pinned-maps smoke (kill+adopt; needs sudo)
-	./test/ha-smoke.sh run
+ha: ## Pinned-maps restart-adopt contract through the real Control, in private namespaces (needs sudo)
+	# Exit + adopt: pinned maps are re-bound, the IFACE_META journal rebuilds the bookkeeping and
+	# the pinned guest link is re-pointed. Forwarding continuity across a pod restart is the live
+	# lab's TestRestartContinuity.
+	sudo -E $$(command -v cargo) test -p flowplane --bin flowplane adopt_test -- --ignored
 
 .PHONY: tap-dhcp-probe
 tap-dhcp-probe: ## Native-mode DHCP frame-growth fidelity probe on a real tap (needs sudo)
