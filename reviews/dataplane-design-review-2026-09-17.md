@@ -147,7 +147,7 @@ redesign, or an explicit documented budget.
 
 | Ceiling | Where | Why it breaks |
 |---|---|---|
-| **16 firewall rules** per interface per family, shared across directions | `FW_MAX_RULES`, `fw.rs:11`; linear scan `firewall.rs:173-181` | Cloud policy sets are routinely 10–100× this. The sharpest expressiveness limit in the system. NOTE: this row originally said "per direction", copying `FW_MAX_RULES`' own doc comment, which is also wrong — the handler partitions by family and each family's 16 slots are shared between ingress and egress. |
+| **16 firewall rules** per interface per family, shared across directions | `FW_MAX_RULES`, `fw.rs:11`; linear scan `firewall.rs:173-181` | Cloud policy sets are routinely 10–100× this. The sharpest expressiveness limit in the system. NOTE: this row originally said "per direction", copying `FW_MAX_RULES`' own doc comment, which is also wrong — the handler partitions by family and each family's 16 slots are shared between ingress and egress (doc comment fixed in `1dea63d`). **PARTLY ADDRESSED (firewall redesign increment A):** the cap still stands, but it is no longer silent — the compiler enforces it, drops shadowed rules before counting, keeps the last good rule set and reports `FirewallCompiled=False/RuleBudgetExceeded` on the NIC (`99d3880`); the dataplane answers an over-cap replace with `ResourceExhausted` and no longer half-commits v4 before refusing v6 (`1dea63d`). The cap itself goes with the LPM classifier (increment B). |
 | **64 neighbor-NAT entries fleet-wide**, linear scan per WAN-return packet | `maps.rs:96-113` | Caps the whole fleet at ~64 advertised NAT port-blocks per family. |
 | **NAT/public route-bus records broadcast to every node** | `mesh/reflector/nattable.go:23-93` | O(blocks × nodes) fanout; the dominant term at fleet scale. Route records are per-VNI-scoped — NAT/public should be too (edges + owning nodes only). |
 | 1024 interfaces / 1024 taps per node | `INTERFACES`, `PORT_META` | Dense container nodes exceed this. |
@@ -212,24 +212,31 @@ self-contained increments.
 
 ## 4. Policy/intent model vs the GCP bar (P2, but decide now)
 
-- **Firewall ordering across policies is undefined.** Datapath is first-match-wins, but
-  multiple FirewallPolicies matching one NIC are concatenated in API list order
-  (`compilednic.go:126`) — which Allow/Deny wins depends on object names. **Fix:** add a
-  `priority` field (GCP-style integer), sort at compile, document ties.
-- **`VPCSpec.DefaultPolicy` is dead** *(verified — zero consumers)*: a VPC set to `Deny`
-  silently gets default-allow (`compilednic.go:166` hardcodes it). Wire it or delete it.
-  Related trap: today a single Deny rule in a direction silently flips that direction to
-  default-deny by suppressing the synthesized allow-all (`compilednic.go:168`).
+- ~~**Firewall ordering across policies is undefined.**~~ **FIXED** (`b19cbb3`, `99d3880`).
+  Policies and rules carry a GCP-style `priority` (0-65535, lower wins, unset = 32768); the
+  compiler ranks by `(policy priority, rule priority, namespace, name, index)` and drops rules
+  a higher-ranked rule fully covers. Output is byte-identical under shuffled list order. Ties
+  (and the deliberate choice that equal-priority ties break by name, not deny-wins) are
+  documented in `docs/features/firewall.md`. Original finding: datapath is first-match-wins, but
+  multiple FirewallPolicies matching one NIC were concatenated in API list order.
+- ~~**`VPCSpec.DefaultPolicy` is dead**~~ **FIXED** (`99d3880`): `Allow` appends an implicit
+  lowest-priority allow-all per family (so a lone Deny denies only its match), `Deny`
+  synthesizes nothing (unselected interfaces close too), unset keeps per-direction
+  NetworkPolicy semantics; the VPC reports the posture on a `FirewallDefault` condition.
+  The lone-Deny trap remains, by definition, under the unset posture only (documented).
+  Original finding: a VPC set to `Deny` silently got default-allow.
 - **No Route intent at all** — no custom routes, no priorities, no next-hop steering.
   Fine to defer, but it's the largest single semantic gap vs a GCP VPC; the route-bus +
   LPM machinery could carry it.
 - **Firewall sources are CIDR-only, targets label-selector-only** — no tag/service-account
   analog for source matching. The label-selector direction is right; extend it to source
   matching (compile source-selector → the matching NICs' IPs, updated on churn).
-- **FirewallPolicy is entirely unvalidated** — `Action`, `Proto`, `Port`, and `CIDR` are
-  never checked; garbage flows to the agent (`compilednic.go:141-156`). Add an admission
-  `Validate` like Subnet/NIC have. Same for VPC VNI pins (range-check 24-bit) and
-  NATGateway.
+- ~~**FirewallPolicy is entirely unvalidated**~~ **FIXED** (`b19cbb3`): create AND update
+  admission checks selector, action/proto enums, port range and port-needs-TCP/UDP, CIDR syntax
+  and canonical form, priorities; VPC `defaultPolicy` is enum-checked. Pinned by an aggregated-
+  apiserver integration test (markers never run there). Still open: VPC VNI pin range-check and
+  NATGateway validation. Also still open, found on the way: the other `Validate` hooks
+  (Subnet, NIC, LB, LBPool) implement create only — an update bypasses them.
 - **Policy revocation doesn't reach established flows for up to 24 h** — firewall changes
   never touch conntrack (`handlers.rs:415-453`), and established TCP ages at 24 h. GCP
   applies rule changes to established flows. **Fix:** on rule revocation, sweep conntrack
@@ -286,6 +293,7 @@ get mirrored, and each gap is individually "known" but the set is growing.
 - `docs/features/nat.md:73` (v4-only return wording), `:125` (NAT64 "reuses" egress path —
   it's a separate subsystem); `routing-vni.md:2` "VXLAN" → Geneve.
 - "Scaffold-only" markers on FirewallPolicy/LoadBalancer types that are fully compiled.
+  (FirewallPolicy's fixed in `b19cbb3`; LoadBalancer's remains.)
 - `Subnet.status.V4Total/V6Total` include network/broadcast the allocator excludes.
 
 ## 7. Suggested sequencing
@@ -298,8 +306,9 @@ get mirrored, and each gap is individually "known" but the set is growing.
 4. **Scale groundwork:** firewall rule-storage redesign (kills the 16-rule cap and sets up
    priorities), NAT/public subscription scoping + keyed neighbor-NAT map. Write a sizing
    doc making every remaining map ceiling an explicit budget.
-5. **Policy semantics:** firewall priority field, DefaultPolicy wire-or-delete,
-   FirewallPolicy admission validation, revocation-vs-established-flows contract.
+5. **Policy semantics:** ~~firewall priority field, DefaultPolicy wire-or-delete,
+   FirewallPolicy admission validation~~ (done, firewall redesign increment A),
+   revocation-vs-established-flows contract (increment B: CT epoch).
 6. **Symmetry debt:** v6 conntrack aging, v6 ingress policing, floating-IP into core (sim
    coverage), offload liveness write-back, multi-NIC container fix.
 7. **Docs sweep** (one PR, list above).
