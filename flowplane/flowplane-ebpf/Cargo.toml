@@ -7,8 +7,8 @@ license = "Apache-2.0"
 [dependencies]
 flowplane-common = { path = "../flowplane-common", default-features = false }
 flowplane-core = { path = "../flowplane-core" }
-aya-ebpf = "0.1"
-aya-log-ebpf = "0.1"
+aya-ebpf = "0.2"
+aya-log-ebpf = "0.2"
 
 [features]
 # Compile in `dlog!` datapath tracing (aya-log). Off by default → zero runtime/verifier cost.

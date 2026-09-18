@@ -256,7 +256,7 @@ fn guest_tx_encap_redirect_inner_unchanged_matches_native_sim() {
         .tempdir_in("/sys/fs/bpf")
         .expect("bpffs tempdir");
     let mut ebpf = aya::EbpfLoader::new()
-        .map_pin_path(pin.path())
+        .default_map_pin_directory(pin.path())
         .load(bytes)
         .expect("load compiled eBPF object");
 

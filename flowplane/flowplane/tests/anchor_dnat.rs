@@ -235,7 +235,7 @@ fn dnat_return_bytecode_fails_safe_without_tunnel_key() {
         .tempdir_in("/sys/fs/bpf")
         .expect("bpffs tempdir");
     let mut ebpf = aya::EbpfLoader::new()
-        .map_pin_path(pin.path())
+        .default_map_pin_directory(pin.path())
         .load(bytes)
         .expect("load compiled eBPF object");
 

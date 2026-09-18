@@ -19,7 +19,7 @@ use aya_ebpf::{
     cty::c_void,
     helpers::{
         bpf_redirect,
-        gen::{
+        generated::{
             bpf_skb_get_tunnel_key, bpf_skb_get_tunnel_opt, bpf_skb_set_tunnel_key,
             bpf_skb_set_tunnel_opt,
         },

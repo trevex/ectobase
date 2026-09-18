@@ -109,22 +109,56 @@ pub fn deliver<M: Maps>(
 /// arm; established flows (CT hit, incl. the pre-seeded reverse entry for a same-node reply) skip
 /// both egress and dest-ingress firewalls.
 ///
-/// This is the SHARED core the eBPF `egress::egress_fw_ct_v6` wrapper delegates to (seam-not-
-/// duplicate), and the SAME code the native SimNode runs via
-/// [`crate::datapath::process_guest_tx_v6`].
+/// The native SimNode runs [`egress_fw_ct6`] via [`crate::datapath::process_guest_tx_v6`]; the eBPF
+/// `egress::forward_decision_v6` runs the SAME three parts ([`egress_ct6`], [`fw_eval_dir6`],
+/// [`ct_create_default6`]) as sequential out-of-line subprograms, in the same order.
 pub enum EgressFwCt6 {
     Drop,
     Pass { was_new: bool },
 }
 
+/// What the conntrack half of STAGE 1 found for an inner-v6 egress frame ([`egress_ct6`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum EgressCt6 {
+    /// A tracked flow; its entry was refreshed. The firewall is skipped.
+    Established,
+    /// No entry: the egress firewall decides, and an allowed flow is then tracked.
+    Miss,
+    /// The frame is too short to key. Keying gates the firewall, so this must DROP: passing it
+    /// would let a guest skip deny-by-default by truncating its own frame.
+    Unkeyable,
+}
+
+/// STAGE 1a (shared core) — the conntrack lookup of [`egress_fw_ct6`]: build the v6 5-tuple key
+/// ([`ct_key6`]) and, on a HIT, refresh the entry (`ct_refresh6`, map-only, byte-neutral). Split out
+/// so the eBPF dispatcher can run the CT lookup, the firewall scan and the CT create as SEQUENTIAL
+/// `#[inline(never)]` frames: nested, the CtKey6/CtEntry locals and the 16-slot `FwRule6` scan
+/// exceed what the 512B combined stack leaves after `tc_guest_egress_v6`'s own frame.
+#[inline(always)]
+pub fn egress_ct6<P: Pkt, M: Maps>(
+    pkt: &P,
+    maps: &mut M,
+    ip_off: usize,
+    vni: u32,
+    now: u64,
+) -> EgressCt6 {
+    let Some(key) = ct_key6(pkt, ip_off, vni) else {
+        return EgressCt6::Unkeyable;
+    };
+    match maps.conntrack6_get(&key) {
+        Some(mut e) => {
+            ct_refresh6(pkt, maps, ip_off, &key, &mut e, now);
+            EgressCt6::Established
+        }
+        None => EgressCt6::Miss,
+    }
+}
+
 /// STAGE 1 (shared core) — stateful egress firewall + firewall-only IPv6 conntrack for a native
-/// v6→v6 guest egress flow. Faithful mirror of the eBPF `egress::egress_fw_ct_v6`: build the v6
-/// 5-tuple key ([`ct_key6`]); on a CT HIT refresh (`ct_refresh6`, map-only, byte-neutral); on a MISS
-/// enforce the SOURCE egress firewall ([`fw_eval_dir6`], deny-by-default → DROP), then create the
-/// default (firewall-track) v6 conntrack entry (`ct_create_default6`) and report `was_new = true`.
-/// `ip_off` is the inner IPv6 header offset (`ETH_LEN` for a guest frame). Kept as a SEPARATE pub fn
-/// so the eBPF wrapper can hold it in its own `#[inline(never)]` BPF stack frame (CtKey6 ~48B) —
-/// freed before the route stage's `Key<RouteLpmData6>` frame runs (512B combined stack limit).
+/// v6→v6 guest egress flow: [`egress_ct6`]; on a MISS enforce the SOURCE egress firewall
+/// ([`fw_eval_dir6`], deny-by-default → DROP), then create the default (firewall-track) v6
+/// conntrack entry (`ct_create_default6`) and report `was_new = true`. An unkeyable frame DROPs.
+/// `ip_off` is the inner IPv6 header offset (`ETH_LEN` for a guest frame).
 #[inline(always)]
 pub fn egress_fw_ct6<P: Pkt, M: Maps>(
     pkt: &P,
@@ -134,24 +168,17 @@ pub fn egress_fw_ct6<P: Pkt, M: Maps>(
     vni: u32,
     now: u64,
 ) -> EgressFwCt6 {
-    if let Some(key) = ct_key6(pkt, ip_off, vni) {
-        match maps.conntrack6_get(&key) {
-            Some(mut e) => ct_refresh6(pkt, maps, ip_off, &key, &mut e, now),
-            None => {
-                if fw_eval_dir6(pkt, &*maps, ip_off, ifindex, FW_DIR_EGRESS) == FW_ACTION_DROP {
-                    return EgressFwCt6::Drop;
-                }
-                ct_create_default6(pkt, maps, ip_off, vni, now);
-                return EgressFwCt6::Pass { was_new: true };
+    match egress_ct6(pkt, maps, ip_off, vni, now) {
+        EgressCt6::Established => EgressFwCt6::Pass { was_new: false },
+        EgressCt6::Unkeyable => EgressFwCt6::Drop,
+        EgressCt6::Miss => {
+            if fw_eval_dir6(pkt, &*maps, ip_off, ifindex, FW_DIR_EGRESS) == FW_ACTION_DROP {
+                return EgressFwCt6::Drop;
             }
+            ct_create_default6(pkt, maps, ip_off, vni, now);
+            EgressFwCt6::Pass { was_new: true }
         }
-        return EgressFwCt6::Pass { was_new: false };
     }
-    // FAIL CLOSED on an unkeyable frame. `ct_key6` only returns None when the frame is too short to
-    // hold a 40-byte IPv6 header (an unrecognised next-header still keys as `(nexthdr, 0, 0)`), so
-    // this is malformed, not untracked. Since keying is what gates the firewall, passing it would
-    // let a guest skip a deny-by-default policy entirely by truncating its own frame.
-    EgressFwCt6::Drop
 }
 
 /// STAGE 2 (shared core) — route6 lookup + deliver decision for a native v6→v6 guest egress flow.

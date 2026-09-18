@@ -32,7 +32,7 @@ fn tcx_overlay_ingress_programs_verify() {
         .tempdir_in("/sys/fs/bpf")
         .expect("bpffs tempdir");
     let mut ebpf = aya::EbpfLoader::new()
-        .map_pin_path(pin.path())
+        .default_map_pin_directory(pin.path())
         .load(bytes)
         .expect("load compiled eBPF object (creates all maps)");
 

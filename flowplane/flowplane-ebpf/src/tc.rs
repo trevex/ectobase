@@ -206,7 +206,7 @@ pub fn tc_guest_tx(ctx: TcContext) -> i32 {
                 // No shaping configured => no stamp (send immediately).
                 if let Some(ts) = crate::meter::edt_stamp(ifindex, ctx.len() as u64) {
                     unsafe {
-                        aya_ebpf::helpers::gen::bpf_skb_set_tstamp(
+                        aya_ebpf::helpers::generated::bpf_skb_set_tstamp(
                             ctx.skb.skb as *mut _,
                             ts,
                             BPF_SKB_TSTAMP_DELIVERY_MONO,
@@ -260,9 +260,8 @@ pub fn tc_guest_egress_v6(ctx: TcContext) -> i32 {
         return TC_ACT_OK;
     }
     // The tail-call gave this program a fresh 512B stack budget. `forward_decision_v6` is a thin
-    // #[inline(always)] dispatcher that calls the two heavy stages — firewall/conntrack
-    // (egress_fw_ct_v6) and route6+deliver (route_decision_v6) — as SEQUENTIAL #[inline(never)]
-    // subprograms, so their frames never coexist. The Encap-arm tunnel-key stamp is likewise split
+    // #[inline(always)] dispatcher that calls the heavy stages — conntrack, firewall, DSR and
+    // route6+deliver — as SEQUENTIAL #[inline(never)] subprograms, so their frames never coexist. The Encap-arm tunnel-key stamp is likewise split
     // out (encap_v6_egress), kept out-of-line for the same reason it always was, even though it no
     // longer carries heavy locals.
     match crate::egress::forward_decision_v6(ctx.data(), ctx.data_end(), ifindex, meta) {
@@ -297,8 +296,8 @@ pub fn tc_guest_egress_v6(ctx: TcContext) -> i32 {
 
 /// Stamp the Geneve tunnel key + EDT-stamp + redirect for an inner-v6 overlay egress packet.
 /// Out-of-line (`#[inline(never)]`) so this stays its own BPF stack frame, sequential to (never
-/// coexisting with) `tc_guest_egress_v6`'s frame — that frame is held live across the
-/// `egress_fw_ct_v6` subprogram call, and the two must stay under the 512B combined stack limit.
+/// coexisting with) `tc_guest_egress_v6`'s frame — that frame is held live across the stage
+/// subprogram calls, and each pair must stay under the 512B combined stack limit.
 /// `ctx` is passed by reference (only skb helpers are called on it — no packet pointer is
 /// cast/stored across the boundary).
 #[inline(never)]
@@ -310,7 +309,7 @@ fn encap_v6_egress(
     // No byte write: see the v4 arm's comment in `tc_guest_tx`.
     if let Some(ts) = crate::meter::edt_stamp(ifindex, ctx.len() as u64) {
         unsafe {
-            aya_ebpf::helpers::gen::bpf_skb_set_tstamp(
+            aya_ebpf::helpers::generated::bpf_skb_set_tstamp(
                 ctx.skb.skb as *mut _,
                 ts,
                 BPF_SKB_TSTAMP_DELIVERY_MONO,

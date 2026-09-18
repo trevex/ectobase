@@ -219,7 +219,7 @@ fn load_prog() -> (Ebpf, RawFd) {
             .expect("bpffs tempdir"),
     ));
     let mut ebpf = EbpfLoader::new()
-        .map_pin_path(pin.path())
+        .default_map_pin_directory(pin.path())
         .load(bytes)
         .expect("load compiled eBPF object");
 

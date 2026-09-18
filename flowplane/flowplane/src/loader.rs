@@ -24,15 +24,18 @@ use aya::Ebpf;
 ///
 /// Unset variables leave the compile-time `with_max_entries` default in place.
 ///
-/// `pin_dir` is where ByName-pinned maps live and MUST be set: the state maps are declared
-/// `pinned` (a `pinned` map with no `map_pin_path` fails to load). A fresh run passes a per-run
-/// dir (see [`ephemeral_pin_dir`]) so the maps are created+pinned there and behaviour matches a
-/// non-pinned load; a restart passes the persistent bpffs dir so the reloaded programs re-bind to
-/// the surviving maps instead of creating fresh ones.
+/// `pin_dir` is where ByName-pinned maps live and MUST be passed: the state maps are declared
+/// `pinned`, and without a directory aya pins them straight under `/sys/fs/bpf/<NAME>` (libbpf's
+/// default), where every process on the host would share — and a restart would silently adopt —
+/// the same maps. A fresh run passes a per-run dir (see [`ephemeral_pin_dir`]) so the maps are
+/// created+pinned there and behaviour matches a non-pinned load; a restart passes the persistent
+/// bpffs dir so the reloaded programs re-bind to the surviving maps instead of creating fresh
+/// ones. The re-bind does NOT check the pinned map's shape: a pinned map whose key or value size
+/// changed must land under a new name (see the LB6 playbook), never as an in-place edit.
 pub fn load_ebpf(pin_dir: &Path) -> anyhow::Result<Ebpf> {
     let bytes = aya::include_bytes_aligned!(concat!(env!("OUT_DIR"), "/flowplane-prog"));
     let mut loader = aya::EbpfLoader::new();
-    loader.map_pin_path(pin_dir);
+    loader.default_map_pin_directory(pin_dir);
     // Map name -> env var. Unset => keep the compile-time `with_max_entries` default.
     for (map, var) in [
         ("CONNTRACK", "FLOWPLANE_CONNTRACK_MAX"),
@@ -47,7 +50,7 @@ pub fn load_ebpf(pin_dir: &Path) -> anyhow::Result<Ebpf> {
             let n: u32 = v
                 .parse()
                 .with_context(|| format!("{var} must be a u32, got {v:?}"))?;
-            loader.set_max_entries(map, n);
+            loader.map_max_entries(map, n);
         }
     }
     loader.load(bytes).context("load ebpf object")
@@ -708,7 +711,7 @@ mod tests {
             .expect("bpffs tempdir");
         let mut ebpf = EbpfLoader::new()
             .verifier_log_level(VerifierLogLevel::VERBOSE | VerifierLogLevel::STATS)
-            .map_pin_path(pin.path())
+            .default_map_pin_directory(pin.path())
             .load(bytes)
             .expect("load ebpf object");
         for name in [

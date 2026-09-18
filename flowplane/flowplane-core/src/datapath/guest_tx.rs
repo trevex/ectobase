@@ -373,7 +373,7 @@ pub fn process_guest_tx_v6<P: Pkt, M: Maps>(
             guest_mac,
         } => {
             // Stage 3: destination ingress firewall on NEW flows (same-node delivery). Deny-by-default.
-            // v6 evaluator (fw_eval_dir6 / FW_META6) — mirrors the eBPF dest_ingress_fw_v6.
+            // v6 evaluator (fw_eval_dir6 / FW_META6) — mirrors the eBPF fw_drop_v6 (ingress).
             if was_new
                 && crate::firewall::fw_eval_dir6(&*pkt, &*maps, ip_off, tap_ifindex, FW_DIR_INGRESS)
                     == FW_ACTION_DROP
