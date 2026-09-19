@@ -355,7 +355,7 @@ const OWNER_VNI: u32 = 909;
 #[test]
 fn wan6_rx_relays_nat_ip6_return_to_owner_with_owner_vni() {
     let mut node = SimNode::with_local(local());
-    node.maps.neighbor_nat6.push(NeighborNat6Entry {
+    node.maps.add_neighbor_nat6(NeighborNat6Entry {
         underlay: OWNER_UNDERLAY,
         nat_ip6: NAT_V6,
         vni: OWNER_VNI,
@@ -385,7 +385,7 @@ fn wan6_rx_relays_nat_ip6_return_to_owner_with_owner_vni() {
 #[test]
 fn uplink6_relays_nat_ip6_return_to_owner() {
     let mut node = SimNode::with_local(local());
-    node.maps.neighbor_nat6.push(NeighborNat6Entry {
+    node.maps.add_neighbor_nat6(NeighborNat6Entry {
         underlay: OWNER_UNDERLAY,
         nat_ip6: NAT_V6,
         vni: VNI,

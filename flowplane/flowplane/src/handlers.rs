@@ -12,7 +12,8 @@ use crate::pb;
 /// Argument-validation failures (bad CIDR/IP/port). The genuinely-internal `ControlCore` errors are
 /// `anyhow::Error` and convert to `ServiceError::Internal` through `?` (blanket `#[from]`), so there
 /// is no `internal` helper — a bare `?` on an `anyhow::Result` does the right thing. The firewall
-/// calls return a typed `FwError` instead, which `?` classifies via its `From` impl in `error.rs`.
+/// and neighbor-NAT calls return a typed `FwError` / `NeighborNatError` instead, which `?`
+/// classifies via their `From` impls in `error.rs`.
 #[inline]
 fn invalid(e: impl std::fmt::Display) -> ServiceError {
     ServiceError::Invalid(e.to_string())
@@ -154,15 +155,16 @@ pub fn add_neighbor_nat<W: MapWriter>(
     let vni = req.vni;
     // Idempotent: drop any existing entry for this (vni, nat_ip, ports) first so a re-announce
     // replaces the owner underlay.
-    let res: anyhow::Result<()> = match nat {
-        IpAddr::V4(n) => core
-            .del_neighbor_nat(vni, n.octets(), port_min, port_max)
-            .and_then(|_| core.add_neighbor_nat(vni, n.octets(), port_min, port_max, owner)),
-        IpAddr::V6(n) => core
-            .del_neighbor_nat6(vni, n.octets(), port_min, port_max)
-            .and_then(|_| core.add_neighbor_nat6(vni, n.octets(), port_min, port_max, owner)),
-    };
-    res?;
+    match nat {
+        IpAddr::V4(n) => {
+            core.del_neighbor_nat(vni, n.octets(), port_min, port_max)?;
+            core.add_neighbor_nat(vni, n.octets(), port_min, port_max, owner)?;
+        }
+        IpAddr::V6(n) => {
+            core.del_neighbor_nat6(vni, n.octets(), port_min, port_max)?;
+            core.add_neighbor_nat6(vni, n.octets(), port_min, port_max, owner)?;
+        }
+    }
     Ok(pb::AddNeighborNatResponse {})
 }
 
@@ -671,6 +673,65 @@ mod tests {
         assert!(r.is_ok(), "qos: {r:?}");
     }
 
+    fn v6(s: &str) -> [u8; 16] {
+        s.parse::<std::net::Ipv6Addr>().unwrap().octets()
+    }
+
+    /// The exact `NAT_OWNERS` entries the control core stores for a VNI-100 v4 block.
+    fn owners4(
+        nat_ip: [u8; 4],
+        port_min: u16,
+        port_max: u16,
+        underlay: &str,
+    ) -> Vec<(
+        u32,
+        flowplane_common::NatOwnerKey,
+        flowplane_common::NatOwner,
+    )> {
+        flowplane_control::natowner::owner_prefixes4(&flowplane_common::NeighborNatEntry {
+            underlay: v6(underlay),
+            nat_ip,
+            vni: 100,
+            port_min,
+            port_max,
+            enabled: 1,
+            ..Default::default()
+        })
+    }
+
+    /// IPv6 sibling of [`owners4`].
+    fn owners6(
+        nat_ip6: &str,
+        port_min: u16,
+        port_max: u16,
+        underlay: &str,
+    ) -> Vec<(
+        u32,
+        flowplane_common::NatOwnerKey6,
+        flowplane_common::NatOwner,
+    )> {
+        flowplane_control::natowner::owner_prefixes6(&flowplane_common::NeighborNat6Entry {
+            underlay: v6(underlay),
+            nat_ip6: v6(nat_ip6),
+            vni: 100,
+            port_min,
+            port_max,
+            enabled: 1,
+            ..Default::default()
+        })
+    }
+
+    /// The trie holds exactly `want`, nothing more.
+    fn assert_trie<K: std::hash::Hash + Eq + Copy + std::fmt::Debug>(
+        got: &std::collections::HashMap<(u32, K), flowplane_common::NatOwner>,
+        want: &[(u32, K, flowplane_common::NatOwner)],
+    ) {
+        assert_eq!(got.len(), want.len(), "prefix count");
+        for (plen, key, owner) in want {
+            assert_eq!(got.get(&(*plen, *key)), Some(owner), "/{plen} {key:?}");
+        }
+    }
+
     #[test]
     fn add_neighbor_nat_programs() {
         let mut c = core();
@@ -685,6 +746,10 @@ mod tests {
             },
         );
         assert!(r.is_ok(), "neighbor nat: {r:?}");
+        assert_trie(
+            &c.writer().nat_owners,
+            &owners4([198, 51, 100, 7], 20000, 30000, "2001:db8::bb"),
+        );
     }
 
     #[test]
@@ -701,7 +766,109 @@ mod tests {
             },
         );
         assert!(r.is_ok(), "neighbor nat6: {r:?}");
-        assert_eq!(c.writer().neigh_nat6_count, 1);
+        assert_trie(
+            &c.writer().nat_owners6,
+            &owners6("2001:db8:2b::7", 20000, 30000, "2001:db8::bb"),
+        );
+    }
+
+    // The mesh agent replays every block on reconnect, so a re-announce of a listed block must
+    // succeed and leave it owned by the latest underlay; a withdraw must tolerate a repeat.
+    #[test]
+    fn neighbor_nat_reannounce_replaces_owner_and_withdraw_repeats() {
+        let mut c = core();
+        let add = |owner: &str| pb::AddNeighborNatRequest {
+            vni: 100,
+            nat_ip: "198.51.100.7".into(),
+            owner_underlay: owner.into(),
+            port_min: 20000,
+            port_max: 30001,
+        };
+        add_neighbor_nat(&mut c, &add("2001:db8::bb")).unwrap();
+        add_neighbor_nat(&mut c, &add("2001:db8::cc")).unwrap();
+        assert_trie(
+            &c.writer().nat_owners,
+            &owners4([198, 51, 100, 7], 20000, 30001, "2001:db8::cc"),
+        );
+
+        let withdraw = pb::WithdrawNeighborNatRequest {
+            vni: 100,
+            nat_ip: "198.51.100.7".into(),
+            port_min: 20000,
+            port_max: 30001,
+        };
+        withdraw_neighbor_nat(&mut c, &withdraw).unwrap();
+        assert!(c.writer().nat_owners.is_empty());
+        withdraw_neighbor_nat(&mut c, &withdraw).unwrap();
+    }
+
+    #[test]
+    fn neighbor_nat6_reannounce_replaces_owner_and_withdraw_repeats() {
+        let mut c = core();
+        let add = |owner: &str| pb::AddNeighborNatRequest {
+            vni: 100,
+            nat_ip: "2001:db8:2b::7".into(),
+            owner_underlay: owner.into(),
+            port_min: 20000,
+            port_max: 30001,
+        };
+        add_neighbor_nat(&mut c, &add("2001:db8::bb")).unwrap();
+        add_neighbor_nat(&mut c, &add("2001:db8::cc")).unwrap();
+        assert_trie(
+            &c.writer().nat_owners6,
+            &owners6("2001:db8:2b::7", 20000, 30001, "2001:db8::cc"),
+        );
+
+        let withdraw = pb::WithdrawNeighborNatRequest {
+            vni: 100,
+            nat_ip: "2001:db8:2b::7".into(),
+            port_min: 20000,
+            port_max: 30001,
+        };
+        withdraw_neighbor_nat(&mut c, &withdraw).unwrap();
+        assert!(c.writer().nat_owners6.is_empty());
+        withdraw_neighbor_nat(&mut c, &withdraw).unwrap();
+    }
+
+    #[test]
+    fn add_neighbor_nat_overlap_is_already_exists() {
+        let mut c = core();
+        let req = |lo, hi| pb::AddNeighborNatRequest {
+            vni: 100,
+            nat_ip: "198.51.100.7".into(),
+            owner_underlay: "2001:db8::bb".into(),
+            port_min: lo,
+            port_max: hi,
+        };
+        add_neighbor_nat(&mut c, &req(20000, 30000)).unwrap();
+        let err = add_neighbor_nat(&mut c, &req(25000, 35000)).unwrap_err();
+        let status = tonic::Status::from(err);
+        assert_eq!(status.code(), tonic::Code::AlreadyExists);
+        assert!(
+            status.message().starts_with("ALREADY_EXISTS:"),
+            "{}",
+            status.message()
+        );
+    }
+
+    #[test]
+    fn add_neighbor_nat_empty_range_is_invalid() {
+        let mut c = core();
+        let err = add_neighbor_nat(
+            &mut c,
+            &pb::AddNeighborNatRequest {
+                vni: 100,
+                nat_ip: "198.51.100.7".into(),
+                owner_underlay: "2001:db8::bb".into(),
+                port_min: 3000,
+                port_max: 3000,
+            },
+        )
+        .unwrap_err();
+        assert_eq!(
+            tonic::Status::from(err).code(),
+            tonic::Code::InvalidArgument
+        );
     }
 
     #[test]

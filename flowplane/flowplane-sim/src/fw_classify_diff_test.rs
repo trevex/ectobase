@@ -11,6 +11,7 @@
 //! keeps the verdict mix balanced (see `assert_balanced`).
 
 use crate::fw_oracle::{first_match, first_match6};
+use crate::rng::Rng;
 use crate::{MemMaps, VecPkt};
 use flowplane_common::{FwBind, FwRule, FwRule6, FW_ACTION_ACCEPT, FW_DIR_EGRESS, FW_DIR_INGRESS};
 use flowplane_control::fwclass::{compile_scope, Scope};
@@ -19,15 +20,8 @@ use flowplane_core::firewall::{fw_classify, fw_classify6};
 const IF: u32 = 7;
 const MAX_RULES: u64 = 16;
 
-/// xorshift64*: deterministic, dependency-free.
-struct Rng(u64);
+/// Extra draws this differential oracle needs beyond the shared [`Rng::next`].
 impl Rng {
-    fn next(&mut self) -> u64 {
-        self.0 ^= self.0 >> 12;
-        self.0 ^= self.0 << 25;
-        self.0 ^= self.0 >> 27;
-        self.0.wrapping_mul(0x2545_f491_4f6c_dd1d)
-    }
     fn pick<T: Copy>(&mut self, xs: &[T]) -> T {
         xs[(self.next() % xs.len() as u64) as usize]
     }

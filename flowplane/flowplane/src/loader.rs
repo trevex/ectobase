@@ -8,11 +8,21 @@ use aya::programs::{tc, ProgramFd, SchedClassifier, TcAttachType};
 use aya::Ebpf;
 
 /// Maps an older build pinned that this one no longer declares: the first-match firewall's rule
-/// slots and counts, replaced by the classifier (`FW_BIND` + `FW_CLASS{,6}`/`FW_POLICY{,6}`).
+/// slots and counts, replaced by the classifier (`FW_BIND` + `FW_CLASS{,6}`/`FW_POLICY{,6}`), and
+/// the scanned neighbor-NAT slots and counts, replaced by the `NAT_OWNERS{,6}` tries.
 /// Nothing re-binds them, so after an upgrade they would stay pinned — holding kernel memory — for
 /// good. Removing the pin is safe mid-restart: programs still attached keep their own references,
 /// and the kernel frees each map once the last one is replaced.
-const RETIRED_PINNED_MAPS: [&str; 4] = ["FW_RULES", "FW_META", "FW_RULES6", "FW_META6"];
+pub(crate) const RETIRED_PINNED_MAPS: [&str; 8] = [
+    "FW_RULES",
+    "FW_META",
+    "FW_RULES6",
+    "FW_META6",
+    "NEIGHBOR_NAT",
+    "NEIGHBOR_NAT_COUNT",
+    "NEIGHBOR_NAT6",
+    "NEIGHBOR_NAT6_COUNT",
+];
 
 /// Load the eBPF object that aya-build compiled to bpfel and placed in OUT_DIR.
 ///

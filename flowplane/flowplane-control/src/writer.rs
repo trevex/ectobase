@@ -2,8 +2,8 @@
 //! used in tests) implement this; `ControlCore` programs maps only through it.
 use flowplane_common::{
     DhcpConfig, FloatingIPKey, FwBind, IfaceKey, IfaceKey6, IfaceMetaKey, IfaceMetaVal, IfaceValue,
-    LbBackend, LbKey, LbKey6, LbValue, MaglevKey, MeterState, NatKey, NatKey6, NatValue, NatValue6,
-    NeighborNat6Entry, NeighborNatEntry, PortMeta, RouteValue, UnderlayValue,
+    LbBackend, LbKey, LbKey6, LbValue, MaglevKey, MeterState, NatKey, NatKey6, NatOwner,
+    NatOwnerKey, NatOwnerKey6, NatValue, NatValue6, PortMeta, RouteValue, UnderlayValue,
 };
 
 /// The set of conntrack entries a NAT teardown must invalidate; the eBPF writer flushes the
@@ -52,8 +52,19 @@ pub trait MapWriter {
     fn nat_get(&self, key: &NatKey) -> Option<NatValue>;
     fn nat_ips_set(&mut self, vni: u32, nat_ip: [u8; 4]) -> anyhow::Result<()>;
     fn nat_ips_remove(&mut self, vni: u32, nat_ip: [u8; 4]) -> anyhow::Result<()>;
-    fn neigh_nat_upsert(&mut self, idx: u32, val: NeighborNatEntry) -> anyhow::Result<()>;
-    fn neigh_nat_count_set(&mut self, count: u32) -> anyhow::Result<()>;
+    /// Neighbor-NAT owner prefixes (`NAT_OWNERS`): one trie entry per aligned port prefix of a
+    /// block — see [`natowner::owner_prefixes4`](crate::natowner::owner_prefixes4).
+    fn nat_owner_upsert(
+        &mut self,
+        prefix_len: u32,
+        key: NatOwnerKey,
+        val: NatOwner,
+    ) -> anyhow::Result<()>;
+    /// Removing an absent prefix must succeed: a withdraw retried after a partial failure removes
+    /// every prefix of its block again.
+    fn nat_owner_remove(&mut self, prefix_len: u32, key: &NatOwnerKey) -> anyhow::Result<()>;
+    /// Adopt: every `(prefix_len, key, owner)` that survived a restart in the pinned trie.
+    fn nat_owner_entries(&self) -> Vec<(u32, NatOwnerKey, NatOwner)>;
     // NAT66 (v6) write surface — sibling of the v4 nat methods above. No defaults: a silently
     // no-op'd v6 NAT would fail OPEN (leak the guest source v6), so every backend implements these.
     fn nat6_upsert(&mut self, key: NatKey6, val: NatValue6) -> anyhow::Result<()>;
@@ -61,8 +72,15 @@ pub trait MapWriter {
     fn nat6_get(&self, key: &NatKey6) -> Option<NatValue6>;
     fn nat_ips6_set(&mut self, vni: u32, nat_ip: [u8; 16]) -> anyhow::Result<()>;
     fn nat_ips6_remove(&mut self, vni: u32, nat_ip: [u8; 16]) -> anyhow::Result<()>;
-    fn neigh_nat6_upsert(&mut self, idx: u32, val: NeighborNat6Entry) -> anyhow::Result<()>;
-    fn neigh_nat6_count_set(&mut self, count: u32) -> anyhow::Result<()>;
+    fn nat_owner6_upsert(
+        &mut self,
+        prefix_len: u32,
+        key: NatOwnerKey6,
+        val: NatOwner,
+    ) -> anyhow::Result<()>;
+    /// Same contract as `nat_owner_remove`: removing an absent prefix must succeed.
+    fn nat_owner6_remove(&mut self, prefix_len: u32, key: &NatOwnerKey6) -> anyhow::Result<()>;
+    fn nat_owner6_entries(&self) -> Vec<(u32, NatOwnerKey6, NatOwner)>;
     fn lb_upsert(&mut self, key: LbKey, val: LbValue) -> anyhow::Result<()>;
     fn lb_remove(&mut self, key: &LbKey) -> anyhow::Result<()>;
     /// IPv6 LB service row (`LB6`), keyed on the full v6 address — see [`LbKey6`].

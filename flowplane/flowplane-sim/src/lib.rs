@@ -66,6 +66,8 @@ mod nat_icmp_error_v6_test;
 #[cfg(test)]
 mod nat_test;
 #[cfg(test)]
+mod neighbor_nat_test;
+#[cfg(test)]
 mod ns_scenario_test;
 #[cfg(test)]
 mod ns_scenario_v6_test;
@@ -75,6 +77,8 @@ mod parse_v6_test;
 mod peering_test;
 #[cfg(test)]
 mod reforward_test;
+#[cfg(test)]
+mod rng;
 #[cfg(test)]
 mod same_node_dest_fw_test;
 #[cfg(test)]

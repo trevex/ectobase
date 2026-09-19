@@ -140,14 +140,12 @@ impl Control {
         let fw_epoch = crate::maps::FwEpochMap::open(&mut ebpf)?;
         let underlay = crate::maps::Underlay::open(&mut ebpf)?;
         let meter = Meter::open(&mut ebpf)?;
-        let neigh_nat = NeighborNat::open(&mut ebpf)?;
-        let neigh_nat_count = NeighborNatCount::open(&mut ebpf)?;
+        let nat_owners = NatOwners::open(&mut ebpf)?;
         let nat_ips = NatIps::open(&mut ebpf)?;
-        // NAT66 (v6) config maps — siblings of the four v4 nat maps above.
+        // NAT66 (v6) config maps — siblings of the three v4 nat maps above.
         let nat6 = crate::maps::Nat6::open(&mut ebpf)?;
         let nat_ips6 = crate::maps::NatIps6::open(&mut ebpf)?;
-        let neigh_nat6 = crate::maps::NeighborNat6::open(&mut ebpf)?;
-        let neigh_nat6_count = crate::maps::NeighborNat6Count::open(&mut ebpf)?;
+        let nat_owners6 = crate::maps::NatOwners6::open(&mut ebpf)?;
         let nat_ct6 = crate::maps::NatCt6::open(&mut ebpf)?;
         let dhcp_config = DhcpConfigMap::open(&mut ebpf)?;
         let dhcp_meta = DhcpMetaMap::open(&mut ebpf)?;
@@ -161,12 +159,10 @@ impl Control {
             routes6,
             nat,
             nat_ips,
-            neigh_nat,
-            neigh_nat_count,
+            nat_owners,
             nat6,
             nat_ips6,
-            neigh_nat6,
-            neigh_nat6_count,
+            nat_owners6,
             nat_ct6,
             lb,
             lb6,
@@ -209,6 +205,9 @@ impl Control {
             // The classifier's bindings and scopes survived in the pinned maps; rebuild the scope
             // references from them (and collect scopes nothing binds) before any replace runs.
             inner.core.adopt_fw_classifier();
+            // Likewise the neighbor-NAT blocks in the pinned `NAT_OWNERS{,6}` tries: rebuild their
+            // lists (repairing any a crash left partial) so a withdraw or overlap check sees them.
+            inner.core.adopt_nat_owners();
             let recovered = Self::rebuild_from_maps(&mut inner)?;
             eprintln!(
                 "adopt: recovered {} interface(s) from pinned maps",

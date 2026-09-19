@@ -12,11 +12,11 @@ use flowplane_common::{
 use crate::loader;
 use crate::maps::{
     Conntrack, Conntrack6, DhcpConfigMap, DhcpMetaMap, FloatingIPs, GeneveIfindexMap, IfaceMetaMap,
-    Interfaces, Interfaces6, Lb, LocalMap, Maglev, Meter, Nat, NatIps, NeighborNat,
-    NeighborNatCount, PortMetaMap, Routes, Routes6,
+    Interfaces, Interfaces6, Lb, LocalMap, Maglev, Meter, Nat, NatIps, NatOwners, PortMetaMap,
+    Routes, Routes6,
 };
-// `Nat`, `NatIps`, `NeighborNat`, `NeighborNatCount` are opened in `bring_up`/the test ctor and
-// moved into `AyaWriter`, which owns them; they are not held on `Inner`.
+// `Nat`, `NatIps`, `NatOwners` are opened in `bring_up` and moved into `AyaWriter`, which owns
+// them; they are not held on `Inner`.
 
 // The `impl Control` blocks are split by domain into these child modules. Each is pure code
 // movement out of this file; they reach `Inner`'s private state via `super`.
@@ -25,7 +25,6 @@ mod adopt_test;
 mod aya_writer;
 mod bringup;
 mod lb;
-mod nat;
 mod recover;
 mod routes;
 

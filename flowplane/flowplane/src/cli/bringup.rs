@@ -123,8 +123,9 @@ pub struct BringupArgs {
     #[arg(long = "fw-rule")]
     fw_rules: Vec<String>,
     /// Neighbor NAT entry, repeatable:
-    /// "<nat_ip>:<port_min>:<port_max>@<owner_underlay_ipv6>@<vni>". Programs NEIGHBOR_NAT
-    /// so that return traffic to nat_ip:dport is re-forwarded to the owner's underlay node.
+    /// "<nat_ip>:<port_min>:<port_max>@<owner_underlay_ipv6>@<vni>", owning the half-open port
+    /// range [port_min, port_max). Programs NAT_OWNERS so that return traffic to nat_ip:dport is
+    /// re-forwarded to the owner's underlay node. Blocks on one nat_ip must not overlap.
     #[arg(long = "neigh-nat")]
     neigh_nats: Vec<String>,
     /// Underlay VNI marker, repeatable: "<ipv6>:<vni>". Programs UNDERLAY[ipv6] with a
@@ -714,51 +715,15 @@ pub async fn run(args: BringupArgs) -> anyhow::Result<()> {
         )?;
     }
 
-    // --neigh-nat: "<nat_ip>:<port_min>:<port_max>@<owner_underlay_ipv6>@<vni>"
-    // We split on '@' to avoid colon-ambiguity with the IPv6 in the middle segment.
-    let mut neigh_nat_map = maps::NeighborNat::open(&mut ebpf)?;
-    let mut neigh_nat_count_map = maps::NeighborNatCount::open(&mut ebpf)?;
-    let mut neigh_nat_idx: u32 = 0;
-    for spec in &neigh_nats {
-        anyhow::ensure!(
-            neigh_nat_idx < flowplane_common::NB_MAX_ENTRIES,
-            "--neigh-nat: too many entries (max {})",
-            flowplane_common::NB_MAX_ENTRIES
-        );
-        let parts: Vec<&str> = spec.splitn(3, '@').collect();
-        anyhow::ensure!(
-                    parts.len() == 3,
-                    "--neigh-nat must be <nat_ip>:<port_min>:<port_max>@<underlay_ipv6>@<vni>, got {spec:?}"
-                );
-        let head = parts[0];
-        let underlay_s = parts[1];
-        let vni: u32 = parts[2].parse().context("--neigh-nat: bad vni")?;
-        let underlay = parse_ipv6(underlay_s)?;
-        let mut it = head.split(':');
-        let nat_ip = parse_ipv4(it.next().context("--neigh-nat: missing nat_ip")?)?;
-        let port_min: u16 = it
-            .next()
-            .context("--neigh-nat: missing port_min")?
-            .parse()?;
-        let port_max: u16 = it
-            .next()
-            .context("--neigh-nat: missing port_max")?
-            .parse()?;
-        neigh_nat_map.upsert(
-            neigh_nat_idx,
-            flowplane_common::NeighborNatEntry {
-                underlay,
-                nat_ip,
-                vni,
-                port_min,
-                port_max,
-                enabled: 1,
-                _pad: [0; 3],
-            },
-        )?;
-        neigh_nat_idx += 1;
+    // --neigh-nat: each block as its NAT_OWNERS port prefixes.
+    let mut nat_owners = maps::NatOwners::open(&mut ebpf)?;
+    for (spec, block) in neigh_nats.iter().zip(parse_neigh_nats(&neigh_nats)?) {
+        for (plen, key, owner) in flowplane_control::natowner::owner_prefixes4(&block) {
+            nat_owners
+                .upsert(plen, key, owner)
+                .with_context(|| format!("--neigh-nat {spec:?}"))?;
+        }
     }
-    neigh_nat_count_map.set(neigh_nat_idx)?;
 
     // --meter: "<ifname>=<total_mbps>:<public_mbps>" — program per-interface egress
     // token-bucket rate caps. Opt-in: interfaces without an entry are unlimited.
@@ -837,4 +802,92 @@ pub async fn run(args: BringupArgs) -> anyhow::Result<()> {
             );
     tokio::signal::ctrl_c().await?;
     Ok(())
+}
+
+/// Parse `--neigh-nat` specs ("<nat_ip>:<port_min>:<port_max>@<owner_underlay_ipv6>@<vni>"; split on
+/// '@' because the IPv6 holds colons). Refuses an empty range, and a block overlapping an earlier
+/// one on the same nat_ip in any VNI: the trie is keyed without a VNI, so the later block's
+/// prefixes would silently take over the earlier one's ports.
+fn parse_neigh_nats(specs: &[String]) -> anyhow::Result<Vec<flowplane_common::NeighborNatEntry>> {
+    let mut blocks: Vec<flowplane_common::NeighborNatEntry> = Vec::with_capacity(specs.len());
+    for spec in specs {
+        let parts: Vec<&str> = spec.splitn(3, '@').collect();
+        anyhow::ensure!(
+            parts.len() == 3,
+            "--neigh-nat must be <nat_ip>:<port_min>:<port_max>@<underlay_ipv6>@<vni>, got {spec:?}"
+        );
+        let vni: u32 = parts[2].parse().context("--neigh-nat: bad vni")?;
+        let underlay = parse_ipv6(parts[1])?;
+        let mut it = parts[0].split(':');
+        let nat_ip = parse_ipv4(it.next().context("--neigh-nat: missing nat_ip")?)?;
+        let port_min: u16 = it
+            .next()
+            .context("--neigh-nat: missing port_min")?
+            .parse()?;
+        let port_max: u16 = it
+            .next()
+            .context("--neigh-nat: missing port_max")?
+            .parse()?;
+        anyhow::ensure!(
+            port_min < port_max,
+            "--neigh-nat: empty port range in {spec:?}"
+        );
+        anyhow::ensure!(
+            !blocks
+                .iter()
+                .any(|b| b.nat_ip == nat_ip && b.port_min < port_max && b.port_max > port_min),
+            "--neigh-nat: {spec:?} overlaps an earlier block on the same nat_ip"
+        );
+        blocks.push(flowplane_common::NeighborNatEntry {
+            underlay,
+            nat_ip,
+            vni,
+            port_min,
+            port_max,
+            enabled: 1,
+            _pad: [0; 3],
+        });
+    }
+    Ok(blocks)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn specs(s: &[&str]) -> Vec<String> {
+        s.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn neigh_nats_accept_adjacent_and_other_ip_blocks() {
+        // Half-open ranges: [20000, 30000) and [30000, 40000) share no port.
+        let blocks = parse_neigh_nats(&specs(&[
+            "198.51.100.7:20000:30000@2001:db8::bb@100",
+            "198.51.100.7:30000:40000@2001:db8::cc@100",
+            "198.51.100.8:25000:35000@2001:db8::cc@100",
+        ]))
+        .unwrap();
+        assert_eq!(blocks.len(), 3);
+        assert_eq!(blocks[1].nat_ip, [198, 51, 100, 7]);
+        assert_eq!((blocks[1].port_min, blocks[1].port_max), (30000, 40000));
+        assert_eq!(blocks[1].vni, 100);
+    }
+
+    #[test]
+    fn neigh_nats_reject_overlap_on_one_nat_ip_in_any_vni() {
+        let err = parse_neigh_nats(&specs(&[
+            "198.51.100.7:20000:30000@2001:db8::bb@100",
+            "198.51.100.7:29999:40000@2001:db8::cc@200",
+        ]))
+        .unwrap_err();
+        assert!(format!("{err:#}").contains("overlaps"), "{err:#}");
+    }
+
+    #[test]
+    fn neigh_nats_reject_empty_range() {
+        let err =
+            parse_neigh_nats(&specs(&["198.51.100.7:3000:3000@2001:db8::bb@100"])).unwrap_err();
+        assert!(format!("{err:#}").contains("empty port range"), "{err:#}");
+    }
 }

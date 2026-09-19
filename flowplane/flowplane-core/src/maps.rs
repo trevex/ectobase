@@ -76,20 +76,13 @@ pub trait Maps {
     /// IPv6 LB service lookup (`LB6`), keyed on the FULL v6 address — see [`LbKey6`].
     fn lb6_get(&self, key: &flowplane_common::LbKey6) -> Option<LbValue>;
     fn maglev_get(&self, key: &MaglevKey) -> Option<LbBackend>;
-    /// Neighbor-NAT return-route lookup (`NEIGHBOR_NAT` table, linear-scanned): if `(vni, dst,
-    /// dport)` matches a registered block, return the OWNING node's underlay /128. NEIGHBOR_NAT
-    /// entries are installed ONLY for nat_ip blocks owned by ANOTHER node (mesh gossip; see
-    /// `mesh/agent/bus_test.go::TestApplyNatInstallsNeighborNatOnlyForRemoteOwners`) — a locally
-    /// owned nat_ip never appears here. Used for the cross-node relay case: an inbound packet whose
-    /// inner dst is a nat_ip this node does NOT own gets re-forwarded, byte-unchanged, toward the
-    /// real owner. Faithful port of the eBPF `nat::neighbor_nat_lookup`.
-    fn neighbor_nat_lookup(&self, vni: u32, dst: [u8; 4], dport: u16) -> Option<[u8; 16]>;
-    /// VNI-agnostic variant for the WAN-edge return path (`wan_rx`): a plain WAN-arriving IPv4
-    /// packet carries no VNI, so match on `(nat_ip, dport)` alone and return BOTH the owner's
-    /// underlay /128 AND its VNI — the edge must encap toward the owner WITH that VNI so the
-    /// owner's peer-independent reverse-conntrack key `(vni,0,nat_ip,0,nat_port)` matches. Faithful
-    /// port of the eBPF `nat::neighbor_nat_lookup_any`.
-    fn neighbor_nat_lookup_any(&self, dst: [u8; 4], dport: u16) -> Option<([u8; 16], u32)>;
+    /// The owner of the neighbor-NAT block containing `(nat_ip, port)` (`NAT_OWNERS`: longest
+    /// prefix over `[nat_ip ++ port]`), or `None`. Blocks are installed only for nat_ips owned by
+    /// ANOTHER node — a locally owned nat_ip never appears here (see
+    /// `mesh/agent/bus_test.go::TestApplyNatInstallsNeighborNatOnlyForRemoteOwners`). The edge's
+    /// `wan_rx` relays to the owner with the owner's VNI; the node relay filters on VNI
+    /// ([`crate::nat::neighbor_nat_owner`]).
+    fn nat_owner(&self, nat_ip: &[u8; 4], port: u16) -> Option<flowplane_common::NatOwner>;
     /// Network-NAT config for a `(vni, guest-ipv4)` pair (`NAT` map).
     fn nat_get(&self, key: &NatKey) -> Option<NatValue>;
     /// Is `(vni, ip)` a registered public NAT IP (the `NAT_IPS` set)? NAT returns are demuxed
@@ -106,10 +99,8 @@ pub trait Maps {
     fn is_nat_ip6(&self, _vni: u32, _ip: &[u8; 16]) -> bool {
         false
     }
-    fn neighbor_nat_lookup6(&self, _vni: u32, _dst: [u8; 16], _dport: u16) -> Option<[u8; 16]> {
-        None
-    }
-    fn neighbor_nat_lookup_any6(&self, _dst: [u8; 16], _dport: u16) -> Option<([u8; 16], u32)> {
+    /// IPv6 sibling of [`Self::nat_owner`] (`NAT_OWNERS6`). DEFAULT `None`.
+    fn nat_owner6(&self, _nat_ip: &[u8; 16], _port: u16) -> Option<flowplane_common::NatOwner> {
         None
     }
     fn nat_ct6_get(&self, _key: &CtKey6) -> Option<CtEntry6> {

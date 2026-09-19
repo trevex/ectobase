@@ -222,8 +222,9 @@ pub fn try_uplink_rx(ctx: &TcContext) -> Result<i32, DpErr> {
 }
 
 /// WAN-edge return path (`wan_rx`, tcx on the WAN uplink): delegates entirely to
-/// `flowplane_core::datapath::process_wan_rx` (LB address ingress + the neighbor-NAT relay carrying the
-/// real owner VNI — see its doc comment for the bug that fixed), then executes its verdict.
+/// `flowplane_core::datapath::process_wan_rx` (LB address ingress + the neighbor-NAT relay, which
+/// looks the owner up by `NAT_OWNERS{,6}` and carries its VNI on the relayed tunnel key — see its
+/// doc comment), then executes its verdict.
 ///
 /// On an LB address hit `out.dsr` is `Some` (the DSR option lives on `WanRxOut`, not `TunnelEncap` —
 /// only this program's edge encode ever sets it). This is handled here, NOT via the shared

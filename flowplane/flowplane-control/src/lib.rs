@@ -7,12 +7,15 @@ pub mod maglev;
 #[cfg(feature = "mem-writer")]
 pub mod mem;
 mod nat;
+pub mod natowner;
+mod ports;
 mod routes;
 pub mod shadow;
 pub mod writer;
 
 pub use firewall::FwError;
 pub use interface::{meter_state, IfaceParams};
+pub use natowner::NeighborNatError;
 pub use writer::{CtFlushScope, CtFlushScope6, MapWriter};
 
 /// Backend-agnostic control-plane state + programming, generic over the map write surface.
@@ -22,16 +25,20 @@ pub struct ControlCore<W: MapWriter> {
     // ROUTES domain
     pub(crate) routes_shadow: Vec<shadow::RouteShadowV4>,
     pub(crate) routes6_shadow: Vec<shadow::RouteShadowV6>,
-    // NAT domain: interface meta + lb shadow the nat conflict checks read, and the
-    // in-memory neighbor-NAT vec that drives the NEIGHBOR_NAT map reprogram.
+    // NAT domain: interface meta + lb shadow the nat conflict checks read.
     pub(crate) ifaces_meta: std::collections::HashMap<Vec<u8>, shadow::IfaceMeta>,
     // LB domain: the load balancers (keyed by id) + the Maglev table-id allocator.
     // The eBPF `detach_interface` VNI-reset reads lb-vni membership via `vni_has_lb`.
     pub(crate) lbs: std::collections::HashMap<Vec<u8>, shadow::LbEntry>,
     pub(crate) next_table_id: u32,
+    // Neighbor-NAT blocks; the NAT_OWNERS tries store each as its port prefixes.
     pub(crate) neigh_nats: Vec<flowplane_common::NeighborNatEntry>,
-    // NAT66 neighbor-return vec — v6 sibling of `neigh_nats`, drives the NEIGHBOR_NAT6 reprogram.
+    // NAT66 neighbor-NAT blocks — v6 sibling of `neigh_nats`, stored in NAT_OWNERS6.
     pub(crate) neigh_nats6: Vec<flowplane_common::NeighborNat6Entry>,
+    // Sum of the listed blocks' prefix counts, per family (the capacity check reads these). Equal
+    // to the trie's size while list and trie agree; after a failed write it reads high, never low.
+    pub(crate) nat_owner_count4: usize,
+    pub(crate) nat_owner_count6: usize,
     // FIREWALL classifier: each interface's current binding (mirrors `FW_BIND`) and how many
     // (interface, direction) pairs reference each scope — a scope is deleted at zero.
     pub(crate) fw_binds: std::collections::HashMap<u32, flowplane_common::FwBind>,
@@ -49,6 +56,8 @@ impl<W: MapWriter> ControlCore<W> {
             next_table_id: 1,
             neigh_nats: Vec::new(),
             neigh_nats6: Vec::new(),
+            nat_owner_count4: 0,
+            nat_owner_count6: 0,
             fw_binds: std::collections::HashMap::new(),
             fw_scope_refs: std::collections::HashMap::new(),
         }

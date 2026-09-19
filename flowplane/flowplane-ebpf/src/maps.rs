@@ -7,9 +7,9 @@ use flowplane_common::{
     Config, CtEntry, CtEntry6, CtKey, CtKey6, DhcpConfig, DhcpMeta, DsrLbIP, FloatingIPKey,
     FloatingIPKey6, FwBind, FwPolKey, IfaceKey, IfaceKey6, IfaceMetaKey, IfaceMetaVal, IfaceValue,
     InspectEntry, LbBackend, LbKey, LbKey6, LbValue, Local, MaglevKey, MeterState, NatKey, NatKey6,
-    NatValue, NatValue6, NeighborNat6Entry, NeighborNatEntry, PortMeta, RouteLpmData,
+    NatOwner, NatOwnerKey, NatOwnerKey6, NatValue, NatValue6, PortMeta, RouteLpmData,
     RouteLpmData6, RouteValue, UnderlayValue, FW_SCOPES_MAX, FW_SCOPE_MAX_CLASSES,
-    FW_SCOPE_MAX_ENTRIES,
+    FW_SCOPE_MAX_ENTRIES, NAT_OWNERS_MAX,
 };
 
 #[map]
@@ -132,13 +132,13 @@ pub static DSR: LruHashMap<CtKey, DsrLbIP> = LruHashMap::pinned(65536, 0);
 pub static DSR6: LruHashMap<CtKey6, DsrLbIP> = LruHashMap::pinned(65536, 0);
 #[map]
 pub static UNDERLAY: HashMap<[u8; 16], UnderlayValue> = HashMap::pinned(4096, 0);
+/// Neighbor-NAT owners: the `[nat_ip ++ port]` prefixes of the NAT port blocks other nodes own ->
+/// the owner (see `flowplane_common::NatOwnerKey`). One VNI-agnostic trie per family: blocks never
+/// overlap per nat_ip, and the node relay filters on VNI in core.
 #[map]
-pub static NEIGHBOR_NAT: HashMap<u32, NeighborNatEntry> = HashMap::pinned(64, 0);
-/// Entry 0: number of populated NEIGHBOR_NAT slots (datapath scans 0..count).
-#[map]
-pub static NEIGHBOR_NAT_COUNT: Array<u32> = Array::pinned(1, 0);
+pub static NAT_OWNERS: LpmTrie<NatOwnerKey, NatOwner> = LpmTrie::pinned(NAT_OWNERS_MAX, 1);
 
-// --- NAT66 (v6 network SNAT) maps — v6 siblings of NAT / NAT_IPS / NEIGHBOR_NAT{,_COUNT}, plus a
+// --- NAT66 (v6 network SNAT) maps — v6 siblings of NAT / NAT_IPS / NAT_OWNERS, plus a
 // dedicated v6 NAT conntrack (the v4 CONNTRACK's CtEntry.xlate_ip is v4-only).
 #[map]
 pub static NAT6: HashMap<NatKey6, NatValue6> = HashMap::pinned(1024, 0);
@@ -149,11 +149,9 @@ pub static NAT_IPS6: HashMap<FloatingIPKey6, u8> = HashMap::pinned(1024, 0);
 /// the firewall-only `CONNTRACK6` (whose value is the v4-xlate `CtEntry`).
 #[map]
 pub static NAT_CT6: LruHashMap<CtKey6, CtEntry6> = LruHashMap::pinned(1_048_576, 0);
+/// v6 sibling of `NAT_OWNERS`.
 #[map]
-pub static NEIGHBOR_NAT6: HashMap<u32, NeighborNat6Entry> = HashMap::pinned(64, 0);
-/// Entry 0: number of populated NEIGHBOR_NAT6 slots (datapath scans 0..count).
-#[map]
-pub static NEIGHBOR_NAT6_COUNT: Array<u32> = Array::pinned(1, 0);
+pub static NAT_OWNERS6: LpmTrie<NatOwnerKey6, NatOwner> = LpmTrie::pinned(NAT_OWNERS_MAX, 1);
 #[map]
 pub static METER: HashMap<u32, MeterState> = HashMap::pinned(1024, 0);
 #[map]

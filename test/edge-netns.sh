@@ -12,8 +12,8 @@
 #   fabpeer(owner hv)                 edge (flowplane sidecar)                 wanpeer(internet/WAN)
 #     fabp-eth <===veth===> fab  [uplink_rx]        [wan_rx]  wan <===veth===> wanp-eth
 #
-# RETURN (WAN -> fabric): wanpeer sends a plain IPv4 to nat_ip:nat_port. wan_rx matches the
-#   NEIGHBOR_NAT block (nat_ip,dport) and encaps IP-in-IPv6 toward the owner underlay, redirecting
+# RETURN (WAN -> fabric): wanpeer sends a plain IPv4 to nat_ip:nat_port. wan_rx looks it up in
+#   the NAT_OWNERS trie and encaps IP-in-IPv6 toward the owner underlay, redirecting
 #   out `fab`. Asserted by capturing the encapped IPv6 (nh=IPIP, dst=owner_ul, inner dst=nat_ip)
 #   on fabp-eth.
 # EGRESS (fabric -> WAN): fabpeer sends an IP-in-IPv6 packet (outer dst = the edge underlay, inner

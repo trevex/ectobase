@@ -252,16 +252,24 @@ impl<W: MapWriter> ControlCore<W> {
     /// dpservice's async-deletion model. Called by the eBPF `detach_interface` after it has decided
     /// the VNI is no longer in use; `ipv4` is the removed interface's guest IPv4.
     pub fn purge_vni(&mut self, vni: u32, ipv4: [u8; 4]) -> anyhow::Result<()> {
-        // Purge neighbor NATs for this VNI.
-        let before = self.neigh_nats.len();
-        self.neigh_nats.retain(|e| e.vni != vni);
-        if self.neigh_nats.len() != before {
-            let n = self.neigh_nats.len() as u32;
-            let remaining: Vec<flowplane_common::NeighborNatEntry> = self.neigh_nats.clone();
-            for (i, e) in remaining.iter().enumerate() {
-                let _ = self.w.neigh_nat_upsert(i as u32, *e);
-            }
-            let _ = self.w.neigh_nat_count_set(n);
+        // Purge this VNI's neighbor-NAT blocks, both families.
+        let v4: Vec<_> = self
+            .neigh_nats
+            .iter()
+            .filter(|e| e.vni == vni)
+            .copied()
+            .collect();
+        for e in v4 {
+            let _ = self.del_neighbor_nat(e.vni, e.nat_ip, e.port_min, e.port_max);
+        }
+        let v6: Vec<_> = self
+            .neigh_nats6
+            .iter()
+            .filter(|e| e.vni == vni)
+            .copied()
+            .collect();
+        for e in v6 {
+            let _ = self.del_neighbor_nat6(e.vni, e.nat_ip6, e.port_min, e.port_max);
         }
         // Purge LB address entries for the removed interface's guest IP (and its reverse).
         let maybe_floating_ip = self.w.floating_ips_get(&FloatingIPKey { vni, ipv4 });
@@ -568,7 +576,10 @@ mod tests {
         // Seed a neighbor-NAT for this VNI.
         c.add_neighbor_nat(vni, [203, 0, 113, 1], 1024, 2048, [2u8; 16])
             .unwrap();
-        assert_eq!(c.w.neigh_nat_count, 1);
+        c.add_neighbor_nat6(vni, [9; 16], 1024, 2048, [2u8; 16])
+            .unwrap();
+        assert!(!c.w.nat_owners.is_empty());
+        assert!(!c.w.nat_owners6.is_empty());
         // Seed an LB address (gip -> lb_ip) and its reverse.
         let lb_ip = [10, 0, 0, 9];
         c.w.floating_ips_upsert(FloatingIPKey { vni, ipv4: gip }, lb_ip)
@@ -605,7 +616,10 @@ mod tests {
 
         // neigh-NAT purged
         assert!(c.neigh_nats.is_empty());
-        assert_eq!(c.w.neigh_nat_count, 0);
+        assert!(c.w.nat_owners.is_empty());
+        assert!(c.neigh_nats6.is_empty());
+        assert!(c.w.nat_owners6.is_empty());
+        assert_eq!((c.nat_owner_count4, c.nat_owner_count6), (0, 0));
         // LB addresses (both directions) purged
         assert!(c
             .w

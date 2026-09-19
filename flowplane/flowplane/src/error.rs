@@ -56,6 +56,18 @@ impl From<flowplane_control::FwError> for ServiceError {
     }
 }
 
+impl From<flowplane_control::NeighborNatError> for ServiceError {
+    fn from(e: flowplane_control::NeighborNatError) -> Self {
+        use flowplane_control::NeighborNatError;
+        match e {
+            NeighborNatError::EmptyRange => ServiceError::Invalid(e.to_string()),
+            NeighborNatError::Overlap => ServiceError::Conflict(e.to_string()),
+            NeighborNatError::Full { .. } => ServiceError::Exhausted(e.to_string()),
+            NeighborNatError::Map(e) => ServiceError::Internal(e),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -80,6 +92,28 @@ mod tests {
         );
         assert_eq!(
             tonic::Status::from(ServiceError::Internal(anyhow::anyhow!("x"))).code(),
+            tonic::Code::Internal
+        );
+    }
+
+    #[test]
+    fn neighbor_nat_errors_map_to_expected_status_codes() {
+        use flowplane_control::NeighborNatError;
+        let code = |e: NeighborNatError| tonic::Status::from(ServiceError::from(e)).code();
+        assert_eq!(
+            code(NeighborNatError::EmptyRange),
+            tonic::Code::InvalidArgument
+        );
+        assert_eq!(code(NeighborNatError::Overlap), tonic::Code::AlreadyExists);
+        assert_eq!(
+            code(NeighborNatError::Full {
+                needed: 30,
+                max: 65536
+            }),
+            tonic::Code::ResourceExhausted
+        );
+        assert_eq!(
+            code(NeighborNatError::Map(anyhow::anyhow!("x"))),
             tonic::Code::Internal
         );
     }

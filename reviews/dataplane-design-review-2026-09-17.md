@@ -39,7 +39,7 @@ asymmetries plus doc drift.
 | Section | Done | Open |
 |---|---|---|
 | §1 Correctness (P0) | all seven (`0e2e601f`) | — |
-| §2 Scale ceilings | firewall rule cap (firewall redesign, `acd0d55b` + `ec23ad68`) | neighbor-NAT 64 + NAT/public broadcast, map ceilings, conntrack pressure, IPAM + peering list costs, sizing doc |
+| §2 Scale ceilings | firewall rule cap (firewall redesign, `acd0d55b` + `ec23ad68`); neighbor-NAT keyed tries (NAT return scaling Inc. 1) | NAT/public broadcast, map ceilings, conntrack pressure, IPAM + peering list costs, sizing doc |
 | §3 Control-plane resilience | NAT/public prune (`a334ef8`), route-prune guard (`cb4188e6`), fence completeness (`a4dd915`), dispatch-controller leader election (`54dda54c`) | edge `/readyz` not consumed, `replicas: 1` everywhere, `GenerationApplied`, broker sync ordering |
 | §4 Policy model | priorities, `defaultPolicy`, FirewallPolicy validation, revocation (`b19cbb3`, `99d3880`, `acd0d55b`) | Route intent, source selectors, remaining validation, peering-overlap warning |
 | §5 Symmetry | — | all items |
@@ -159,7 +159,7 @@ redesign, or an explicit documented budget.
 | Ceiling | Where | Why it breaks |
 |---|---|---|
 | **16 firewall rules** per interface per family, shared across directions | `FW_MAX_RULES`, `fw.rs:11`; linear scan `firewall.rs:173-181` | Cloud policy sets are routinely 10–100× this. The sharpest expressiveness limit in the system. NOTE: this row originally said "per direction", copying `FW_MAX_RULES`' own doc comment, which is also wrong — the handler partitions by family and each family's 16 slots are shared between ingress and egress (doc comment fixed in `1dea63d`). **PARTLY ADDRESSED (firewall redesign increment A):** the cap still stands, but it is no longer silent — the compiler enforces it, drops shadowed rules before counting, keeps the last good rule set and reports `FirewallCompiled=False/RuleBudgetExceeded` on the NIC (`99d3880`); the dataplane answers an over-cap replace with `ResourceExhausted` and no longer half-commits v4 before refusing v6 (`1dea63d`). The cap itself goes with the LPM classifier (increment B). **RESOLVED (firewall redesign B + C2):** the datapath evaluates a two-stage LPM classifier whose cost is constant in the rule count; the slot table and its 16-per-family check are deleted (C2), and the compiler's budget is a 256-per-family quota under the dataplane's per-scope limits (4096 classes / 16384 policy entries). |
-| **64 neighbor-NAT entries fleet-wide**, linear scan per WAN-return packet | `maps.rs:96-113` | Caps the whole fleet at ~64 advertised NAT port-blocks per family. |
+| **64 neighbor-NAT entries fleet-wide**, linear scan per WAN-return packet | `maps.rs:96-113` | Caps the whole fleet at ~64 advertised NAT port-blocks per family. **RESOLVED (datapath; NAT return scaling Increment 1, branch `nat/owner-lpm`)**: the 64-slot linear-scan `NEIGHBOR_NAT{,6}` maps are gone, replaced by keyed LPM tries `NAT_OWNERS{,6}` (65,536 prefixes per family; a default 1024-port block is one prefix), giving constant-cost lookup regardless of block count. Errors are now typed: overlap with another block on the same `nat_ip` in any VNI is `AlreadyExists`, a full trie is `ResourceExhausted`, an empty range is `InvalidArgument` (before: every error was `Internal`). `adopt_nat_owners()` rebuilds the block list from the trie after a restart and repairs a partial block — before, nothing rebuilt the list. `purge_vni` now purges v6 blocks too (it purged only v4). Upgrade caveat: the loader unpins the old slot maps without converting their blocks, so an edge's existing remote NAT blocks go unrelayed until its mesh agent reconnects and replays them — restart the edge's agent after the dataplane upgrade. Known gap (found in the final review; closed by Increment 3's declarative replace): if the dataplane and the agent both restart while a block is withdrawn or reassigned, the adopted block stays listed — the new agent prunes only what it installed itself — keeps relaying to the old owner, and refuses an overlapping successor as `AlreadyExists`; the old slot table instead hid every still-valid block at the first add after a dataplane-only restart (nothing rebuilt its list, and the rewrite reset the count). DISTRIBUTION is still fleet-wide (every node still receives and programs every remote NAT block over the route bus) until Increment 3, so the next row stays open. |
 | **NAT/public route-bus records broadcast to every node** | `mesh/reflector/nattable.go:23-93` | O(blocks × nodes) fanout; the dominant term at fleet scale. Route records are per-VNI-scoped — NAT/public should be too (edges + owning nodes only). |
 | 1024 interfaces / 1024 taps per node | `INTERFACES`, `PORT_META` | Dense container nodes exceed this. |
 | 65,536 routes per family per node | `ROUTES{,6}` | Every guest is a host route; peering imports multiply it; multi-cluster growth is linear in fleet size. |
@@ -212,6 +212,20 @@ firewalls. v4 and v6, sim and eBPF. The refusal now removes the entries the flow
    reattaching the disk is the step that corrupts. Also note: a placement cross-check was
    considered and rejected — `CompiledVM.status.placement` comes from the same broker, so it
    freezes at the same instant and cannot see the node either.
+4a. **Found 2026-09-19 (NAT return scaling research) — route-bus snapshots are lossy by
+   construction.** `Session` (`mesh/reflector/server.go`) creates a 1024-slot non-blocking sink and
+   registers it — which replays the NAT/public snapshot into it under the RIB lock — BEFORE the
+   goroutine that drains it starts; `chanSink.Send` drops on a full channel. A global snapshot of
+   ≥1024 records therefore always loses records and usually the `EndOfGlobal` marker itself, so the
+   session never prunes and never reports converged. Per-VNI `Subscribe` replays use the same sink:
+   a VNI with more routes than the drain keeps up with loses records the same way (the count guard
+   prevents a wrong prune, not the non-convergence). Planned: NAT return scaling, Increment 2.
+4b. **Found 2026-09-19 — NAT/public record ownership is not enforced.** `WithdrawNat` /
+   `WithdrawPublic` carry no certificate guard and no ownership check, so any authenticated session
+   can withdraw any record; `AnnounceNat` on a key another origin holds overwrites it without moving
+   it out of the old origin's set, so the old origin's disconnect later withdraws the new owner's
+   block. `Hello.node_id` is also self-asserted and not bound to the certificate. Planned (all but
+   the node_id binding): NAT return scaling, Increment 4.
 4. ~~**dispatch-controller has no leader election**~~ **FIXED** (`42c6ea1d`, merged in
    `54dda54c`): the manager takes a Lease (`ectobase-dispatch-controller`, host
    kube-apiserver, `ReleaseOnCancel`) before starting any reconciler, with lease RBAC in the
