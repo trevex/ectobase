@@ -1,6 +1,6 @@
 //! NAT: guest source-NAT + distributed neighbor-NAT return (backend-agnostic core).
 //!
-//! Guest NAT moved verbatim out of the eBPF `Control` (control/nat.rs), applying the MapWriter
+//! Guest NAT moved verbatim out of the eBPF `Control`, applying the MapWriter
 //! transform: `g.by_id` -> `self.ifaces_meta`, `g.lbs` -> `self.lbs`, `g.nat`/`g.nat_ips` map ops
 //! -> `self.w.<map>_<op>`, and the CT flush -> `self.w.conntrack_flush(scope)`. Neighbor-NAT blocks
 //! are listed in `neigh_nats{,6}` and stored in the `NAT_OWNERS{,6}` tries as their port prefixes

@@ -80,13 +80,30 @@ public IP + port. The edge must forward it to the node that owns that
 NAT block on the route bus with owner = that node's own VTEP, so every node
 (including the edge) learns which node to encapsulate the return toward.
 
-The edge's `uplink_rx` / `wan_rx` path matches the return packet's `(nat_ip, dport)`
-against its neighbor-NAT table, gets back the owning node's underlay `/128` and VNI, and
-encapsulates the return toward it. On the owning node, the reverse conntrack key
+The edge's `uplink_rx` / `wan_rx` path looks the return packet's `(nat_ip, dport)` up in
+the `NAT_OWNERS` trie (`NAT_OWNERS6` for IPv6), gets back the owning node's underlay
+`/128` and VNI, and encapsulates the return toward it. A NAT port block is stored as the
+fewest aligned port prefixes that cover it — a default 1024-port block starting on a
+1024-boundary is a single prefix — so lookup cost is one trie lookup regardless of how
+many blocks exist. On the owning node, the reverse conntrack key
 `(vni, 0, nat_ip, 0, nat_port)` matches, the translation is reversed, and the packet is
 delivered to the original guest. (A plain return from the internet carries no VNI, so
 the edge uses a VNI-agnostic lookup that returns both the underlay and the owner's VNI.
-Both families work the same way, over `NEIGHBOR_NAT` / `NEIGHBOR_NAT6`.)
+Both families work the same way, over `NAT_OWNERS` / `NAT_OWNERS6`.)
+
+!!! note "Limits"
+
+    Each trie holds up to 65,536 prefixes per family. A block that overlaps another
+    block on the same `nat_ip` — in any VNI — is refused as `AlreadyExists`; a full trie
+    is refused as `ResourceExhausted`. Blocks live in pinned maps, so they survive a
+    dataplane restart: adopt rebuilds the block list from the trie values (each prefix
+    carries its whole block) and re-writes any prefix a crash left missing.
+
+    Upgrading a node from the old 64-slot neighbor-NAT table does not convert its
+    existing blocks — the loader unpins the old maps without reading them, so an edge's
+    already-announced remote NAT blocks go unrelayed until they are re-announced.
+    Workaround: restart the edge's mesh agent after the dataplane upgrade — its next
+    reflector reconnect replays every remote NAT block from the control plane's snapshot.
 
 ### ICMP errors
 

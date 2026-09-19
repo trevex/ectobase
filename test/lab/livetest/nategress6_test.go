@@ -150,11 +150,12 @@ const (
 // on either anycast edge relays to the node). Then: (1) the guest egresses one flow
 // (guest_ip:GSPORT -> extdst:80), which snat_egress6 SNATs to nat_ip:P and pins the
 // peer-independent reverse conntrack (vni,0,nat_ip,0,P)->guest_ip:GSPORT; (2) the WAN sends
-// TCP to [nat_ip]:P; it BGP-routes to an edge, whose process_wan_rx neighbor_nat_lookup_any6
-// relays it (Geneve) to the node; (3) the node's process_uplink_v6 nat_return_dnat6 reverse-
-// DNATs dst nat_ip:P -> guest_ip:GSPORT and delivers to the guest tap. We sniff INSIDE the
-// guest netns and assert an inbound frame with dst=guest_ip arrives — proving the whole
-// return chain. Requires the edge sidecars to run the NAT66 build (NEIGHBOR_NAT6 relay).
+// TCP to [nat_ip]:P; it BGP-routes to an edge, whose process_wan_rx looks it up via
+// Maps::nat_owner6 (the NAT_OWNERS6 trie) and relays it (Geneve) to the node; (3) the node's
+// process_uplink_v6 nat_return_dnat6 reverse-DNATs dst nat_ip:P -> guest_ip:GSPORT and
+// delivers to the guest tap. We sniff INSIDE the guest netns and assert an inbound frame with
+// dst=guest_ip arrives — proving the whole return chain. Requires the edge sidecars to run the
+// NAT66 build (NAT_OWNERS6 relay).
 func TestNatEgressReturn6(t *testing.T) {
 	cfg := loadConfig(t)
 	requireFabricUp(t, cfg)

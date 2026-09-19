@@ -61,7 +61,7 @@ map is populated from repeatable flags, each encoding one control-plane object:
 | `--floating-ip iface_ip=floating_ip` | a 1:1 floating-IP mapping (both `FLOATING_IPS` directions: egress SNAT, ingress DNAT). |
 | `--lb ip:port:proto:lb_underlay` + `--lb-target …=backend_underlay` | an LB service + backends (allocates the Maglev table). |
 | `--nat guest_ip=nat_ip:min:max` | a NAT source block (`NAT`). |
-| `--neighbor-nat nat_ip:min:max@owner@vni` | a distributed-NAT return entry (`NEIGHBOR_NAT`). |
+| `--neigh-nat nat_ip:min:max@owner@vni` | a distributed-NAT return entry, half-open `[min, max)` (`NAT_OWNERS`). |
 | `--underlay-vni ipv6:vni` | a VNI-only underlay marker for a NAT node with no local interface. |
 | `--fw ifname:dir:action:proto:src:dst:dport` | a firewall rule; each interface's rules, in order, are compiled into its classifier scopes (`FW_BIND` + `FW_CLASS`/`FW_POLICY`). |
 | `--meter ifname=total_mbps:public_mbps` | a per-interface egress rate cap (`METER`). |

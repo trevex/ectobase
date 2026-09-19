@@ -2,9 +2,10 @@
 # test/nat-netns.sh — smoke test for DataplaneNode.AddNatSource/WithdrawNatSource and
 # AddNeighborNat/WithdrawNeighborNat. Attaches ONE source endpoint, programs egress SNAT
 # for it via AddNatSource (a deterministic (nat_ip, port-block)), then programs + withdraws
-# a NEIGHBOR_NAT return-to-owner entry. We can't drive real egress traffic from here (that is
-# the fabric e2e in test/e2e/egress_test.go); this proves the RPCs parse + program the NAT
-# datapath (the datapath's own "NAT source …" / "NEIGHBOR_NAT …" confirmation lines) and that
+# a NAT-owner return-to-owner entry (the `NAT_OWNERS` trie). We can't drive real egress
+# traffic from here (that is the fabric e2e in test/e2e/egress_test.go); this proves the RPCs
+# parse + program the NAT datapath (the datapath's own "NAT source …" / "NEIGHBOR_NAT …"
+# confirmation lines — the log tag is historical, kept for grep-compatibility) and that
 # the Withdraw* RPCs round-trip.
 #
 # Run inside the flake devShell (provides cargo + grpcurl + ip); needs sudo for netns/eBPF:

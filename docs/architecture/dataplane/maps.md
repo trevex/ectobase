@@ -42,8 +42,7 @@ the flow state in them — survive a control-plane restart. See
 | `FW_CLASS` / `FW_CLASS6` | HashOfMaps (4096) | scope id → LPM trie (peer prefix → class) | a scope's peer classes, per family. Pinned by name from the loader. |
 | `FW_POLICY` / `FW_POLICY6` | HashOfMaps (4096) | scope id → LPM trie (`FwPolKey` → precedence) | a scope's `[class, proto, port]` policy entries, per family. |
 | `FW_EPOCH` | Array (1) | `[0]` → `u32` | the node's firewall epoch, bumped after every `FW_BIND` change; conntrack entries record it so established flows meet a new policy. |
-| `NEIGHBOR_NAT` | HashMap (64) | slot → `NeighborNatEntry` | distributed NAT-gateway return: `nat_ip:port-range@owner-underlay@vni`, so return traffic is reforwarded to the owning node. |
-| `NEIGHBOR_NAT_COUNT` | Array (1) | `[0]` → `u32` | number of populated `NEIGHBOR_NAT` slots (the datapath scans `0..count`). |
+| `NAT_OWNERS` / `NAT_OWNERS6` | LPM trie (65536) | `NatOwnerKey` (`[nat_ip ++ port]` prefix) → `NatOwner` | the owner (underlay, VNI) of each NAT port block another node owns, as port prefixes; the value carries the block so adopt can rebuild it. |
 | `DHCP_CONFIG` | Array (1) | `[0]` → `DhcpConfig` | server-wide DHCP: MTU + DNS server lists (v4/v6). |
 | `DHCP_META` | HashMap (1024) | ifindex → `DhcpMeta` | per-interface DHCP: hostname + PXE. |
 
