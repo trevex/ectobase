@@ -199,9 +199,15 @@ firewalls. v4 and v6, sim and eBPF. The refusal now removes the entries the flow
    reattaching the disk is the step that corrupts. Also note: a placement cross-check was
    considered and rejected — `CompiledVM.status.placement` comes from the same broker, so it
    freezes at the same instant and cannot see the node either.
-4. **dispatch-controller has no leader election** (`dispatch/cmd/controller/main.go:83-89`)
-   while the compiler does. Safe only at `replicas: 1`; the day someone scales it for HA,
-   Tier-2 failover double-fires. Add election now, while it's free.
+4. ~~**dispatch-controller has no leader election**~~ **FIXED** (branch
+   `dispatch/leader-election`): the manager takes a Lease (`ectobase-dispatch-controller`, host
+   kube-apiserver, `ReleaseOnCancel`) before starting any reconciler, with lease RBAC in the
+   generated ClusterRole and a chart test pinning it. An envtest test builds two managers from
+   the binary's own options and asserts one leader and a handover inside the lease duration
+   (mutation-checked: without the release it waits out the 15 s lease). The chart stays at
+   `replicas: 1`; scaling it for a standby is now safe. Original finding: no election while the
+   compiler has one — safe only at `replicas: 1`, and even then a rolling restart overlaps two
+   pods, so Tier-2 failover could double-fire.
 5. **Every central component is a SPOF** (apiserver, kine, reflector, compiler,
    dispatch-controller — all `replicas: 1` in the charts). The design degrades correctly
    (pools keep forwarding), but convergence stops fleet-wide. The reflector is the
@@ -343,7 +349,7 @@ get mirrored, and each gap is individually "known" but the set is growing.
    carried over: run `make verifier` (root) against the new ICMP-relay rewrite windows.
 2. **N/S resilience pair:** NAT/public snapshot-prune + edge readiness gating. These two
    close the only "silent traffic loss with no self-healing" paths in the system.
-3. **Failover safety:** fence completeness + dispatch-controller leader election.
+3. ~~**Failover safety:** fence completeness + dispatch-controller leader election.~~ Both done.
 4. **Scale groundwork:** firewall rule-storage redesign (kills the 16-rule cap and sets up
    priorities), NAT/public subscription scoping + keyed neighbor-NAT map. Write a sizing
    doc making every remaining map ceiling an explicit budget.

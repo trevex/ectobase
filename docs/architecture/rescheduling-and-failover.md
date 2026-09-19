@@ -112,6 +112,13 @@ Tier-2 is a controller on the dispatch (`failover.Reconciler`) that watches
 `ClusterPool` objects. It runs alongside — but independently of — the pool-health
 and scheduler reconcilers on the same manager.
 
+Only one dispatch-controller acts at a time. Two acting at once would each fence and
+rebind the same lost pool, so the manager takes a leader-election Lease
+(`ectobase-dispatch-controller`, on the host kube-apiserver in the controller's namespace)
+before it starts any reconciler. That holds when two pods overlap during a rolling restart, or
+if the Deployment is scaled for a standby. A graceful shutdown releases the lease, so the next
+pod takes over at its next retry (about 2 s) instead of waiting out the 15 s lease.
+
 ### What triggers it
 
 The dispatch declares a pool lost when it has been in the `Unknown` phase and its

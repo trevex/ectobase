@@ -348,6 +348,13 @@ renders the dispatch control plane:
       name: dispatch-controller
     rules:
       - apiGroups:
+          - ""
+        resources:
+          - events
+        verbs:
+          - create
+          - patch
+      - apiGroups:
           - compiled.ectobase.dev
         resources:
           - compilednics
@@ -387,6 +394,18 @@ renders the dispatch control plane:
           - get
           - patch
           - update
+      - apiGroups:
+          - coordination.k8s.io
+        resources:
+          - leases
+        verbs:
+          - create
+          - delete
+          - get
+          - list
+          - patch
+          - update
+          - watch
       - apiGroups:
           - csiaddons.openshift.io
         resources:
