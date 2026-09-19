@@ -967,9 +967,11 @@ func (x *RouteUpdate) GetExternal() bool {
 // EndOfRIB marks the end of one VNI's replayed table: the prune trigger for its routes.
 //
 // record_count is how many routes were replayed before this marker, and is used exactly as
-// EndOfGlobal.record_count is — the consumer prunes only if it received that many, because a sink
-// drops on overflow and pruning against a lossy snapshot withdraws LIVE routes. Counted and sent
-// while the RIB lock is held, so a concurrent fanout cannot interleave or inflate the count.
+// EndOfGlobal.record_count is — the consumer prunes only if it received that many, because an
+// older reflector's sink dropped snapshot records on overflow, and pruning against a lossy
+// snapshot withdraws LIVE routes. The reflector hands the replay and this marker to the session as
+// one snapshot while the RIB lock is held, and never drops a snapshot, so a concurrent fanout
+// cannot interleave or inflate the count.
 type EndOfRIB struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Vni           uint32                 `protobuf:"varint,1,opt,name=vni,proto3" json:"vni,omitempty"`
@@ -1030,11 +1032,13 @@ func (x *EndOfRIB) GetRecordCount() uint32 {
 // no longer exists, and neighbor-NAT kept a return route to a block that moved.
 //
 // record_count is how many global records the reflector sent before this marker. The consumer
-// prunes ONLY if it received exactly that many. A sink's outbound queue drops on overflow (see
-// chanSink.Send), and pruning against a lossy snapshot would withdraw LIVE state — strictly worse
-// than the staleness being fixed. Counting turns a lossy replay into a safe no-op that retries on
-// the next reconnect. The marker is queued while the RIB lock is still held, so concurrent fanout
-// deltas land after it and cannot inflate the count.
+// prunes ONLY if it received exactly that many. The reflector queues a snapshot whole (only live
+// deltas to a consumer that has fallen far behind are dropped), but an older reflector dropped
+// snapshot records on overflow, and pruning against a lossy snapshot would withdraw LIVE state —
+// strictly worse than the staleness being fixed; counting turns such a replay into a safe no-op
+// that retries on the next reconnect. The replay and this marker are handed over as one snapshot
+// while the RIB lock is held, so concurrent fanout deltas land after it and cannot inflate the
+// count.
 type EndOfGlobal struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	RecordCount   uint32                 `protobuf:"varint,1,opt,name=record_count,json=recordCount,proto3" json:"record_count,omitempty"`

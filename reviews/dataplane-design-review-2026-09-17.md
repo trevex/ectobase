@@ -40,7 +40,7 @@ asymmetries plus doc drift.
 |---|---|---|
 | §1 Correctness (P0) | all seven (`0e2e601f`) | — |
 | §2 Scale ceilings | firewall rule cap (firewall redesign, `acd0d55b` + `ec23ad68`); neighbor-NAT keyed tries (NAT return scaling Inc. 1, `f681d367`) | NAT/public broadcast, map ceilings, conntrack pressure, IPAM + peering list costs, sizing doc |
-| §3 Control-plane resilience | NAT/public prune (`a334ef8`), route-prune guard (`cb4188e6`), fence completeness (`a4dd915`), dispatch-controller leader election (`54dda54c`) | edge `/readyz` not consumed, `replicas: 1` everywhere, `GenerationApplied`, broker sync ordering |
+| §3 Control-plane resilience | NAT/public prune (`a334ef8`), route-prune guard (`cb4188e6`), fence completeness (`a4dd915`), dispatch-controller leader election (`54dda54c`), lossless route-bus snapshots (NAT return scaling Inc. 2, branch `routebus/lossless-snapshot`) | edge `/readyz` not consumed, `replicas: 1` everywhere, `GenerationApplied`, broker sync ordering, NAT/public record ownership (4b), a reconnect torn down by its own stale session (4c) |
 | §4 Policy model | priorities, `defaultPolicy`, FirewallPolicy validation, revocation (`b19cbb3`, `99d3880`, `acd0d55b`) | Route intent, source selectors, remaining validation, peering-overlap warning |
 | §5 Symmetry | — | all items |
 | §6 Doc drift | overlay MTU, NAT return wording | the rest of the list |
@@ -189,7 +189,8 @@ firewalls. v4 and v6, sim and eBPF. The refusal now removes the entries the flow
    NAT blocks and LB backends against it, dropping a load balancer whose last backend is gone.
    The marker carries the replayed record count and the agent prunes only on an exact match:
    a sink drops on overflow, so pruning against a lossy snapshot would withdraw LIVE state —
-   strictly worse than the staleness. This exposed a pre-existing sibling hazard:
+   strictly worse than the staleness (the reflector no longer drops snapshots: Increment 2). This
+   exposed a pre-existing sibling hazard:
    prune-on-EndOfRIB had the same lossy-snapshot exposure for routes and no count guard.
    **Fixed since** (`cb4188e6`, merged in `379dd45`): `EndOfRIB` carries the replayed record
    count, counted from when the Subscribe is sent, and the agent prunes routes only on an exact
@@ -220,12 +221,31 @@ firewalls. v4 and v6, sim and eBPF. The refusal now removes the entries the flow
    session never prunes and never reports converged. Per-VNI `Subscribe` replays use the same sink:
    a VNI with more routes than the drain keeps up with loses records the same way (the count guard
    prevents a wrong prune, not the non-convergence). Planned: NAT return scaling, Increment 2.
+   **RESOLVED** (NAT return scaling Increment 2, branch `routebus/lossless-snapshot`): a session
+   queue keeps every snapshot whole — global and per-VNI, each handed over to the sink as one
+   batch under the RIB lock — so a session always converges; only live deltas past 1024 queued and
+   not yet taken by the drain are dropped (the reflector logs each drop episode and the total when
+   the session ends). Pinned by 5000-record global and VNI snapshots delivered through a real
+   `Session`. Still open: a dropped live delta is repaired only by the consumer's next reconnect,
+   which nothing forces.
 4b. **Found 2026-09-19 — NAT/public record ownership is not enforced.** `WithdrawNat` /
    `WithdrawPublic` carry no certificate guard and no ownership check, so any authenticated session
    can withdraw any record; `AnnounceNat` on a key another origin holds overwrites it without moving
    it out of the old origin's set, so the old origin's disconnect later withdraws the new owner's
    block. `Hello.node_id` is also self-asserted and not bound to the certificate. Planned (all but
    the node_id binding): NAT return scaling, Increment 4.
+4c. **Found 2026-09-19 (Increment 2 review) — a reconnect can be torn down by its own stale
+   session.** Sinks, subscriptions and origins are keyed only by `Hello.node_id` (`r.sinks`,
+   `r.subscribers[vni]`, `r.byOrigin`, `r.natByOrigin`, `r.publicByOrigin`), and `Session`'s
+   deferred cleanup (`mesh/reflector/server.go`) removes by that id — `RIB.UnregisterSink`
+   (`nattable.go`) and `RIB.DropOrigin` (`rib.go`) both delete unconditionally, with no notion of
+   which session instance registered the entry. If a node reconnects before its old session's
+   `Recv` fails (silent path loss, waiting out the keepalive timeout), the new session registers
+   under the same id, and the old session's eventual cleanup unregisters the NEW session's sink,
+   drops its subscriptions from every VNI, and `DropOrigin` withdraws its freshly announced routes
+   and NAT/public records fabric-wide — the new session is left connected but invisible to the RIB.
+   Related to the self-asserted `node_id` (4b). Not fixed; candidate for Increment 4 (a per-session
+   generation/token so cleanup only removes what that session itself registered).
 4. ~~**dispatch-controller has no leader election**~~ **FIXED** (`42c6ea1d`, merged in
    `54dda54c`): the manager takes a Lease (`ectobase-dispatch-controller`, host
    kube-apiserver, `ReleaseOnCancel`) before starting any reconciler, with lease RBAC in the

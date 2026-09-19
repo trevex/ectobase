@@ -102,9 +102,13 @@ subscriptions, so a dead node's state is torn down fabric-wide within a bounded
 budget. On `SIGTERM`/`SIGINT` the reflector `GracefulStop`s, so agents observe clean
 stream closes and fast-withdraw rather than a hard kill.
 
-Slow consumers never block the RIB: each subscriber's `Send` enqueues to a buffered
-channel and drops on overflow (`chanSink`). A dropped update is recovered on the
-next full-table resync, which happens on reconnect.
+Slow consumers never block the RIB: each session has an ordered outbound queue
+(`sessionQueue`) drained by its own goroutine. A snapshot — the global replay on
+`Hello`, a VNI's replay on `Subscribe`, each with its end marker — is always queued
+whole, so a session always converges. Live deltas are dropped once 1024 are queued
+and not yet taken by the drain; such a consumer converges on its next reconnect,
+and the reflector logs each time a session starts falling behind and the total
+dropped when the session ends.
 
 ## Incremental convergence: `diffDesired`
 

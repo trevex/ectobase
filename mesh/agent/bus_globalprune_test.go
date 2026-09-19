@@ -51,9 +51,10 @@ func TestEndOfGlobalPrunesUnreplayedNatBlock(t *testing.T) {
 	}
 }
 
-// The guard. A sink's outbound queue drops on overflow, so "fewer records than the reflector says
-// it sent" means the snapshot was incomplete — and pruning against it would withdraw live state,
-// which is strictly worse than the staleness. The prune must be skipped entirely.
+// The guard. An older reflector dropped snapshot records on overflow, so "fewer records than the
+// reflector says it sent" means the snapshot was incomplete — and pruning against it would
+// withdraw live state, which is strictly worse than the staleness. The prune must be skipped
+// entirely.
 func TestEndOfGlobalSkipsPruneWhenSnapshotWasLossy(t *testing.T) {
 	ctx := context.Background()
 	dp := newRecordingDP()

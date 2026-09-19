@@ -282,11 +282,11 @@ func (b *Bus) recomputeConvergedLocked() {
 // block whose owner released it, or an LB backend that stopped announcing, while this agent was
 // disconnected. The EndOfRIB equivalent for the global channel.
 //
-// It first checks the snapshot was COMPLETE. A sink's outbound queue drops on overflow
-// (reflector's chanSink.Send), so receiving fewer records than the reflector says it sent means the
-// snapshot is lossy — and pruning against a lossy snapshot would withdraw LIVE state, which is
-// strictly worse than the staleness being fixed. In that case do nothing and wait for the next
-// reconnect, which replays from scratch.
+// It first checks the snapshot was COMPLETE. The current reflector queues a snapshot whole, but an
+// older one dropped records on overflow, so receiving fewer records than the reflector says it
+// sent means the snapshot is lossy — and pruning against a lossy snapshot would withdraw LIVE
+// state, which is strictly worse than the staleness being fixed. In that case do nothing and wait
+// for the next reconnect, which replays from scratch.
 func (b *Bus) pruneGlobal(ctx context.Context, want uint32) {
 	if b.globalRecords != want {
 		log.Printf("EndOfGlobal: snapshot incomplete (got %d records, reflector sent %d) — skipping prune; will retry on the next resync",
@@ -529,8 +529,8 @@ func (b *Bus) resetRouteSnapshot(vni uint32) {
 // snapshot — i.e. a route that left the RIB (peer withdrew, or its owner disconnected) while this
 // node was disconnected, and would otherwise linger on the dataplane as a stale blackhole/misroute.
 func (b *Bus) pruneVNI(ctx context.Context, vni uint32, want uint32) {
-	// A lossy replay must not prune: the sink drops on overflow, and withdrawing a live route is
-	// strictly worse than keeping a stale one. Same guard as pruneGlobal.
+	// A lossy replay must not prune: an older reflector dropped snapshot records on overflow, and
+	// withdrawing a live route is strictly worse than keeping a stale one. Same guard as pruneGlobal.
 	if got := b.rxRoutes[vni]; got != want {
 		log.Printf("EndOfRIB(vni=%d): snapshot incomplete (got %d routes, reflector sent %d) — skipping prune; will retry on the next resync",
 			vni, got, want)
