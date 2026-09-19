@@ -83,8 +83,8 @@ impl fmt::Display for NeighborNatError {
             ),
             NeighborNatError::Full { needed, max } => write!(
                 f,
-                "neighbor NAT table full: the block needs {needed} prefixes and the table holds \
-                 at most {max} per family"
+                "neighbor NAT table full: {needed} prefixes needed and the table holds at most \
+                 {max} per family"
             ),
             NeighborNatError::Map(e) => write!(f, "{e:#}"),
         }
