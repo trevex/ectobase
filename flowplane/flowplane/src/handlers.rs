@@ -12,7 +12,8 @@ use crate::pb;
 /// Argument-validation failures (bad CIDR/IP/port). The genuinely-internal `ControlCore` errors are
 /// `anyhow::Error` and convert to `ServiceError::Internal` through `?` (blanket `#[from]`), so there
 /// is no `internal` helper — a bare `?` on an `anyhow::Result` does the right thing. The firewall
-/// calls return a typed `FwError` instead, which `?` classifies via its `From` impl in `error.rs`.
+/// and neighbor-NAT calls return a typed `FwError` / `NeighborNatError` instead, which `?`
+/// classifies via their `From` impls in `error.rs`.
 #[inline]
 fn invalid(e: impl std::fmt::Display) -> ServiceError {
     ServiceError::Invalid(e.to_string())
@@ -154,15 +155,16 @@ pub fn add_neighbor_nat<W: MapWriter>(
     let vni = req.vni;
     // Idempotent: drop any existing entry for this (vni, nat_ip, ports) first so a re-announce
     // replaces the owner underlay.
-    let res: anyhow::Result<()> = match nat {
-        IpAddr::V4(n) => core
-            .del_neighbor_nat(vni, n.octets(), port_min, port_max)
-            .and_then(|_| core.add_neighbor_nat(vni, n.octets(), port_min, port_max, owner)),
-        IpAddr::V6(n) => core
-            .del_neighbor_nat6(vni, n.octets(), port_min, port_max)
-            .and_then(|_| core.add_neighbor_nat6(vni, n.octets(), port_min, port_max, owner)),
-    };
-    res?;
+    match nat {
+        IpAddr::V4(n) => {
+            core.del_neighbor_nat(vni, n.octets(), port_min, port_max)?;
+            core.add_neighbor_nat(vni, n.octets(), port_min, port_max, owner)?;
+        }
+        IpAddr::V6(n) => {
+            core.del_neighbor_nat6(vni, n.octets(), port_min, port_max)?;
+            core.add_neighbor_nat6(vni, n.octets(), port_min, port_max, owner)?;
+        }
+    }
     Ok(pb::AddNeighborNatResponse {})
 }
 
@@ -701,7 +703,42 @@ mod tests {
             },
         );
         assert!(r.is_ok(), "neighbor nat6: {r:?}");
-        assert_eq!(c.writer().neigh_nat6_count, 1);
+        assert!(!c.writer().nat_owners6.is_empty());
+    }
+
+    #[test]
+    fn add_neighbor_nat_overlap_is_already_exists() {
+        let mut c = core();
+        let req = |lo, hi| pb::AddNeighborNatRequest {
+            vni: 100,
+            nat_ip: "198.51.100.7".into(),
+            owner_underlay: "2001:db8::bb".into(),
+            port_min: lo,
+            port_max: hi,
+        };
+        add_neighbor_nat(&mut c, &req(20000, 30000)).unwrap();
+        let err = add_neighbor_nat(&mut c, &req(25000, 35000)).unwrap_err();
+        assert_eq!(tonic::Status::from(err).code(), tonic::Code::AlreadyExists);
+    }
+
+    #[test]
+    fn add_neighbor_nat_empty_range_is_invalid() {
+        let mut c = core();
+        let err = add_neighbor_nat(
+            &mut c,
+            &pb::AddNeighborNatRequest {
+                vni: 100,
+                nat_ip: "198.51.100.7".into(),
+                owner_underlay: "2001:db8::bb".into(),
+                port_min: 3000,
+                port_max: 3000,
+            },
+        )
+        .unwrap_err();
+        assert_eq!(
+            tonic::Status::from(err).code(),
+            tonic::Code::InvalidArgument
+        );
     }
 
     #[test]

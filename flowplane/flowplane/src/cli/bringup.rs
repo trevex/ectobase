@@ -123,7 +123,7 @@ pub struct BringupArgs {
     #[arg(long = "fw-rule")]
     fw_rules: Vec<String>,
     /// Neighbor NAT entry, repeatable:
-    /// "<nat_ip>:<port_min>:<port_max>@<owner_underlay_ipv6>@<vni>". Programs NEIGHBOR_NAT
+    /// "<nat_ip>:<port_min>:<port_max>@<owner_underlay_ipv6>@<vni>". Programs NAT_OWNERS
     /// so that return traffic to nat_ip:dport is re-forwarded to the owner's underlay node.
     #[arg(long = "neigh-nat")]
     neigh_nats: Vec<String>,
@@ -716,15 +716,8 @@ pub async fn run(args: BringupArgs) -> anyhow::Result<()> {
 
     // --neigh-nat: "<nat_ip>:<port_min>:<port_max>@<owner_underlay_ipv6>@<vni>"
     // We split on '@' to avoid colon-ambiguity with the IPv6 in the middle segment.
-    let mut neigh_nat_map = maps::NeighborNat::open(&mut ebpf)?;
-    let mut neigh_nat_count_map = maps::NeighborNatCount::open(&mut ebpf)?;
-    let mut neigh_nat_idx: u32 = 0;
+    let mut nat_owners = maps::NatOwners::open(&mut ebpf, "NAT_OWNERS")?;
     for spec in &neigh_nats {
-        anyhow::ensure!(
-            neigh_nat_idx < flowplane_common::NB_MAX_ENTRIES,
-            "--neigh-nat: too many entries (max {})",
-            flowplane_common::NB_MAX_ENTRIES
-        );
         let parts: Vec<&str> = spec.splitn(3, '@').collect();
         anyhow::ensure!(
                     parts.len() == 3,
@@ -744,21 +737,24 @@ pub async fn run(args: BringupArgs) -> anyhow::Result<()> {
             .next()
             .context("--neigh-nat: missing port_max")?
             .parse()?;
-        neigh_nat_map.upsert(
-            neigh_nat_idx,
-            flowplane_common::NeighborNatEntry {
-                underlay,
-                nat_ip,
-                vni,
-                port_min,
-                port_max,
-                enabled: 1,
-                _pad: [0; 3],
-            },
-        )?;
-        neigh_nat_idx += 1;
+        let block = flowplane_common::NeighborNatEntry {
+            underlay,
+            nat_ip,
+            vni,
+            port_min,
+            port_max,
+            enabled: 1,
+            _pad: [0; 3],
+        };
+        let entries = flowplane_control::natowner::owner_prefixes4(&block);
+        anyhow::ensure!(
+            !entries.is_empty(),
+            "--neigh-nat: empty port range in {spec:?}"
+        );
+        for (plen, key, owner) in entries {
+            nat_owners.upsert(plen, key, owner)?;
+        }
     }
-    neigh_nat_count_map.set(neigh_nat_idx)?;
 
     // --meter: "<ifname>=<total_mbps>:<public_mbps>" — program per-interface egress
     // token-bucket rate caps. Opt-in: interfaces without an entry are unlimited.

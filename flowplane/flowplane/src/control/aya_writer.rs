@@ -6,12 +6,11 @@ use parking_lot::Mutex;
 use crate::maps::{
     Conntrack, Conntrack6, DhcpConfigMap, DhcpMetaMap, FloatingIPs, FwBindMap, FwEpochMap,
     FwScopes, IfaceMetaMap, Interfaces, Interfaces6, Lb, Maglev, Meter, Nat, Nat6, NatCt6, NatIps,
-    NatIps6, NeighborNat, NeighborNat6, NeighborNat6Count, NeighborNatCount, PortMetaMap, Routes,
-    Routes6, Underlay,
+    NatIps6, NatOwners, NatOwners6, PortMetaMap, Routes, Routes6, Underlay,
 };
 use flowplane_common::{
     CtKey, CtKey6, FloatingIPKey, IfaceKey, IfaceKey6, IfaceMetaKey, IfaceMetaVal, IfaceValue,
-    NatKey, NatKey6, NatValue, NatValue6, NeighborNat6Entry, NeighborNatEntry, PortMeta,
+    NatKey, NatKey6, NatOwner, NatOwnerKey, NatOwnerKey6, NatValue, NatValue6, PortMeta,
     RouteValue,
 };
 use flowplane_control::{CtFlushScope, CtFlushScope6, MapWriter};
@@ -22,14 +21,12 @@ pub struct AyaWriter {
     // NAT domain.
     pub nat: Nat,
     pub nat_ips: NatIps,
-    pub neigh_nat: NeighborNat,
-    pub neigh_nat_count: NeighborNatCount,
-    // NAT66 (v6) domain — siblings of the four v4 nat handles above, plus the dedicated NAT66
+    pub nat_owners: NatOwners,
+    // NAT66 (v6) domain — siblings of the three v4 nat handles above, plus the dedicated NAT66
     // conntrack handle the teardown flush scans.
     pub nat6: Nat6,
     pub nat_ips6: NatIps6,
-    pub neigh_nat6: NeighborNat6,
-    pub neigh_nat6_count: NeighborNat6Count,
+    pub nat_owners6: NatOwners6,
     pub nat_ct6: NatCt6,
     // LB domain: LB service map, Maglev table, and the UNDERLAY map. UNDERLAY is also
     // read/written by the interface + edge paths via `core.writer_mut()`.
@@ -194,11 +191,14 @@ impl MapWriter for AyaWriter {
     fn nat_ips_remove(&mut self, vni: u32, ip: [u8; 4]) -> anyhow::Result<()> {
         self.nat_ips.remove(vni, ip)
     }
-    fn neigh_nat_upsert(&mut self, i: u32, v: NeighborNatEntry) -> anyhow::Result<()> {
-        self.neigh_nat.upsert(i, v)
+    fn nat_owner_upsert(&mut self, p: u32, k: NatOwnerKey, v: NatOwner) -> anyhow::Result<()> {
+        self.nat_owners.upsert(p, k, v)
     }
-    fn neigh_nat_count_set(&mut self, c: u32) -> anyhow::Result<()> {
-        self.neigh_nat_count.set(c)
+    fn nat_owner_remove(&mut self, p: u32, k: &NatOwnerKey) -> anyhow::Result<()> {
+        self.nat_owners.remove(p, *k)
+    }
+    fn nat_owner_entries(&self) -> Vec<(u32, NatOwnerKey, NatOwner)> {
+        self.nat_owners.entries()
     }
     fn nat6_upsert(&mut self, k: NatKey6, v: NatValue6) -> anyhow::Result<()> {
         self.nat6.upsert(k, v)
@@ -215,11 +215,14 @@ impl MapWriter for AyaWriter {
     fn nat_ips6_remove(&mut self, vni: u32, ip: [u8; 16]) -> anyhow::Result<()> {
         self.nat_ips6.remove(vni, ip)
     }
-    fn neigh_nat6_upsert(&mut self, i: u32, v: NeighborNat6Entry) -> anyhow::Result<()> {
-        self.neigh_nat6.upsert(i, v)
+    fn nat_owner6_upsert(&mut self, p: u32, k: NatOwnerKey6, v: NatOwner) -> anyhow::Result<()> {
+        self.nat_owners6.upsert(p, k, v)
     }
-    fn neigh_nat6_count_set(&mut self, c: u32) -> anyhow::Result<()> {
-        self.neigh_nat6_count.set(c)
+    fn nat_owner6_remove(&mut self, p: u32, k: &NatOwnerKey6) -> anyhow::Result<()> {
+        self.nat_owners6.remove(p, *k)
+    }
+    fn nat_owner6_entries(&self) -> Vec<(u32, NatOwnerKey6, NatOwner)> {
+        self.nat_owners6.entries()
     }
     fn lb_upsert(
         &mut self,

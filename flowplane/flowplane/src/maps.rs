@@ -2,14 +2,15 @@ use anyhow::Context;
 use aya::maps::{
     lpm_trie::{Key, LpmTrie},
     of_maps::HashOfMaps,
-    Array, HashMap, MapData,
+    Array, HashMap, MapData, MapError,
 };
+use aya::sys::SyscallError;
 use aya::Ebpf;
 use flowplane_common::{
     CtEntry, CtEntry6, CtKey, CtKey6, DhcpConfig, DhcpMeta, FloatingIPKey, FloatingIPKey6,
     IfaceKey, IfaceKey6, IfaceMetaKey, IfaceMetaVal, IfaceValue, InspectEntry, LbBackend, LbKey,
-    LbKey6, LbValue, Local, MaglevKey, MeterState, NatKey, NatKey6, NatValue, NatValue6,
-    NeighborNat6Entry, NeighborNatEntry, PortMeta, RouteLpmData, RouteLpmData6, RouteValue,
+    LbKey6, LbValue, Local, MaglevKey, MeterState, NatKey, NatKey6, NatOwner, NatOwnerKey,
+    NatOwnerKey6, NatValue, NatValue6, PortMeta, RouteLpmData, RouteLpmData6, RouteValue,
     UnderlayValue,
 };
 
@@ -318,17 +319,6 @@ bpf_hash_map!(
 );
 
 bpf_hash_map!(
-    /// Typed handle over the `NEIGHBOR_NAT` BPF map (slot index -> NeighborNatEntry).
-    NeighborNat, "NEIGHBOR_NAT", u32, NeighborNatEntry, upsert
-);
-
-bpf_hash_map!(
-    /// Typed handle over the `NEIGHBOR_NAT6` BPF map (slot index -> NeighborNat6Entry). v6 mirror
-    /// of [`NeighborNat`].
-    NeighborNat6, "NEIGHBOR_NAT6", u32, NeighborNat6Entry, upsert
-);
-
-bpf_hash_map!(
     /// Typed handle over the `METER` BPF map (ifindex -> per-interface token bucket state).
     Meter, "METER", u32, MeterState, upsert, remove
 );
@@ -349,17 +339,6 @@ bpf_array_map!(
     /// `bpf_redirect` an overlay-bound skb after `bpf_skb_set_tunnel_key` has stamped the tunnel-key
     /// metadata dst. Populated once by `Control::bring_up` right after `ensure_geneve_dev`.
     GeneveIfindexMap, "GENEVE_IFINDEX", u32, set_owned
-);
-
-bpf_array_map!(
-    /// Typed handle over the single-entry `NEIGHBOR_NAT_COUNT` Array map.
-    NeighborNatCount, "NEIGHBOR_NAT_COUNT", u32, set_owned
-);
-
-bpf_array_map!(
-    /// Typed handle over the single-entry `NEIGHBOR_NAT6_COUNT` Array map. v6 mirror of
-    /// [`NeighborNatCount`].
-    NeighborNat6Count, "NEIGHBOR_NAT6_COUNT", u32, set_owned
 );
 
 bpf_array_map!(
@@ -491,6 +470,52 @@ impl Routes6 {
         self.map.get(&key, 0).ok()
     }
 }
+
+/// Typed handle over a `NAT_OWNERS{,6}` LPM trie: `[nat_ip ++ port]` prefix -> the block's owner.
+pub struct NatOwnerTrie<K: aya::Pod> {
+    map: LpmTrie<MapData, K, NatOwner>,
+}
+
+impl<K: aya::Pod> NatOwnerTrie<K> {
+    pub fn open(ebpf: &mut Ebpf, name: &'static str) -> anyhow::Result<Self> {
+        let map = LpmTrie::try_from(
+            ebpf.take_map(name)
+                .with_context(|| format!("{name} map missing"))?,
+        )?;
+        Ok(Self { map })
+    }
+
+    pub fn upsert(&mut self, prefix_len: u32, key: K, val: NatOwner) -> anyhow::Result<()> {
+        self.map
+            .insert(&Key::new(prefix_len, key), val, 0)
+            .context("insert NAT owner")
+    }
+
+    pub fn remove(&mut self, prefix_len: u32, key: K) -> anyhow::Result<()> {
+        match self.map.remove(&Key::new(prefix_len, key)) {
+            // Absent is success (the `MapWriter` contract): a withdraw retried after a partial
+            // failure removes every prefix of its block again, including those already gone.
+            Err(MapError::SyscallError(SyscallError { io_error, .. }))
+                if io_error.kind() == std::io::ErrorKind::NotFound =>
+            {
+                Ok(())
+            }
+            r => r.context("remove NAT owner"),
+        }
+    }
+
+    /// Every `(prefix_len, key, owner)` in the trie (adopt).
+    pub fn entries(&self) -> Vec<(u32, K, NatOwner)> {
+        self.map
+            .iter()
+            .filter_map(Result::ok)
+            .map(|(k, v)| (k.prefix_len(), k.data(), v))
+            .collect()
+    }
+}
+
+pub type NatOwners = NatOwnerTrie<NatOwnerKey>;
+pub type NatOwners6 = NatOwnerTrie<NatOwnerKey6>;
 
 /// Typed handle over the `CONNTRACK` BPF map (LRU hash map).
 pub struct Conntrack {
