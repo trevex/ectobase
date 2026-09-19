@@ -397,7 +397,10 @@ impl<W: MapWriter> ControlCore<W> {
     /// Adopt after a restart: the pinned owner tries survived, the block lists did not. Rebuild
     /// them from the tries' values (each prefix carries its whole block), then rewrite each
     /// block's full prefix set, since a crash between two prefix writes can leave a block partial.
-    /// A block a crash left half-withdrawn so comes back whole; the next declarative sync prunes it.
+    /// A block a crash left half-withdrawn so comes back whole. Nothing here knows whether an
+    /// adopted block is still wanted: if the agent restarted too, it withdraws only what it
+    /// installed itself, so a block withdrawn or reassigned while both were down stays listed
+    /// (and refuses an overlapping successor) until a declarative sync replaces the set.
     pub fn adopt_nat_owners(&mut self) {
         let mut v4: Vec<NeighborNatEntry> = self
             .w
