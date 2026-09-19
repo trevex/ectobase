@@ -621,6 +621,7 @@ version = "0.1.0"
 dependencies = [
  "etherparse",
  "flowplane-common",
+ "flowplane-control",
  "flowplane-core",
  "serde",
  "serde_json",

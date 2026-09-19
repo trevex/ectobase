@@ -36,6 +36,8 @@ mod forward_principle_test;
 #[cfg(test)]
 mod frag_test;
 #[cfg(test)]
+mod fw_classify_diff_test;
+#[cfg(test)]
 mod fw_classify_test;
 #[cfg(test)]
 mod guest_tx_v6_test;

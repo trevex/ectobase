@@ -1,5 +1,6 @@
 //! Backend-agnostic control-plane programming for the eBPF dataplane's control core.
 mod firewall;
+pub mod fwclass;
 mod interface;
 mod lb;
 pub mod maglev;

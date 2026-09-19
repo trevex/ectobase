@@ -12,3 +12,5 @@ serde_json = "1"
 
 [dev-dependencies]
 etherparse = "0.15"
+# The firewall classifier compiler, for the differential oracle (fw_classify_diff_test).
+flowplane-control = { path = "../flowplane-control" }

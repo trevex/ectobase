@@ -22,6 +22,14 @@ pub enum FwError {
     TooManyRules { family: &'static str, count: usize },
     /// A rule with this id is already installed (the imperative `add_fw_rule*` path only).
     AlreadyExists,
+    /// The rule uses a match the classifier cannot express (e.g. the interface's own address).
+    Unsupported(&'static str),
+    /// A direction's rules compile into more classes or policy entries than a scope may hold.
+    ScopeTooLarge {
+        family: &'static str,
+        what: &'static str,
+        count: usize,
+    },
     /// Programming the maps failed.
     Map(anyhow::Error),
 }
@@ -36,6 +44,15 @@ impl fmt::Display for FwError {
                 "too many {family} firewall rules for interface: {count} (max {FW_MAX_RULES} per family)"
             ),
             FwError::AlreadyExists => f.write_str("ALREADY_EXISTS: firewall rule already exists"),
+            FwError::Unsupported(what) => write!(f, "firewall rules cannot express {what}"),
+            FwError::ScopeTooLarge {
+                family,
+                what,
+                count,
+            } => write!(
+                f,
+                "{family} firewall rules compile to {count} {what}, over the per-direction limit"
+            ),
             FwError::Map(e) => write!(f, "{e:#}"),
         }
     }
