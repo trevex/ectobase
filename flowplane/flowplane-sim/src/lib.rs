@@ -18,6 +18,8 @@ mod conntrack_v6_test;
 #[cfg(test)]
 mod ct_apply_test;
 #[cfg(test)]
+mod ct_epoch_test;
+#[cfg(test)]
 mod ct_refresh_test;
 #[cfg(test)]
 mod dhcp_test;
@@ -35,6 +37,10 @@ mod flow_label_test;
 mod forward_principle_test;
 #[cfg(test)]
 mod frag_test;
+#[cfg(test)]
+mod fw_classify_diff_test;
+#[cfg(test)]
+mod fw_classify_test;
 #[cfg(test)]
 mod guest_tx_v6_test;
 #[cfg(test)]
@@ -67,5 +73,7 @@ mod parse_v6_test;
 mod peering_test;
 #[cfg(test)]
 mod reforward_test;
+#[cfg(test)]
+mod same_node_dest_fw_test;
 #[cfg(test)]
 mod vni_test;

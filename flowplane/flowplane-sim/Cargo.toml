@@ -6,6 +6,9 @@ license.workspace = true
 
 [dependencies]
 flowplane-core = { path = "../flowplane-core" }
+# The firewall classifier compiler: MemMaps derives classifier state from legacy rule-slot seeds
+# with it, exactly as the dataplane does from its rule lists.
+flowplane-control = { path = "../flowplane-control" }
 flowplane-common = { path = "../flowplane-common", features = ["user"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

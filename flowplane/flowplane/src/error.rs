@@ -49,7 +49,10 @@ impl From<flowplane_control::FwError> for ServiceError {
         use flowplane_control::FwError;
         match e {
             FwError::UnknownInterface => ServiceError::NotFound(e.to_string()),
-            FwError::TooManyRules { .. } => ServiceError::Exhausted(e.to_string()),
+            FwError::TooManyRules { .. } | FwError::ScopeTooLarge { .. } => {
+                ServiceError::Exhausted(e.to_string())
+            }
+            FwError::Unsupported(_) => ServiceError::Invalid(e.to_string()),
             FwError::AlreadyExists => ServiceError::Conflict(e.to_string()),
             FwError::Map(e) => ServiceError::Internal(e),
         }

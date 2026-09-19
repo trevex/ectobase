@@ -8,11 +8,12 @@ use flowplane_common::{
 };
 
 use crate::conntrack::{
-    ct_apply, ct_create_default, ct_create_default6, ct_key, ct_key6, ct_refresh, ct_refresh6,
+    ct_apply, ct_create_default, ct_create_default6, ct_forget_default, ct_forget_default6,
+    ct_hit_recheck, ct_hit_recheck6, ct_key, ct_key6, ct_refresh, ct_refresh6,
 };
 use crate::decap::{decap_and_rewrite, edge_local_deliver, ETH_P_IP, ETH_P_IPV6};
 use crate::encap::{reforward, TunnelEncap, ETH_LEN};
-use crate::firewall::{fw_eval_dir, fw_eval_dir6};
+use crate::firewall::{fw_classify, fw_classify6};
 use crate::lb::{
     lb_select_forward, lb_select_forward_icmp_error, lb_select_forward_icmp_error_v6,
     lb_select_forward_v6_outlined,
@@ -172,8 +173,11 @@ pub struct UplinkOut {
     pub tunnel: Option<TunnelEncap>,
 }
 
-/// Ingress firewall check on NEW inbound flows against the deliver tap (mirrors `process_uplink`
-/// step 2). Returns `true` iff the packet must be dropped.
+/// Ingress firewall check against the deliver tap on NEW inbound flows and on hits that
+/// [`ct_hit_recheck`] flags (a forward entry from an older firewall epoch, or a bare SYN) — mirrors
+/// `process_uplink` step 2. Returns the firewall epoch the packet was admitted under (read before
+/// any firewall lookup; [`uplink_track_flow`] stamps it), or `None` to drop it — a refused
+/// re-evaluation also forgets the flow, so the next packet is new again.
 ///
 /// `#[inline(never)]`, own subprogram: `firewall::fw_eval_dir` itself must stay `#[inline(always)]`
 /// (shared with the egress path — see its doc comment), so this ingress-only WRAPPER around the
@@ -181,36 +185,50 @@ pub struct UplinkOut {
 /// [`uplink_track_flow`] (step 3) and the rest of [`process_uplink`] so their locals don't combine
 /// on `uplink_rx`'s BPF stack (they run sequentially, never nested, so this is safe).
 #[inline(never)]
-fn uplink_ingress_firewall_drop<P: Pkt, M: Maps>(
+fn uplink_ingress_firewall<P: Pkt, M: Maps>(
     pkt: &P,
-    maps: &M,
+    maps: &mut M,
     inner_off: usize,
     vni: u32,
     tap: u32,
-) -> bool {
-    match ct_key(pkt, inner_off, vni) {
-        Some(key) => {
-            maps.conntrack_get(&key).is_none()
-                && fw_eval_dir(pkt, maps, inner_off, tap, FW_DIR_INGRESS) == FW_ACTION_DROP
+) -> Option<u32> {
+    let epoch = maps.fw_epoch();
+    // Unkeyable is unreachable today (the caller already read the inner dst @ +16 to resolve the
+    // delivery target, which needs strictly more bytes than `ct_key` does) but stated fail-closed so
+    // the "unkeyable ⇒ dropped" invariant holds locally, without depending on that call ordering.
+    let key = ct_key(pkt, inner_off, vni)?;
+    let (hit, recheck) = match maps.conntrack_get(&key) {
+        None => (false, true),
+        Some(e) => (true, ct_hit_recheck(pkt, inner_off, &e, epoch)),
+    };
+    if recheck && fw_classify(pkt, &*maps, inner_off, tap, FW_DIR_INGRESS) == FW_ACTION_DROP {
+        if hit {
+            ct_forget_default(pkt, maps, inner_off, vni);
         }
-        // Unreachable today (the caller already read the inner dst @ +16 to resolve the delivery
-        // target, which needs strictly more bytes than `ct_key` does) but stated fail-closed so the
-        // "unkeyable ⇒ dropped" invariant holds locally, without depending on that call ordering.
-        None => true,
+        return None;
     }
+    Some(epoch)
 }
 
-/// Conntrack create-on-miss / refresh-on-hit (mirrors `process_uplink` step 3, non-LB only). Map-only
-/// (never mutates `pkt`), so byte-parity-neutral. `#[inline(never)]`: see
-/// [`uplink_ingress_firewall_drop`]'s doc comment for why this ingress-only wrapper is the safe
-/// out-of-lining lever (`conntrack::ct_create_default`/`ct_refresh` themselves stay
-/// `#[inline(always)]` — also shared with the egress path).
+/// Conntrack create-on-miss / refresh-on-hit (mirrors `process_uplink` step 3, non-LB only),
+/// stamping the `epoch` [`uplink_ingress_firewall`] admitted the packet under. Map-only (never
+/// mutates `pkt`), so byte-parity-neutral. `#[inline(never)]`: see [`uplink_ingress_firewall`]'s
+/// doc comment for why this ingress-only wrapper is the safe out-of-lining lever
+/// (`conntrack::ct_create_default`/`ct_refresh` themselves stay `#[inline(always)]` — also shared
+/// with the egress path). Takes `in_` whole (its `vni` and `now`) to stay within BPF's five
+/// subprogram arguments.
 #[inline(never)]
-fn uplink_track_flow<P: Pkt, M: Maps>(pkt: &P, maps: &mut M, inner_off: usize, vni: u32, now: u64) {
-    if let Some(key) = ct_key(pkt, inner_off, vni) {
+fn uplink_track_flow<P: Pkt, M: Maps>(
+    pkt: &P,
+    maps: &mut M,
+    inner_off: usize,
+    in_: &UplinkIn,
+    epoch: u32,
+) {
+    if let Some(key) = ct_key(pkt, inner_off, in_.vni) {
         match maps.conntrack_get(&key) {
-            None => ct_create_default(pkt, maps, inner_off, vni, now),
-            Some(mut e) => ct_refresh(pkt, maps, inner_off, &key, &mut e, now),
+            None => ct_create_default(pkt, maps, inner_off, in_.vni, in_.now, epoch),
+            Some(mut e) => ct_refresh(pkt, maps, inner_off, &key, &mut e, in_.now, epoch),
         }
     }
 }
@@ -219,7 +237,7 @@ fn uplink_track_flow<P: Pkt, M: Maps>(pkt: &P, maps: &mut M, inner_off: usize, v
 /// `process_uplink_rx`'s CT_F_NAT64 branch — see its call site). `[0; 16]` if `PORT_META` has no
 /// entry for `tap_ifindex` (IPv4-only guest; `nat64_ingress_parse` rejects it, falling through to
 /// `Action::Pass`). `#[inline(never)]`: same BPF-stack-relief reasoning as
-/// [`uplink_ingress_firewall_drop`]/[`uplink_track_flow`] — inlining the ~70-byte `PortMeta` copy
+/// [`uplink_ingress_firewall`]/[`uplink_track_flow`] — inlining the ~70-byte `PortMeta` copy
 /// directly into `process_uplink_rx`'s already-large dispatch pushed the verifier's combined-call-
 /// stack over budget.
 #[inline(never)]
@@ -245,7 +263,7 @@ fn resolve_delivery_l3<M: Maps>(maps: &M, tap_ifindex: u32) -> bool {
 /// `pkt` in place.
 ///
 /// Deliberately NOT `#[inline(never)]`: its body is small (steps 2/3/5 are out-of-line subprograms —
-/// see [`uplink_ingress_firewall_drop`]/[`uplink_track_flow`]/`meter::ingress_pass`), so merging it
+/// see [`uplink_ingress_firewall`]/[`uplink_track_flow`]/`meter::ingress_pass`), so merging it
 /// into its single real-eBPF call site (`ingress.rs::try_uplink_rx` via `process_uplink_rx`) keeps
 /// `uplink_rx`'s combined-call chain 2 levels deep to each out-of-line stage instead of 3, under the
 /// eBPF verifier's stack budget.
@@ -366,21 +384,29 @@ pub fn process_uplink<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &UplinkIn
         }
     };
 
-    // 2. Ingress firewall on NEW inbound flows against the deliver tap. EXEMPT the ICMP-error relay
-    //    (PMTUD fix — see the `is_icmp_relay` capture above): the relayed error's outer ICMP tuple would
-    //    never match the backend's L4 policy, so evaluating it here blackholes PMTUD feedback.
-    if !is_icmp_relay && uplink_ingress_firewall_drop(&*pkt, maps, inner_off, in_.vni, tap) {
-        return UplinkOut {
-            action: Action::Drop,
-            tunnel: None,
-        };
-    }
+    // 2. Ingress firewall on new and re-evaluated inbound flows against the deliver tap. EXEMPT the
+    //    ICMP-error relay (PMTUD fix — see the `is_icmp_relay` capture above): the relayed error's
+    //    outer ICMP tuple would never match the backend's L4 policy, so evaluating it here
+    //    blackholes PMTUD feedback. (A relay is load-balanced, so step 3 never stamps its epoch.)
+    let epoch = if is_icmp_relay {
+        maps.fw_epoch()
+    } else {
+        match uplink_ingress_firewall(&*pkt, maps, inner_off, in_.vni, tap) {
+            Some(epoch) => epoch,
+            None => {
+                return UplinkOut {
+                    action: Action::Drop,
+                    tunnel: None,
+                }
+            }
+        }
+    };
 
     // 3. Conntrack: create on miss, refresh (last_seen + TCP state) on hit — but ONLY for non-LB
     //    (LB is DSR — no ct, ingress.rs:266). Refresh mirrors the eBPF `ct_touch`; it is map-only
     //    (never mutates the packet), so it is byte-parity-neutral.
     if !is_lb {
-        uplink_track_flow(&*pkt, maps, inner_off, in_.vni, in_.now);
+        uplink_track_flow(&*pkt, maps, inner_off, in_, epoch);
     }
 
     // 4. Decap outer Eth+IPv6 and rewrite the inner Ethernet for the guest. The delivery tap's `l3`
@@ -413,46 +439,52 @@ pub fn process_uplink<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &UplinkIn
     }
 }
 
-/// Ingress firewall check on NEW inbound flows against the deliver tap — v6 mirror of
-/// [`uplink_ingress_firewall_drop`] (mirrors [`process_uplink_v6`] step 2), over `CONNTRACK6`/
-/// `fw_eval_dir6` instead of the v4 maps. `#[inline(never)]` for the SAME BPF-stack-relief reason:
+/// Ingress firewall check against the deliver tap on NEW and re-evaluated inbound flows — v6 mirror
+/// of [`uplink_ingress_firewall`] (mirrors [`process_uplink_v6`] step 2), over `CONNTRACK6`/
+/// `fw_classify6` instead of the v4 maps. `#[inline(never)]` for the SAME BPF-stack-relief reason:
 /// its `CtKey6` frame must be freed before [`uplink_track_flow6`]'s runs, and before the rest of
 /// [`process_uplink_v6`]'s locals accumulate on the tail-called `xdp_uplink_v6` stack (the 512B
 /// verifier budget the v6 program is tail-called into a fresh stack for).
 #[inline(never)]
-fn uplink_ingress_firewall_drop6<P: Pkt, M: Maps>(
+fn uplink_ingress_firewall6<P: Pkt, M: Maps>(
     pkt: &P,
-    maps: &M,
+    maps: &mut M,
     inner_off: usize,
     vni: u32,
     tap: u32,
-) -> bool {
-    match ct_key6(pkt, inner_off, vni) {
-        Some(key) => {
-            maps.conntrack6_get(&key).is_none()
-                && fw_eval_dir6(pkt, maps, inner_off, tap, FW_DIR_INGRESS) == FW_ACTION_DROP
+) -> Option<u32> {
+    let epoch = maps.fw_epoch();
+    // Fail closed — see [`uplink_ingress_firewall`].
+    let key = ct_key6(pkt, inner_off, vni)?;
+    let (hit, recheck) = match maps.conntrack6_get(&key) {
+        None => (false, true),
+        Some(e) => (true, ct_hit_recheck6(pkt, inner_off, &e, epoch)),
+    };
+    if recheck && fw_classify6(pkt, &*maps, inner_off, tap, FW_DIR_INGRESS) == FW_ACTION_DROP {
+        if hit {
+            ct_forget_default6(pkt, maps, inner_off, vni);
         }
-        // Fail closed — see [`uplink_ingress_firewall_drop`]'s None arm.
-        None => true,
+        return None;
     }
+    Some(epoch)
 }
 
 /// Conntrack create-on-miss / refresh-on-hit — v6 mirror of [`uplink_track_flow`] (mirrors
 /// [`process_uplink_v6`] step 3, non-LB only), over `CONNTRACK6`. Map-only (never mutates `pkt`), so
 /// byte-parity-neutral. `#[inline(never)]`: same BPF-stack-relief reasoning as
-/// [`uplink_ingress_firewall_drop6`].
+/// [`uplink_ingress_firewall6`].
 #[inline(never)]
 fn uplink_track_flow6<P: Pkt, M: Maps>(
     pkt: &P,
     maps: &mut M,
     inner_off: usize,
-    vni: u32,
-    now: u64,
+    in_: &UplinkIn,
+    epoch: u32,
 ) {
-    if let Some(key) = ct_key6(pkt, inner_off, vni) {
+    if let Some(key) = ct_key6(pkt, inner_off, in_.vni) {
         match maps.conntrack6_get(&key) {
-            None => ct_create_default6(pkt, maps, inner_off, vni, now),
-            Some(mut e) => ct_refresh6(pkt, maps, inner_off, &key, &mut e, now),
+            None => ct_create_default6(pkt, maps, inner_off, in_.vni, in_.now, epoch),
+            Some(mut e) => ct_refresh6(pkt, maps, inner_off, &key, &mut e, in_.now, epoch),
         }
     }
 }
@@ -579,24 +611,29 @@ pub fn process_uplink_v6<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &Uplin
         }
     };
 
-    // 2. Ingress firewall on NEW inbound flows against the deliver tap. SKIPPED for a NAT66 return
-    //    (it is the reply to an already-egress-firewalled guest flow — mirrors the v4 nat-return path,
-    //    which bypasses the ingress firewall) AND for the ICMPv6-error relay (PMTUD fix — see the
-    //    `is_icmp_relay` capture above; the relayed error's outer ICMPv6 tuple never matches L4 policy).
-    if !is_nat_return
-        && !is_icmp_relay
-        && uplink_ingress_firewall_drop6(&*pkt, maps, inner_off, in_.vni, tap)
-    {
-        return UplinkOut {
-            action: Action::Drop,
-            tunnel: None,
-        };
-    }
+    // 2. Ingress firewall on new and re-evaluated inbound flows against the deliver tap. SKIPPED for
+    //    a NAT66 return (it is the reply to an already-egress-firewalled guest flow — mirrors the v4
+    //    nat-return path, which bypasses the ingress firewall) AND for the ICMPv6-error relay (PMTUD
+    //    fix — see the `is_icmp_relay` capture above; the relayed error's outer ICMPv6 tuple never
+    //    matches L4 policy).
+    let epoch = if is_nat_return || is_icmp_relay {
+        maps.fw_epoch()
+    } else {
+        match uplink_ingress_firewall6(&*pkt, maps, inner_off, in_.vni, tap) {
+            Some(epoch) => epoch,
+            None => {
+                return UplinkOut {
+                    action: Action::Drop,
+                    tunnel: None,
+                }
+            }
+        }
+    };
 
     // 3. Conntrack6: create on miss, refresh (last_seen + TCP state) on hit — but ONLY for non-LB and
     //    non-NAT-return (a return is tracked by the guest's egress-side conntrack6, not re-tracked).
     if !is_lb && !is_nat_return {
-        uplink_track_flow6(&*pkt, maps, inner_off, in_.vni, in_.now);
+        uplink_track_flow6(&*pkt, maps, inner_off, in_, epoch);
     }
 
     // 4. Decap already ran (kernel); rewrite the inner Ethernet for the guest (ethertype = IPv6). The
@@ -806,7 +843,8 @@ pub fn process_uplink_rx<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &Uplin
                         // takes no Maps and cannot do it; this mirrors the eBPF ingress `ct_touch` on
                         // the CT_REWRITE_DST reverse entry.
                         let mut r = e;
-                        ct_refresh(&*pkt, maps, inner_off, &key, &mut r, in_.now);
+                        let epoch = maps.fw_epoch();
+                        ct_refresh(&*pkt, maps, inner_off, &key, &mut r, in_.now, epoch);
                         // Mechanism #2 (NAT64-return): the reverse entry's `xlate_ip` IS the guest's
                         // real overlay IPv4 (`nat64_egress_parse` pins it from `meta_guest_ipv4`) —
                         // the SAME address the guest's own ROUTES self-route is keyed on, so resolve
@@ -833,7 +871,7 @@ pub fn process_uplink_rx<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &Uplin
                                     // pushes the verifier's combined-call-stack over budget
                                     // ("combined stack size of 2 calls is 528. Too large") — the
                                     // same BPF-stack-relief pattern as
-                                    // [`uplink_ingress_firewall_drop`]/[`uplink_track_flow`].
+                                    // [`uplink_ingress_firewall`]/[`uplink_track_flow`].
                                     let guest_ipv6 = resolve_nat64_guest_ipv6(&*maps, tap_ifindex);
                                     process_uplink_nat64_ingress(
                                         pkt,

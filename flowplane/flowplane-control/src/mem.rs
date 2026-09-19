@@ -1,7 +1,7 @@
 //! In-memory `MapWriter` for testing `ControlCore` without CAP_BPF or a live map.
 use crate::writer::{CtFlushScope, CtFlushScope6, MapWriter};
 use flowplane_common::{
-    DhcpConfig, FloatingIPKey, FwMeta, FwRule, FwRule6, FwRuleKey, IfaceKey, IfaceKey6,
+    DhcpConfig, FloatingIPKey, FwBind, FwMeta, FwRule, FwRule6, FwRuleKey, IfaceKey, IfaceKey6,
     IfaceMetaKey, IfaceMetaVal, IfaceValue, LbBackend, LbKey, LbKey6, LbValue, MaglevKey,
     MeterState, NatKey, NatKey6, NatValue, NatValue6, NeighborNat6Entry, NeighborNatEntry,
     PortMeta, RouteValue, UnderlayValue,
@@ -29,6 +29,12 @@ pub struct MemMapWriter {
     pub fw_meta: HashMap<u32, FwMeta>,
     pub fw_rules6: HashMap<FwRuleKey, FwRule6>,
     pub fw_meta6: HashMap<u32, FwMeta>,
+    pub fw_bind: HashMap<u32, FwBind>,
+    pub fw_scopes: HashMap<u64, crate::fwclass::Scope>,
+    /// Call counters, so tests can assert an unchanged replace writes nothing.
+    pub fw_scope_creates: usize,
+    pub fw_bind_writes: usize,
+    pub fw_epoch: u32,
     pub meter: HashMap<u32, MeterState>,
     pub dhcp_config: Option<DhcpConfig>,
     // INTERFACE domain.
@@ -201,6 +207,34 @@ impl MapWriter for MemMapWriter {
     fn fw_meta6_upsert(&mut self, i: u32, v: FwMeta) -> anyhow::Result<()> {
         self.fw_meta6.insert(i, v);
         Ok(())
+    }
+    fn fw_scope_create(&mut self, scope: &crate::fwclass::Scope) -> anyhow::Result<()> {
+        self.fw_scope_creates += 1;
+        self.fw_scopes.insert(scope.id, scope.clone());
+        Ok(())
+    }
+    fn fw_scope_delete(&mut self, id: u64) -> anyhow::Result<()> {
+        self.fw_scopes.remove(&id);
+        Ok(())
+    }
+    fn fw_bind_upsert(&mut self, ifindex: u32, val: FwBind) -> anyhow::Result<()> {
+        self.fw_bind_writes += 1;
+        self.fw_bind.insert(ifindex, val);
+        Ok(())
+    }
+    fn fw_bind_remove(&mut self, ifindex: u32) -> anyhow::Result<()> {
+        self.fw_bind.remove(&ifindex);
+        Ok(())
+    }
+    fn fw_epoch_bump(&mut self) -> anyhow::Result<()> {
+        self.fw_epoch = self.fw_epoch.wrapping_add(1);
+        Ok(())
+    }
+    fn fw_bind_entries(&self) -> Vec<(u32, FwBind)> {
+        self.fw_bind.iter().map(|(k, v)| (*k, *v)).collect()
+    }
+    fn fw_scope_ids(&self) -> Vec<u64> {
+        self.fw_scopes.keys().copied().collect()
     }
     fn meter_upsert(&mut self, i: u32, v: MeterState) -> anyhow::Result<()> {
         self.meter.insert(i, v);

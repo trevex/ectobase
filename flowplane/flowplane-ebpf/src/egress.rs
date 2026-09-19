@@ -34,7 +34,7 @@ pub fn forward_decision_v4(
     let p = data as *const u8;
     // Conntrack + egress firewall. Established flows: apply translation + refresh. New flows:
     // enforce the SOURCE interface's EGRESS firewall. The firewall is DENY-BY-DEFAULT: with no
-    // FW_META entry, or no egress rule that matches, `fw_eval_dir` returns DROP (see its impl).
+    // FW_META entry, or no egress rule that matches, `fw_classify` returns DROP (see its impl).
     // So an egress-INITIATED flow needs an explicit egress-allow FirewallPolicy; an ingress-
     // ESTABLISHED flow is exempt because its reverse conntrack entry (pre-seeded by ct_*_default)
     // makes this a CT hit, skipping the firewall entirely.
@@ -43,37 +43,51 @@ pub fn forward_decision_v4(
     // reverse-NAT entries created for ingress return traffic; they must NOT be applied in the
     // egress path (otherwise a non-NAT'd VM replying to a NATted peer would have its dst
     // incorrectly rewritten and be delivered locally instead of going out to the router).
-    // `was_new` = this is the flow's first packet (conntrack miss). New flows enforce the SOURCE
-    // egress firewall here, and — on the local fast path below — the DESTINATION ingress firewall
-    // (same-node delivery must still honor the dest's ingress policy; established flows, incl. the
-    // reverse/reply entry seeded here, skip both, mirroring the cross-node uplink_rx behavior).
-    let mut was_new = false;
+    // `check_dest` = the flow met the firewall here: its first packet (conntrack miss), or a hit
+    // that `ct_hit_recheck` flags (a forward entry from an older firewall epoch, or a bare SYN).
+    // Such a flow meets the SOURCE egress firewall here and — on the local fast path below — the
+    // DESTINATION ingress firewall (same-node delivery must still honor the dest's ingress policy;
+    // established flows, incl. the reverse/reply entry seeded here, skip both, mirroring the
+    // cross-node uplink_rx behavior). `epoch` is read before any firewall lookup and is what this
+    // hook stamps (see `ct_needs_recheck`).
+    let epoch = crate::coreimpl::GlobalMaps.fw_epoch();
+    let mut check_dest = false;
     if let Some(key) = crate::conntrack::ct_key(data, data_end, ETH_LEN, meta.vni) {
-        match unsafe { crate::maps::CONNTRACK.get(&key) } {
-            Some(e) => {
-                let mut e = *e;
-                if e.flags & flowplane_common::CT_REWRITE_SRC != 0
-                    && !crate::conntrack::ct_apply(data, data_end, ETH_LEN, &e)
-                {
-                    // Required SNAT translation unapplied (IP options / short window): dropping
-                    // beats emitting the guest's untranslated source onto an external path.
-                    return EgressVerdict::Drop;
+        let hit = unsafe { crate::maps::CONNTRACK.get(&key) }.copied();
+        let recheck = match &hit {
+            None => true,
+            Some(e) => flowplane_core::conntrack::ct_hit_recheck(
+                &crate::coreimpl::RawPkt::new(data, data_end),
+                ETH_LEN,
+                e,
+                epoch,
+            ),
+        };
+        if recheck {
+            check_dest = true;
+            if flowplane_core::firewall::fw_classify(
+                &crate::coreimpl::RawPkt::new(data, data_end),
+                &crate::coreimpl::GlobalMaps,
+                ETH_LEN,
+                ifindex,
+                flowplane_common::FW_DIR_EGRESS,
+            ) == flowplane_common::FW_ACTION_DROP
+            {
+                if hit.is_some() {
+                    egress_ct_forget_v4(data, data_end, meta.vni);
                 }
-                crate::conntrack::ct_touch(data, data_end, ETH_LEN, &key, &mut e);
+                return EgressVerdict::Drop;
             }
-            None => {
-                was_new = true;
-                if flowplane_core::firewall::fw_eval_dir(
-                    &crate::coreimpl::RawPkt::new(data, data_end),
-                    &crate::coreimpl::GlobalMaps,
-                    ETH_LEN,
-                    ifindex,
-                    flowplane_common::FW_DIR_EGRESS,
-                ) == flowplane_common::FW_ACTION_DROP
-                {
-                    return EgressVerdict::Drop;
-                }
+        }
+        if let Some(mut e) = hit {
+            if e.flags & flowplane_common::CT_REWRITE_SRC != 0
+                && !crate::conntrack::ct_apply(data, data_end, ETH_LEN, &e)
+            {
+                // Required SNAT translation unapplied (IP options / short window): dropping
+                // beats emitting the guest's untranslated source onto an external path.
+                return EgressVerdict::Drop;
             }
+            crate::conntrack::ct_touch(data, data_end, ETH_LEN, &key, &mut e, epoch);
         }
     }
     // B8b: DSR reverse-SNAT. If this is the guest's REPLY to a DSR-load-balanced flow, the backend's
@@ -116,6 +130,7 @@ pub fn forward_decision_v4(
         meta.vni,
         is_ext,
         crate::conntrack::now(),
+        epoch,
     ) != flowplane_core::nat::SnatOutcome::Continue
     {
         return EgressVerdict::Drop;
@@ -123,7 +138,7 @@ pub fn forward_decision_v4(
     // Track every flow.
     if let Some(key) = crate::conntrack::ct_key(data, data_end, ETH_LEN, meta.vni) {
         if unsafe { crate::maps::CONNTRACK.get(&key) }.is_none() {
-            crate::conntrack::ct_ensure_default(data, data_end, ETH_LEN, &key);
+            crate::conntrack::ct_ensure_default(data, data_end, ETH_LEN, &key, epoch);
         }
     }
     // Public-lane policing (external egress only). Total egress is EDT-shaped at the uplink FQ
@@ -136,7 +151,7 @@ pub fn forward_decision_v4(
     // LOCAL interfaces -> deliver to that tap, no encap) vs. encap toward the nexthop vs. pass. LB
     // anycast entries have tap_ifindex==0 and fall through to encap. Single-sourced in
     // `flowplane_core::egress::deliver` (the SAME decision the native SimNode runs). The dest ingress
-    // firewall gate on the local path stays HERE in the wrapper — it needs `was_new` + the packet.
+    // firewall gate on the local path stays HERE in the wrapper — it needs `check_dest` + the packet.
     let mut dst16 = [0u8; 16];
     dst16[..4].copy_from_slice(&dst);
     match flowplane_core::egress::deliver(
@@ -150,10 +165,11 @@ pub fn forward_decision_v4(
             tap_ifindex,
             guest_mac,
         } => {
-            // Destination ingress firewall on NEW flows (the cross-node uplink_rx path is skipped
-            // for same-node delivery, so enforce the dest's ingress policy here). Deny-by-default.
-            if was_new
-                && flowplane_core::firewall::fw_eval_dir(
+            // Destination ingress firewall on new and re-evaluated flows (the cross-node uplink_rx
+            // path is skipped for same-node delivery, so enforce the dest's ingress policy here).
+            // Deny-by-default.
+            if check_dest
+                && flowplane_core::firewall::fw_classify(
                     &crate::coreimpl::RawPkt::new(data, data_end),
                     &crate::coreimpl::GlobalMaps,
                     ETH_LEN,
@@ -161,6 +177,9 @@ pub fn forward_decision_v4(
                     flowplane_common::FW_DIR_INGRESS,
                 ) == flowplane_common::FW_ACTION_DROP
             {
+                // The flow's entries exist (created after the egress check, or refreshed); drop them
+                // so the next packet is new again and meets this check, not a conntrack bypass.
+                egress_ct_forget_v4(data, data_end, meta.vni);
                 return EgressVerdict::Drop;
             }
             EgressVerdict::Local {
@@ -185,6 +204,31 @@ pub fn forward_decision_v4(
 /// map-lookup-plus-rewrite its OWN out-of-line subprogram keeps its locals (`CtKey`, the transient
 /// `CtEntry`) off that already-tight combined frame; the call is sequential (runs once, returns
 /// before the caller continues into LB address/route/NAT below), so it does not nest with anything else.
+/// Remove the conntrack entries a refused same-node flow created (core `ct_forget_default`).
+/// Out-of-line for the same stack reason as [`dsr_reverse_snat_v4`]: its CtKey pair stays off
+/// `tc_guest_tx`'s combined frame.
+#[inline(never)]
+fn egress_ct_forget_v4(data: usize, data_end: usize, vni: u32) {
+    flowplane_core::conntrack::ct_forget_default(
+        &crate::coreimpl::RawPkt::new(data, data_end),
+        &mut crate::coreimpl::GlobalMaps,
+        ETH_LEN,
+        vni,
+    );
+}
+
+/// IPv6 sibling of [`egress_ct_forget_v4`] (core `ct_forget_default6`), a sequential frame of
+/// `forward_decision_v6`.
+#[inline(never)]
+fn egress_ct_forget_v6(data: usize, data_end: usize, vni: u32) {
+    flowplane_core::conntrack::ct_forget_default6(
+        &crate::coreimpl::RawPkt::new(data, data_end),
+        &mut crate::coreimpl::GlobalMaps,
+        ETH_LEN,
+        vni,
+    );
+}
+
 #[inline(never)]
 fn dsr_reverse_snat_v4(data: usize, data_end: usize, vni: u32) -> bool {
     let mut pkt = crate::coreimpl::RawPkt::new(data, data_end);
@@ -201,68 +245,67 @@ fn dsr_reverse_snat_v4(data: usize, data_end: usize, vni: u32) -> bool {
     true
 }
 
-/// Result of the inner-v6 egress firewall/conntrack stage: either DROP the packet, or PASS it on
-/// (carrying whether this was a NEW flow — a conntrack MISS). `was_new` is needed downstream so the
-/// local fast path can enforce the DESTINATION's ingress firewall on new flows only (mirroring the
-/// v4 `forward_decision_v4` Local arm); established flows (CT hit, incl. the pre-seeded reverse
-/// entry for a same-node reply) skip both egress and dest-ingress firewalls. `#[repr(u8)]` so it is
-/// a single scalar across the bpf-to-bpf call boundary (verifier-friendly, no stack traffic).
-#[repr(u8)]
-pub enum EgressFwCt {
-    Drop,
-    Pass { was_new: bool },
-}
-
-/// Stateful firewall + conntrack for the inner-v6 egress flow. Returns `EgressFwCt::Drop` if the
-/// packet must be dropped (deny-by-default on a new flow), else `EgressFwCt::Pass { was_new }` where
-/// `was_new` is true iff this was a conntrack MISS. Out-of-line (`#[inline(never)]`) so its
-/// CtKey6/CtEntry stack frame is freed before the caller's route lookup runs — keeps `tc_guest_tx`
-/// under the 512B combined BPF stack limit (the v6 CT key alone is ~48B and would otherwise coexist
-/// with the route-lookup Key<RouteLpmData6>).
+/// Conntrack lookup for the inner-v6 egress flow (stage 1a of `forward_decision_v6`): the shared core
+/// `egress_ct6` — build the v6 key, classify and refresh a hit (stamping `epoch`). Out-of-line
+/// (`#[inline(never)]`) so its CtKey6/CtEntry frame is freed before the firewall runs:
+/// `tc_guest_egress_v6`'s own frame + CT locals + the firewall, nested in one subprogram, sat at
+/// the 512B combined limit and went over on a register-allocation change (aya-ebpf 0.2). Scalar
+/// `data`/`data_end` args, packet window reconstructed inside — no packet pointer crosses the call.
 #[inline(never)]
-fn egress_fw_ct_v6(data: usize, data_end: usize, ifindex: u32, vni: u32) -> EgressFwCt {
-    // Seam-not-duplicate: delegate to the SHARED core stage (`flowplane_core::egress::egress_fw_ct6`)
-    // — the SAME code the native SimNode runs via `process_guest_tx_v6`. This wrapper stays a
-    // `#[inline(never)]` subprogram so the core stage's CtKey6/CtEntry locals get their own BPF stack
-    // frame (freed before `route_decision_v6`'s route-lookup frame). Reconstruct the packet window
-    // inside (scalar data/data_end args — no packet pointer crosses the call boundary).
-    match flowplane_core::egress::egress_fw_ct6(
+fn egress_ct_v6(
+    data: usize,
+    data_end: usize,
+    vni: u32,
+    epoch: u32,
+) -> flowplane_core::egress::EgressCt6 {
+    flowplane_core::egress::egress_ct6(
         &crate::coreimpl::RawPkt::new(data, data_end),
         &mut crate::coreimpl::GlobalMaps,
         ETH_LEN,
-        ifindex,
         vni,
         crate::conntrack::now(),
-    ) {
-        flowplane_core::egress::EgressFwCt6::Drop => EgressFwCt::Drop,
-        flowplane_core::egress::EgressFwCt6::Pass { was_new } => EgressFwCt::Pass { was_new },
-    }
+        epoch,
+    )
 }
 
-/// Destination INGRESS firewall for the v6 same-node local fast path. On a NEW egress flow delivered
-/// to a SAME-NODE guest, the cross-node `uplink_rx` ingress path is skipped, so the destination's
-/// ingress policy must be enforced HERE — mirroring the v4 `forward_decision_v4` Local arm exactly.
-/// Deny-by-default: with no matching ingress rule, `fw_eval_dir6` returns DROP. Returns `true` iff
-/// the packet must be dropped. Out-of-line (`#[inline(never)]`) with SCALAR `data`/`data_end` args
-/// (RawPkt reconstructed inside) so its FwRule6/selector frame (~160B) is a SEPARATE, sequentially
-/// allocated frame — never coexisting with `route_decision_v6`'s route-lookup Key frame on the
-/// combined 512B BPF stack.
+/// Track a new, egress-allowed inner-v6 flow (stage 1c of `forward_decision_v6`): the shared core
+/// `ct_create_default6`, in its own sequential frame for the same reason as [`egress_ct_v6`].
 #[inline(never)]
-fn dest_ingress_fw_v6(data: usize, data_end: usize, tap_ifindex: u32) -> bool {
-    flowplane_core::firewall::fw_eval_dir6(
+fn egress_ct_create_v6(data: usize, data_end: usize, vni: u32, epoch: u32) {
+    flowplane_core::conntrack::ct_create_default6(
+        &crate::coreimpl::RawPkt::new(data, data_end),
+        &mut crate::coreimpl::GlobalMaps,
+        ETH_LEN,
+        vni,
+        crate::conntrack::now(),
+        epoch,
+    );
+}
+
+/// The v6 firewall for one direction of one interface: `true` iff the packet must be DROPPED
+/// (deny-by-default: no matching rule → `fw_classify6` returns DROP). Used for the SOURCE egress
+/// check of a new flow (stage 1b of `forward_decision_v6`) and for the DESTINATION ingress check on
+/// the same-node local fast path, where the cross-node `uplink_rx` ingress path is skipped —
+/// mirroring the v4 `forward_decision_v4` Local arm. Out-of-line (`#[inline(never)]`) with SCALAR
+/// `data`/`data_end` args (RawPkt reconstructed inside) so its FwRule6/selector frame (~180B) is a
+/// SEPARATE, sequentially allocated frame, never coexisting with the conntrack or route-lookup
+/// frames on the combined 512B BPF stack.
+#[inline(never)]
+fn fw_drop_v6(data: usize, data_end: usize, ifindex: u32, dir: u8) -> bool {
+    flowplane_core::firewall::fw_classify6(
         &crate::coreimpl::RawPkt::new(data, data_end),
         &crate::coreimpl::GlobalMaps,
         ETH_LEN,
-        tap_ifindex,
-        flowplane_common::FW_DIR_INGRESS,
+        ifindex,
+        dir,
     ) == flowplane_common::FW_ACTION_DROP
 }
 
 /// Route6 lookup + deliver decision (local fast path / encap / pass) for the inner-v6 egress flow.
 /// Out-of-line (`#[inline(never)]`) so its route-lookup `Key<RouteLpmData6>` frame (~264B) does not
-/// coexist on the combined BPF stack with the `egress_fw_ct_v6` CtKey6/CtEntry frame (~336B): the
-/// two heavy frames are called SEQUENTIALLY from the thin `forward_decision_v6` dispatcher, so each
-/// is freed before the next (512B combined limit). Takes `data`/`data_end` as scalars and
+/// coexist on the combined BPF stack with the stage-1 conntrack/firewall frames: all are called
+/// SEQUENTIALLY from the thin `forward_decision_v6` dispatcher, so each is freed before the next
+/// (512B combined limit). Takes `data`/`data_end` as scalars and
 /// reconstructs the packet window inside — no packet pointer crosses the call boundary.
 #[inline(never)]
 fn route_decision_v6(data: usize, data_end: usize, meta: &PortMeta) -> EgressVerdict {
@@ -272,7 +315,7 @@ fn route_decision_v6(data: usize, data_end: usize, meta: &PortMeta) -> EgressVer
     // same `ROUTES6`/`UNDERLAY`/`LOCAL[0]` accesses this wrapper used before, so the byte-relevant
     // decision is unchanged. This wrapper stays a `#[inline(never)]` subprogram so the core stage's
     // route-lookup `Key<RouteLpmData6>` frame gets its own BPF stack frame, sequential to (never
-    // coexisting with) `egress_fw_ct_v6`'s CtKey6 frame (512B combined limit).
+    // coexisting with) the stage-1 conntrack/firewall frames (512B combined limit).
     match flowplane_core::egress::route_decision6(
         &crate::coreimpl::RawPkt::new(data, data_end),
         &crate::coreimpl::GlobalMaps,
@@ -297,9 +340,9 @@ fn route_decision_v6(data: usize, data_end: usize, meta: &PortMeta) -> EgressVer
 /// is a no-op.
 ///
 /// Out-of-line (`#[inline(never)]`) so its `CtKey6` + rewrite locals get their OWN sequential BPF
-/// stack frame, called from the thin `forward_decision_v6` dispatcher right after `egress_fw_ct_v6`
-/// and freed via return BEFORE `route_decision_v6` runs — none of the three stages' heavy frames ever
-/// coexist on the combined 512B stack.
+/// stack frame, called from the thin `forward_decision_v6` dispatcher right after stage 1 and freed
+/// via return BEFORE `route_decision_v6` runs — none of the stages' heavy frames ever coexist on the
+/// combined 512B stack.
 #[inline(never)]
 fn dsr_reverse_snat_v6(data: usize, data_end: usize, vni: u32) -> bool {
     let mut pkt = crate::coreimpl::RawPkt::new(data, data_end);
@@ -326,10 +369,10 @@ fn dsr_reverse_snat_v6(data: usize, data_end: usize, vni: u32) -> bool {
 /// tc. No NAT64 (caller runs that first), no resize. Caller verified ETH_LEN+IPV6_LEN present and
 /// ethertype==ETH_P_IPV6.
 ///
-/// THIN dispatcher: the three heavy stages — stateful firewall/conntrack (`egress_fw_ct_v6`, ~336B),
-/// DSR reverse-SNAT (`dsr_reverse_snat_v6`, small but map-lookup-bearing), and the route6 lookup +
-/// deliver (`route_decision_v6`, ~264B) — are each their own `#[inline(never)]` subprogram, called
-/// SEQUENTIALLY here. So none of the frames coexists with another on the combined BPF stack (512B
+/// THIN dispatcher: the heavy stages — conntrack lookup (`egress_ct_v6`), source egress firewall
+/// (`fw_drop_v6`) and conntrack create (`egress_ct_create_v6`), DSR reverse-SNAT
+/// (`dsr_reverse_snat_v6`), and the route6 lookup + deliver (`route_decision_v6`) — are each their own
+/// `#[inline(never)]` subprogram, called SEQUENTIALLY here. So none of the frames coexists with another on the combined BPF stack (512B
 /// limit); this dispatcher itself carries no heavy locals. Established flows (CT hit) skip the
 /// firewall; new flows are egress-firewalled then tracked, then (either way) checked for a DSR
 /// reverse-SNAT note, then routed.
@@ -340,10 +383,29 @@ pub fn forward_decision_v6(
     ifindex: u32,
     meta: &PortMeta,
 ) -> EgressVerdict {
-    // Stage 1: egress firewall + conntrack. Carries `was_new` (CT miss) up to the local fast path.
-    let was_new = match egress_fw_ct_v6(data, data_end, ifindex, meta.vni) {
-        EgressFwCt::Drop => return EgressVerdict::Drop,
-        EgressFwCt::Pass { was_new } => was_new,
+    // Stage 1: egress firewall + conntrack — the core `egress_fw_ct6`, run as SEQUENTIAL frames in
+    // the same order: CT lookup (refresh a hit), then on a miss the source egress firewall and, if
+    // it allows, the CT create; on a recheck the firewall again, forgetting a refused flow. Carries
+    // `check_dest` (miss or recheck) up to the local fast path. `epoch` is read before any firewall
+    // lookup and is what this hook stamps (see `ct_needs_recheck`).
+    let epoch = crate::coreimpl::GlobalMaps.fw_epoch();
+    let check_dest = match egress_ct_v6(data, data_end, meta.vni, epoch) {
+        flowplane_core::egress::EgressCt6::Established => false,
+        flowplane_core::egress::EgressCt6::Unkeyable => return EgressVerdict::Drop,
+        flowplane_core::egress::EgressCt6::Recheck => {
+            if fw_drop_v6(data, data_end, ifindex, flowplane_common::FW_DIR_EGRESS) {
+                egress_ct_forget_v6(data, data_end, meta.vni);
+                return EgressVerdict::Drop;
+            }
+            true
+        }
+        flowplane_core::egress::EgressCt6::Miss => {
+            if fw_drop_v6(data, data_end, ifindex, flowplane_common::FW_DIR_EGRESS) {
+                return EgressVerdict::Drop;
+            }
+            egress_ct_create_v6(data, data_end, meta.vni, epoch);
+            true
+        }
     };
     // Stage 2 (B8b): DSR reverse-SNAT — a no-op unless this reply's 5-tuple hit the `DSR6` map. Runs
     // BEFORE the route decision so a rewritten src still routes correctly (route/deliver key off DST).
@@ -376,13 +438,22 @@ pub fn forward_decision_v6(
     }
     // Stage 3: route6 + deliver decision (its own sequential frame — freed before stage 4).
     let verdict = route_decision_v6(data, data_end, meta);
-    // Stage 4: on a NEW flow delivered to a SAME-NODE guest, enforce the DESTINATION's ingress
-    // firewall (uplink_rx is bypassed for same-node traffic). Deny-by-default. Mirrors the v4
-    // `forward_decision_v4` Local arm. Established flows (was_new==false, incl. the pre-seeded
-    // reverse entry for a same-node reply) skip this. `dest_ingress_fw_v6` is its own sequential
+    // Stage 4: on a new or re-evaluated flow delivered to a SAME-NODE guest, enforce the
+    // DESTINATION's ingress firewall (uplink_rx is bypassed for same-node traffic). Deny-by-default.
+    // Mirrors the v4 `forward_decision_v4` Local arm. Established flows (check_dest==false, incl.
+    // the pre-seeded reverse entry for a same-node reply) skip this. `fw_drop_v6` is its own sequential
     // #[inline(never)] frame so its FwRule6 locals never coexist with stage 3's route-lookup frame.
     if let EgressVerdict::Local { tap_ifindex, .. } = verdict {
-        if was_new && dest_ingress_fw_v6(data, data_end, tap_ifindex) {
+        if check_dest
+            && fw_drop_v6(
+                data,
+                data_end,
+                tap_ifindex,
+                flowplane_common::FW_DIR_INGRESS,
+            )
+        {
+            // As in the v4 Local arm: forget the refused flow's entries (stage 1c created them).
+            egress_ct_forget_v6(data, data_end, meta.vni);
             return EgressVerdict::Drop;
         }
     }

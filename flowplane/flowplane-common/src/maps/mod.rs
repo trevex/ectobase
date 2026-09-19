@@ -5,6 +5,7 @@
 mod ct;
 mod dhcp;
 mod fw;
+mod fwclass;
 mod iface;
 mod lb;
 mod nat;
@@ -14,6 +15,7 @@ mod route;
 pub use ct::*;
 pub use dhcp::*;
 pub use fw::*;
+pub use fwclass::*;
 pub use iface::*;
 pub use lb::*;
 pub use nat::*;

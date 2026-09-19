@@ -426,7 +426,9 @@ pub fn nat64_egress_parse<P: Pkt, M: Maps>(
                             flags: CT_REWRITE_DST | CT_F_SRC_NAT | CT_F_NAT64,
                             tcp_state: 0,
                             fwall_action: 0,
-                            _pad: [0; 7],
+                            _pad: [0; 3],
+                            // A reply entry: never re-evaluated, so its epoch is never read.
+                            policy_epoch: 0,
                         },
                     );
                     break;
@@ -447,7 +449,10 @@ pub fn nat64_egress_parse<P: Pkt, M: Maps>(
                     flags: CT_REWRITE_SRC | CT_F_SRC_NAT | CT_F_NAT64,
                     tcp_state: 0,
                     fwall_action: 0,
-                    _pad: [0; 7],
+                    _pad: [0; 3],
+                    // The NAT64 flow met the v6 egress firewall (on CONNTRACK6), never the v4 one this
+                    // v4-keyed entry could be hit at, so it claims no epoch.
+                    policy_epoch: 0,
                 },
             );
             chosen

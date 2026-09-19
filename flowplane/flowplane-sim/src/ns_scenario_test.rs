@@ -49,8 +49,10 @@ fn allow_tcp(node: &mut SimNode, port: u16) {
         FwRule {
             src_ip: [0; 4],
             src_mask: [0; 4],
-            dst_ip: GUEST_IP,
-            dst_mask: [255, 255, 255, 255],
+            // Peer-only, like every rule the control plane programs: an ingress rule matches its
+            // source; the destination is the interface itself.
+            dst_ip: [0; 4],
+            dst_mask: [0; 4],
             src_port_min: 0,
             src_port_max: 65535,
             dst_port_min: port,

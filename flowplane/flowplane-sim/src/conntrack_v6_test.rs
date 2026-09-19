@@ -21,7 +21,7 @@ fn ct_create_default6_seeds_forward_and_reverse() {
     let dst = [0x20, 1, 0xd, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2];
     let pkt = VecPkt::from_bytes(&v6_tcp(src, dst, 1111, 80));
     let mut m = MemMaps::default();
-    ct_create_default6(&pkt, &mut m, 0, 100, 5);
+    ct_create_default6(&pkt, &mut m, 0, 100, 5, 0);
     let fwd = ct_key6(&pkt, 0, 100).unwrap();
     assert!(m.conntrack6_get(&fwd).is_some(), "forward entry seeded");
     assert!(

@@ -223,7 +223,7 @@ fn ct_refresh_bumps_last_seen_and_advances_tcp_state() {
 
     let now: u64 = 40 * 1_000_000_000;
     let mut e = m.conntrack_get(&key).unwrap();
-    ct_refresh(&pkt, &mut m, 0, &key, &mut e, now);
+    ct_refresh(&pkt, &mut m, 0, &key, &mut e, now, 0);
 
     let out = m.conntrack_get(&key).expect("entry present after refresh");
     assert_eq!(out.last_seen, now, "last_seen bumped");

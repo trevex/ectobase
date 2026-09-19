@@ -157,7 +157,8 @@ fn seed_reverse_ct(maps: &mut MemMaps) {
             flags: CT_REWRITE_DST | CT_F_SRC_NAT,
             tcp_state: 0,
             fwall_action: 0,
-            _pad: [0; 7],
+            _pad: [0; 3],
+            policy_epoch: 0,
         },
     );
 }

@@ -614,6 +614,30 @@ mod tests {
             &pb::AddFwRuleRequest {
                 interface_id: "if-1".into(),
                 rule_id: "r-1".into(),
+                src_cidr: "10.0.0.0/24".into(),
+                dst_cidr: "".into(),
+                proto: 6,
+                dst_port_min: 443,
+                dst_port_max: 443,
+                allow: true,
+                egress: false,
+            },
+        );
+        assert!(r.is_ok(), "fw rule: {r:?}");
+    }
+
+    /// The classifier matches a rule's PEER (source on ingress, destination on egress); a rule
+    /// that also restricts the interface's own address cannot be expressed and is refused as a
+    /// client error rather than silently widened.
+    #[test]
+    fn add_fw_rule_refuses_a_local_address_match() {
+        let mut c = core();
+        register_iface(&mut c, "if-1", 100, [10, 0, 0, 5]);
+        let r = add_fw_rule(
+            &mut c,
+            &pb::AddFwRuleRequest {
+                interface_id: "if-1".into(),
+                rule_id: "r-1".into(),
                 src_cidr: "0.0.0.0/0".into(),
                 dst_cidr: "10.0.0.5/32".into(),
                 proto: 6,
@@ -623,7 +647,10 @@ mod tests {
                 egress: false,
             },
         );
-        assert!(r.is_ok(), "fw rule: {r:?}");
+        assert_eq!(
+            tonic::Status::from(r.unwrap_err()).code(),
+            tonic::Code::InvalidArgument
+        );
     }
 
     #[test]
@@ -636,8 +663,8 @@ mod tests {
             &pb::AddFwRuleRequest {
                 interface_id: "if0".into(),
                 rule_id: "r1".into(),
-                src_cidr: "::/0".into(),
-                dst_cidr: "2001:db8::1/128".into(),
+                src_cidr: "2001:db8::/32".into(),
+                dst_cidr: "".into(),
                 proto: 6,
                 dst_port_min: 80,
                 dst_port_max: 80,

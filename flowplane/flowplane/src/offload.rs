@@ -107,8 +107,10 @@ fn pref_band(cfg: &OffloadCfg) -> Range<u16> {
 
 /// Resolve the set of flows the manager WANTS offloaded this pass from the conntrack snapshots.
 ///
-/// A conntrack entry becomes a `Desired` only when: it is offload-eligible (plain established E/W —
-/// see `offload_eligible`); its LOCAL source guest resolves to an offload-capable representor
+/// A conntrack entry becomes a `Desired` only when: it is offload-eligible (plain established E/W,
+/// and not due a firewall re-evaluation under the node's `epoch` — see `offload_eligible`: a stale
+/// flow leaves hardware so its next packet meets the current policy on the eBPF path); its LOCAL
+/// source guest resolves to an offload-capable representor
 /// (`INTERFACES[(vni, src)].is_local` + `PORT_META.offloaded`); and its inner destination routes to a
 /// remote VTEP (`ROUTES` LPM with a non-zero underlay nexthop — a local/miss route is skipped, it
 /// stays on the eBPF path). The action encaps to that VTEP's VNI and mirred-redirects out the geneve
@@ -120,12 +122,13 @@ fn resolve_desired(
     control: &Control,
     ct: &[(CtKey, CtEntry)],
     ct6: &[(CtKey6, CtEntry)],
+    epoch: u32,
     geneve: u32,
 ) -> HashMap<OffKey, Desired> {
     let mut out = HashMap::new();
 
     for (k, e) in ct {
-        if !offload_eligible(e) {
+        if !offload_eligible(e, epoch) {
             continue;
         }
         let Some(iv) = control.iface_lookup_v4(k.vni, k.src_ip) else {
@@ -163,7 +166,7 @@ fn resolve_desired(
     }
 
     for (k, e) in ct6 {
-        if !offload_eligible(e) {
+        if !offload_eligible(e, epoch) {
             continue;
         }
         let Some(iv) = control.iface_lookup_v6(k.vni, k.src_ip) else {
@@ -418,7 +421,12 @@ pub async fn run(
         let now = ktime_now_ns();
         let snap: Vec<_> = ct.lock().entries();
         let snap6: Vec<_> = ct6.lock().entries();
-        let desired = resolve_desired(&control, &snap, &snap6, geneve);
+        // The epoch AFTER the snapshot: every stamp in it is at most this epoch, so a bump landing
+        // in between makes entries look stale (left on eBPF for a tick), never stale ones current.
+        // A bump after this read reaches hardware-installed flows at the next tick: offloaded,
+        // revocation takes up to one `interval`, not one packet.
+        let epoch = control.fw_epoch();
+        let desired = resolve_desired(&control, &snap, &snap6, epoch, geneve);
         let diff = compute_reconcile(&desired, &installed);
 
         // Deletes first (frees pref slots), then installs/reinstalls (cap-bounded).

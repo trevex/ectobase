@@ -1,7 +1,7 @@
 //! The control-plane map write surface. The eBPF `AyaWriter` (and the in-memory `MemMapWriter`
 //! used in tests) implement this; `ControlCore` programs maps only through it.
 use flowplane_common::{
-    DhcpConfig, FloatingIPKey, FwMeta, FwRule, FwRule6, FwRuleKey, IfaceKey, IfaceKey6,
+    DhcpConfig, FloatingIPKey, FwBind, FwMeta, FwRule, FwRule6, FwRuleKey, IfaceKey, IfaceKey6,
     IfaceMetaKey, IfaceMetaVal, IfaceValue, LbBackend, LbKey, LbKey6, LbValue, MaglevKey,
     MeterState, NatKey, NatKey6, NatValue, NatValue6, NeighborNat6Entry, NeighborNatEntry,
     PortMeta, RouteValue, UnderlayValue,
@@ -84,6 +84,22 @@ pub trait MapWriter {
     fn fw_rules6_remove(&mut self, key: &FwRuleKey) -> anyhow::Result<()>;
     /// IPv6 firewall meta upsert (`FW_META6`). Required — see `fw_rules6_upsert`.
     fn fw_meta6_upsert(&mut self, ifindex: u32, val: FwMeta) -> anyhow::Result<()>;
+    /// FIREWALL classifier: make a compiled scope reachable under its id — both families' class and
+    /// policy tries, FULLY populated before the id is inserted into the outer maps, so no lookup
+    /// ever sees a half-built scope. Required (no default): a no-op'd scope would deny everything
+    /// bound to it, or worse, leave a stale scope reachable.
+    fn fw_scope_create(&mut self, scope: &crate::fwclass::Scope) -> anyhow::Result<()>;
+    /// Remove a scope from the outer maps; in-flight lookups finish on the old tries (RCU).
+    fn fw_scope_delete(&mut self, id: u64) -> anyhow::Result<()>;
+    /// Point an interface at its scopes (`FW_BIND`): one write cuts both directions and families.
+    fn fw_bind_upsert(&mut self, ifindex: u32, val: FwBind) -> anyhow::Result<()>;
+    fn fw_bind_remove(&mut self, ifindex: u32) -> anyhow::Result<()>;
+    /// Advance the node's firewall epoch (`FW_EPOCH`) after a binding change, so established flows
+    /// meet their interfaces' new policy on their next packet.
+    fn fw_epoch_bump(&mut self) -> anyhow::Result<()>;
+    /// Adopt: the bindings and scope ids that survived a restart in the pinned maps.
+    fn fw_bind_entries(&self) -> Vec<(u32, FwBind)>;
+    fn fw_scope_ids(&self) -> Vec<u64>;
     fn meter_upsert(&mut self, ifindex: u32, val: MeterState) -> anyhow::Result<()>;
     fn meter_remove(&mut self, ifindex: &u32) -> anyhow::Result<()>;
     fn dhcp_config_set(&mut self, cfg: &DhcpConfig) -> anyhow::Result<()>;

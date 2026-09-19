@@ -72,7 +72,7 @@ Tests run at several levels of privilege and fidelity — see the
 | `make sim-anchor` | sudo | `BPF_PROG_TEST_RUN` byte-parity: native pure-core output == real bytecode |
 | `make verifier` | sudo | Load the programs through the kernel verifier |
 | `make e2e` | sudo | 3-node netns overlay end-to-end |
-| `make ha` | sudo | HA pinned-maps kill+adopt smoke |
+| `make ha` | sudo | pinned-maps restart-adopt contract test |
 | `make tap-vm-smoke` | sudo + KVM | Boot a CirrOS VM on a real tap |
 | `make lab-up` | sudo | Bring up the clab + Talos fabric and deploy the two Helm charts |
 | `make lab-test` | sudo | Run the live multi-cluster suite against an up fabric |

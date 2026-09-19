@@ -56,10 +56,19 @@ pub fn ct_apply(data: usize, data_end: usize, ip_off: usize, e: &CtEntry) -> boo
     flowplane_core::conntrack::ct_apply(&mut pkt, ip_off, e)
 }
 
-/// Refresh last_seen (and TCP state for TCP) on a matched entry, writing it back.
+/// Refresh last_seen (and TCP state for TCP) on a matched entry and stamp `epoch` (read before the
+/// hook's firewall evaluation — see core `ct_needs_recheck`), writing it back.
 #[inline(always)]
-pub fn ct_touch(data: usize, data_end: usize, ip_off: usize, key: &CtKey, e: &mut CtEntry) {
+pub fn ct_touch(
+    data: usize,
+    data_end: usize,
+    ip_off: usize,
+    key: &CtKey,
+    e: &mut CtEntry,
+    epoch: u32,
+) {
     e.last_seen = now();
+    e.policy_epoch = epoch;
     if let Some(fl) = crate::parse::tcp_flags(data, data_end, ip_off) {
         e.tcp_state = tcp_advance(e.tcp_state, fl);
     }
@@ -69,10 +78,11 @@ pub fn ct_touch(data: usize, data_end: usize, ip_off: usize, key: &CtKey, e: &mu
 /// Insert a no-translation DEFAULT conntrack entry for a flow on conntrack-miss, so every flow is
 /// tracked (firewall + aging see it). Delegates to the single-sourced core `ct_create_default` so
 /// the default entry (fields + reverse-key pre-seed) lives in one place. `key` is already the
-/// forward key derived from the same packet at `ip_off`; core re-derives it identically.
+/// forward key derived from the same packet at `ip_off`; core re-derives it identically. `epoch` is
+/// the hook's pre-evaluation `FW_EPOCH` read.
 #[inline(always)]
-pub fn ct_ensure_default(data: usize, data_end: usize, ip_off: usize, key: &CtKey) {
+pub fn ct_ensure_default(data: usize, data_end: usize, ip_off: usize, key: &CtKey, epoch: u32) {
     let pkt = RawPkt::new(data, data_end);
     let mut maps = GlobalMaps;
-    flowplane_core::conntrack::ct_create_default(&pkt, &mut maps, ip_off, key.vni, now());
+    flowplane_core::conntrack::ct_create_default(&pkt, &mut maps, ip_off, key.vni, now(), epoch);
 }

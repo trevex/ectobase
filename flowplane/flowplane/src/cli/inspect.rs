@@ -20,11 +20,11 @@ pub async fn run(args: InspectArgs) -> anyhow::Result<()> {
         .context("xdp_inspect program missing")?
         .try_into()?;
     prog.load().context("verify xdp_inspect")?;
-    let mode = match prog.attach(&iface, aya::programs::XdpFlags::default()) {
+    let mode = match prog.attach(&iface, aya::programs::XdpMode::default()) {
         Ok(_) => "native/driver",
         Err(native_err) => {
             eprintln!("native attach failed ({native_err}), retrying with SKB_MODE");
-            prog.attach(&iface, aya::programs::XdpFlags::SKB_MODE)
+            prog.attach(&iface, aya::programs::XdpMode::Skb)
                 .with_context(|| format!("attach xdp_inspect to {iface} (SKB_MODE)"))?;
             "SKB/generic"
         }

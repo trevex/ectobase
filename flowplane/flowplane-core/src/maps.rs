@@ -13,6 +13,9 @@ pub trait Maps {
     fn fw_rule(&self, key: &FwRuleKey) -> Option<FwRule>;
     fn conntrack_get(&self, key: &CtKey) -> Option<CtEntry>;
     fn conntrack_insert(&mut self, key: CtKey, entry: CtEntry);
+    /// Remove a conntrack entry (absent is fine). Required: a no-op here would let a refused flow
+    /// keep the entries it created (see [`crate::conntrack::ct_forget_default`]).
+    fn conntrack_remove(&mut self, key: &CtKey);
     /// Firewall-only IPv6 conntrack lookup (`CONNTRACK6` map). DEFAULT `None`: the eBPF `GlobalMaps`
     /// has not wired the v6 firewall datapath yet, so v6 conntrack is simply absent there. The sim
     /// `MemMaps` overrides this with a real `HashMap`-backed store.
@@ -21,6 +24,9 @@ pub trait Maps {
     }
     /// Firewall-only IPv6 conntrack insert (`CONNTRACK6` map). DEFAULT no-op — see [`Self::conntrack6_get`].
     fn conntrack6_insert(&mut self, _key: CtKey6, _entry: CtEntry) {}
+    /// Firewall-only IPv6 conntrack remove (`CONNTRACK6` map). DEFAULT no-op, like the other v6
+    /// conntrack defaults; every backend that stores v6 entries must override it.
+    fn conntrack6_remove(&mut self, _key: &CtKey6) {}
     /// DSR reverse-LB address lookup (`DSR` map, B7b): keyed on the guest-reply 5-tuple
     /// (`invert_key(ct_key(forwarded))`). Holds the LB address a backend's reply must be reverse-SNAT'd to.
     /// Split out of `CONNTRACK`/`CtEntry` into its own compact LRU map so the DSR-create path does
@@ -46,6 +52,37 @@ pub trait Maps {
     /// IPv6 firewall rule slot (`FW_RULES6`). DEFAULT `None` — see [`Self::fw_meta6`].
     fn fw_rule6(&self, _key: &FwRuleKey) -> Option<flowplane_common::FwRule6> {
         None
+    }
+    /// Firewall classifier binding (`FW_BIND[ifindex]`): the interface's ingress/egress scopes +
+    /// policy generation. DEFAULT `None` — a backend without classifier wiring denies (see
+    /// [`crate::firewall::fw_classify`]).
+    fn fw_bind(&self, _ifindex: u32) -> Option<flowplane_common::FwBind> {
+        None
+    }
+    /// Stage 1 (`FW_CLASS[scope]`, v4): longest-prefix match of the peer address in the scope's
+    /// class trie → its class, or `None` when no class covers it. DEFAULT `None`.
+    fn fw_class4(&self, _scope: u64, _addr: &[u8; 4]) -> Option<u32> {
+        None
+    }
+    /// Stage 1 (`FW_CLASS6[scope]`), v6 sibling of [`Self::fw_class4`]. DEFAULT `None`.
+    fn fw_class6(&self, _scope: u64, _addr: &[u8; 16]) -> Option<u32> {
+        None
+    }
+    /// Stage 2 (`FW_POLICY[scope]`, v4): longest-prefix match of a full-length policy key in the
+    /// scope's policy trie → the matched entry's precedence. DEFAULT `None`.
+    fn fw_policy4(&self, _scope: u64, _key: &flowplane_common::FwPolKey) -> Option<u32> {
+        None
+    }
+    /// Stage 2 (`FW_POLICY6[scope]`), v6 sibling of [`Self::fw_policy4`]. DEFAULT `None`.
+    fn fw_policy6(&self, _scope: u64, _key: &flowplane_common::FwPolKey) -> Option<u32> {
+        None
+    }
+    /// The node's firewall epoch (`FW_EPOCH[0]`): bumped by the dataplane after every change of an
+    /// interface's scope binding. A forward conntrack entry stamped with an older epoch meets the
+    /// firewall again on its next packet (see [`crate::conntrack::ct_needs_recheck`]). DEFAULT 0: a
+    /// backend without the epoch never re-evaluates established flows on a policy change.
+    fn fw_epoch(&self) -> u32 {
+        0
     }
     fn lb_get(&self, key: &LbKey) -> Option<LbValue>;
     /// IPv6 LB service lookup (`LB6`), keyed on the FULL v6 address — see [`LbKey6`].

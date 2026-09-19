@@ -12,7 +12,7 @@ fn conntrack_entry_created_for_new_flow() {
     let key = ct_key(&pkt, 0, vni).expect("ct key");
     assert!(m.conntrack_get(&key).is_none());
     // `now: u64` is 0 in the native path (no bpf_ktime_get_ns).
-    ct_create_default(&pkt, &mut m, 0, vni, 0);
+    ct_create_default(&pkt, &mut m, 0, vni, 0, 0);
     assert!(m.conntrack_get(&key).is_some(), "forward CT entry inserted");
 }
 
@@ -41,7 +41,7 @@ fn flow_timeout_expires_idle_entry() {
     // Step 1: create the flow at t = 0 ns (last_seen = 0).
     let pkt = VecPkt::from_bytes(&tcp_v4([10, 0, 0, 5], [10, 0, 0, 10], 5000, 443));
     let fwd_key = ct_key(&pkt, 0, vni).expect("ct key");
-    ct_create_default(&pkt, &mut m, 0, vni, 0);
+    ct_create_default(&pkt, &mut m, 0, vni, 0, 0);
     assert!(
         m.conntrack_get(&fwd_key).is_some(),
         "forward CT entry must exist before timeout"
@@ -60,7 +60,7 @@ fn flow_timeout_expires_idle_entry() {
 
     // Step 4: a subsequent packet on the same 5-tuple is a miss (asserted above) — a new entry is
     // created, proving the expired flow is re-learned rather than treated as an existing hit.
-    ct_create_default(&pkt, &mut m, 0, vni, now_ns);
+    ct_create_default(&pkt, &mut m, 0, vni, now_ns, 0);
     let re_entry = m
         .conntrack_get(&fwd_key)
         .expect("new CT entry after re-injection");

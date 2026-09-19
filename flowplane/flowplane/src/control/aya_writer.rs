@@ -4,10 +4,10 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 
 use crate::maps::{
-    Conntrack, Conntrack6, DhcpConfigMap, DhcpMetaMap, FloatingIPs, FwMetaMap, FwMetaMap6, FwRules,
-    FwRules6, IfaceMetaMap, Interfaces, Interfaces6, Lb, Maglev, Meter, Nat, Nat6, NatCt6, NatIps,
-    NatIps6, NeighborNat, NeighborNat6, NeighborNat6Count, NeighborNatCount, PortMetaMap, Routes,
-    Routes6, Underlay,
+    Conntrack, Conntrack6, DhcpConfigMap, DhcpMetaMap, FloatingIPs, FwBindMap, FwEpochMap,
+    FwMetaMap, FwMetaMap6, FwRules, FwRules6, FwScopes, IfaceMetaMap, Interfaces, Interfaces6, Lb,
+    Maglev, Meter, Nat, Nat6, NatCt6, NatIps, NatIps6, NeighborNat, NeighborNat6,
+    NeighborNat6Count, NeighborNatCount, PortMetaMap, Routes, Routes6, Underlay,
 };
 use flowplane_common::{
     CtKey, CtKey6, FloatingIPKey, IfaceKey, IfaceKey6, IfaceMetaKey, IfaceMetaVal, IfaceValue,
@@ -43,6 +43,11 @@ pub struct AyaWriter {
     // IPv6 FIREWALL domain: v6 rule slots + per-direction rule counts (FW_RULES6 / FW_META6).
     pub fw_rules6: FwRules6,
     pub fw_meta6: FwMetaMap6,
+    // FIREWALL classifier: interface -> scopes binding, the scopes' tries, and the epoch that
+    // carries a binding change to established flows.
+    pub fw_bind: FwBindMap,
+    pub fw_scopes: FwScopes,
+    pub fw_epoch: FwEpochMap,
     // INTERFACE + QoS + DHCP domain: the last config maps, moved out of `Inner`. After
     // this, `AyaWriter` owns ALL config maps and `Inner` holds only device/loader fields + `core`.
     pub ports: PortMetaMap,
@@ -290,6 +295,31 @@ impl MapWriter for AyaWriter {
     }
     fn fw_meta6_upsert(&mut self, i: u32, v: flowplane_common::FwMeta) -> anyhow::Result<()> {
         self.fw_meta6.upsert(i, v)
+    }
+    fn fw_scope_create(&mut self, scope: &flowplane_control::fwclass::Scope) -> anyhow::Result<()> {
+        self.fw_scopes.create(scope)
+    }
+    fn fw_scope_delete(&mut self, id: u64) -> anyhow::Result<()> {
+        self.fw_scopes.delete(id)
+    }
+    fn fw_bind_upsert(
+        &mut self,
+        ifindex: u32,
+        val: flowplane_common::FwBind,
+    ) -> anyhow::Result<()> {
+        self.fw_bind.upsert(ifindex, val)
+    }
+    fn fw_bind_remove(&mut self, ifindex: u32) -> anyhow::Result<()> {
+        self.fw_bind.remove(ifindex)
+    }
+    fn fw_epoch_bump(&mut self) -> anyhow::Result<()> {
+        self.fw_epoch.bump()
+    }
+    fn fw_bind_entries(&self) -> Vec<(u32, flowplane_common::FwBind)> {
+        self.fw_bind.entries()
+    }
+    fn fw_scope_ids(&self) -> Vec<u64> {
+        self.fw_scopes.ids()
     }
     fn meter_upsert(&mut self, i: u32, v: flowplane_common::MeterState) -> anyhow::Result<()> {
         self.meter.upsert(i, v)

@@ -1,9 +1,12 @@
 use flowplane_common::{
-    CtEntry, CtEntry6, CtKey, CtKey6, DhcpConfig, DhcpMeta, DsrLbIP, FwMeta, FwRule, FwRuleKey,
-    IfaceValue, LbBackend, LbKey, LbValue, Local, MaglevKey, MeterState, NatKey, NatKey6, NatValue,
-    NatValue6, NeighborNat6Entry, NeighborNatEntry, PortMeta, RouteValue, UnderlayValue,
+    CtEntry, CtEntry6, CtKey, CtKey6, DhcpConfig, DhcpMeta, DsrLbIP, FwBind, FwMeta, FwPolKey,
+    FwRule, FwRuleKey, IfaceValue, LbBackend, LbKey, LbValue, Local, MaglevKey, MeterState, NatKey,
+    NatKey6, NatValue, NatValue6, NeighborNat6Entry, NeighborNatEntry, PortMeta, RouteValue,
+    UnderlayValue, FW_DIR_EGRESS, FW_DIR_INGRESS, FW_MAX_RULES,
 };
+use flowplane_control::fwclass::{compile_scope, Scope};
 use flowplane_core::maps::Maps;
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
 /// An IPv4 route as stored in the sim `ROUTES` LPM trie: a `(vni, ipv4/prefix)` key plus its
@@ -83,6 +86,42 @@ pub struct MemMaps {
     pub ifaces6: HashMap<(u32, [u8; 16]), IfaceValue>,
     /// 1:1 floating-IP map (`FLOATING_IPS`), keyed `(vni, V)` → guest `G`. Seed with [`Self::add_floating_ip`].
     pub floating_ips: HashMap<(u32, [u8; 4]), [u8; 4]>,
+    /// Firewall classifier binding (`FW_BIND[ifindex]`).
+    pub fw_bind: HashMap<u32, FwBind>,
+    /// Per-scope v4 peer-class tries (`FW_CLASS[scope]`): `(addr, prefix_len, class)`, matched by
+    /// longest prefix like the eBPF inner LPM trie.
+    pub fw_class4: HashMap<u64, Vec<([u8; 4], u8, u32)>>,
+    /// Per-scope v6 peer-class tries (`FW_CLASS6[scope]`).
+    pub fw_class6: HashMap<u64, Vec<([u8; 16], u8, u32)>>,
+    /// Per-scope v4 policy tries (`FW_POLICY[scope]`): `(prefix_len, key, precedence)`, the prefix
+    /// counted over the key's bytes in memory order (class, proto, big-endian port).
+    pub fw_policy4: HashMap<u64, Vec<(u32, FwPolKey, u32)>>,
+    /// Per-scope v6 policy tries (`FW_POLICY6[scope]`).
+    pub fw_policy6: HashMap<u64, Vec<(u32, FwPolKey, u32)>>,
+    /// The node's firewall epoch (`FW_EPOCH[0]`). Bump it after changing a binding (or the legacy
+    /// seeds a binding is derived from) to have established flows meet the new policy.
+    pub fw_epoch: u32,
+    /// Scopes DERIVED from the legacy rule-slot seeds (`fw_meta`/`fw_rules`,
+    /// `fw_meta6`/`fw_rules6`) for an interface with no explicit `fw_bind` entry — see
+    /// [`MemMaps::derived_bind`].
+    derived_scopes: RefCell<HashMap<u64, Scope>>,
+}
+
+/// The bytes an LPM trie compares for a policy key: class (native byte order, always matched in
+/// full), proto, port (big-endian). The pad byte is never covered by a prefix.
+fn pol_key_bytes(k: &FwPolKey) -> [u8; 7] {
+    let c = k.class.to_ne_bytes();
+    [c[0], c[1], c[2], c[3], k.proto, k.port[0], k.port[1]]
+}
+
+/// Longest-prefix match over a sim policy trie for a full-length key → the entry's precedence.
+fn policy_lpm(entries: Option<&Vec<(u32, FwPolKey, u32)>>, key: &FwPolKey) -> Option<u32> {
+    let want = pol_key_bytes(key);
+    entries?
+        .iter()
+        .filter(|(plen, k, _)| prefix_match(&pol_key_bytes(k), &want, *plen as u8))
+        .max_by_key(|(plen, _, _)| *plen)
+        .map(|(_, _, prec)| *prec)
 }
 
 /// True if the first `prefix` bits of `a` and `b` (big-endian byte order) are equal.
@@ -100,6 +139,50 @@ fn prefix_match(a: &[u8], b: &[u8], prefix: u8) -> bool {
 }
 
 impl MemMaps {
+    /// The classifier binding the dataplane would program for an interface seeded through the legacy
+    /// rule slots: its slot lists (in slot order, a direction included only if its count is non-zero
+    /// — exactly what the old evaluator scanned) compiled with the dataplane's own
+    /// `fwclass::compile_scope`, the scopes cached for the stage lookups. Scenario tests keep seeding
+    /// rule lists; the classifier is what evaluates them.
+    fn derived_bind(&self, ifindex: u32) -> Option<FwBind> {
+        let (m4, m6) = (self.fw_meta.get(&ifindex), self.fw_meta6.get(&ifindex));
+        if m4.is_none() && m6.is_none() {
+            return None;
+        }
+        let counted = |m: Option<&FwMeta>, dir: u8| {
+            m.is_some_and(|m| {
+                if dir == FW_DIR_EGRESS {
+                    m.egress_count > 0
+                } else {
+                    m.ingress_count > 0
+                }
+            })
+        };
+        let mut bind = FwBind::default();
+        for dir in [FW_DIR_INGRESS, FW_DIR_EGRESS] {
+            let v4: Vec<FwRule> = (0..FW_MAX_RULES)
+                .filter_map(|i| self.fw_rules.get(&(ifindex, i)).copied())
+                .filter(|_| counted(m4, dir))
+                .collect();
+            let v6: Vec<flowplane_common::FwRule6> = (0..FW_MAX_RULES)
+                .filter_map(|i| self.fw_rules6.get(&(ifindex, i)).copied())
+                .filter(|_| counted(m6, dir))
+                .collect();
+            let scope = compile_scope(dir, v4.iter(), v6.iter()).unwrap_or_else(|e| {
+                panic!("sim seed for ifindex {ifindex} cannot be compiled for the classifier: {e}")
+            });
+            if let Some(s) = scope {
+                if dir == FW_DIR_EGRESS {
+                    bind.egress_scope = s.id;
+                } else {
+                    bind.ingress_scope = s.id;
+                }
+                self.derived_scopes.borrow_mut().insert(s.id, s);
+            }
+        }
+        Some(bind)
+    }
+
     /// Add an exact-host (`/32`) IPv4 route — the common case for the datapath tests/anchor.
     pub fn add_route4(&mut self, vni: u32, ipv4: [u8; 4], value: RouteValue) {
         self.routes4.push(Route4 {
@@ -155,6 +238,12 @@ impl Maps for MemMaps {
     fn conntrack_insert(&mut self, key: CtKey, entry: CtEntry) {
         self.conntrack.insert(key, entry);
     }
+    fn conntrack_remove(&mut self, key: &CtKey) {
+        self.conntrack.remove(key);
+    }
+    fn conntrack6_remove(&mut self, key: &CtKey6) {
+        self.conntrack6.remove(key);
+    }
     fn conntrack6_get(&self, key: &CtKey6) -> Option<CtEntry> {
         self.conntrack6.get(key).copied()
     }
@@ -178,6 +267,63 @@ impl Maps for MemMaps {
     }
     fn fw_rule6(&self, key: &FwRuleKey) -> Option<flowplane_common::FwRule6> {
         self.fw_rules6.get(&(key.ifindex, key.idx)).copied()
+    }
+    fn fw_epoch(&self) -> u32 {
+        self.fw_epoch
+    }
+    fn fw_bind(&self, ifindex: u32) -> Option<FwBind> {
+        match self.fw_bind.get(&ifindex) {
+            Some(b) => Some(*b),
+            None => self.derived_bind(ifindex),
+        }
+    }
+    fn fw_class4(&self, scope: u64, addr: &[u8; 4]) -> Option<u32> {
+        let derived = self.derived_scopes.borrow();
+        let classes = match self.fw_class4.get(&scope) {
+            Some(c) => c,
+            None => &derived.get(&scope)?.v4.classes,
+        };
+        classes
+            .iter()
+            .filter(|(a, len, _)| prefix_match(a, addr, *len))
+            .max_by_key(|(_, len, _)| *len)
+            .map(|(_, _, class)| *class)
+    }
+    fn fw_class6(&self, scope: u64, addr: &[u8; 16]) -> Option<u32> {
+        let derived = self.derived_scopes.borrow();
+        let classes = match self.fw_class6.get(&scope) {
+            Some(c) => c,
+            None => &derived.get(&scope)?.v6.classes,
+        };
+        classes
+            .iter()
+            .filter(|(a, len, _)| prefix_match(a, addr, *len))
+            .max_by_key(|(_, len, _)| *len)
+            .map(|(_, _, class)| *class)
+    }
+    fn fw_policy4(&self, scope: u64, key: &FwPolKey) -> Option<u32> {
+        match self.fw_policy4.get(&scope) {
+            Some(p) => policy_lpm(Some(p), key),
+            None => policy_lpm(
+                self.derived_scopes
+                    .borrow()
+                    .get(&scope)
+                    .map(|s| &s.v4.policy),
+                key,
+            ),
+        }
+    }
+    fn fw_policy6(&self, scope: u64, key: &FwPolKey) -> Option<u32> {
+        match self.fw_policy6.get(&scope) {
+            Some(p) => policy_lpm(Some(p), key),
+            None => policy_lpm(
+                self.derived_scopes
+                    .borrow()
+                    .get(&scope)
+                    .map(|s| &s.v6.policy),
+                key,
+            ),
+        }
     }
     fn lb_get(&self, key: &LbKey) -> Option<LbValue> {
         self.lb.get(key).copied()

@@ -441,7 +441,8 @@ impl SimNode {
     /// Guest egress (`tc_guest_egress_v6` → `forward_decision_v6`) for the NATIVE IPv6→IPv6 forwarding
     /// path. `frame` is a full guest Ethernet frame `[InnerEth(14)][IPv6(40)][L4]` whose dst is NOT in
     /// the NAT64 prefix; `meta` is the sending port's `PortMeta`. Composes the REAL shared core stages
-    /// (`egress_fw_ct6` + `route_decision6`) the eBPF `forward_decision_v6` delegates to, via
+    /// (`egress_fw_ct6` — whose parts the eBPF runs as sequential frames — + `route_decision6`) the
+    /// eBPF `forward_decision_v6` delegates to, via
     /// [`flowplane_core::datapath::process_guest_tx_v6`]:
     ///   1. egress firewall + firewall-only v6 conntrack (deny-by-default on a fresh flow);
     ///   2. route6 + deliver → Local tap (inner-Eth rewrite) | Encap (`TunnelEncap` decision) | Pass;

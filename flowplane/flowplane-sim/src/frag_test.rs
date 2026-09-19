@@ -141,7 +141,7 @@ fn snat_drops_a_non_first_fragment_rather_than_leaking_the_guest_source() {
 
     let raw = make_non_first_fragment(ipv4_tcp(&PORTLIKE_PAYLOAD), 185);
     let mut pkt = VecPkt::from_bytes(&raw);
-    let out = snat_egress(&mut pkt, &mut m, 0, VNI, true, 0);
+    let out = snat_egress(&mut pkt, &mut m, 0, VNI, true, 0, 0);
 
     assert_ne!(
         out,

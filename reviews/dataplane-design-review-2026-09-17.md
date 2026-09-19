@@ -164,6 +164,13 @@ thousands, and (b) make NAT/public route-bus records subscription-scoped with a 
 keyed map (`(nat_ip, port_block)` hashmap, not a 64-slot scanned array) — both are
 self-contained increments.
 
+**Found later (2026-09-19, firewall redesign increment B): same-node conntrack bypass — FIXED**
+(`fix(datapath): a flow the destination refuses must not ride conntrack`). Same-node delivery
+enforced the destination's ingress firewall only on a NEW flow, after the flow's conntrack entries
+(forward + pre-seeded reverse) had already been created; a refused flow's later packets were CT hits
+and were delivered, and the destination could reach the source along the reverse entry past both
+firewalls. v4 and v6, sim and eBPF. The refusal now removes the entries the flow created.
+
 ## 3. Control-plane resilience gaps (P1)
 
 1. ~~**NAT/public channel has no snapshot-prune.**~~ **FIXED** (`a334ef8`). The reflector
@@ -237,11 +244,23 @@ self-contained increments.
   apiserver integration test (markers never run there). Still open: VPC VNI pin range-check and
   NATGateway validation. Also still open, found on the way: the other `Validate` hooks
   (Subnet, NIC, LB, LBPool) implement create only — an update bypasses them.
-- **Policy revocation doesn't reach established flows for up to 24 h** — firewall changes
-  never touch conntrack (`handlers.rs:415-453`), and established TCP ages at 24 h. GCP
-  applies rule changes to established flows. **Fix:** on rule revocation, sweep conntrack
-  for entries the new rule-set would deny (userspace walk is fine at 5s cadence), or at
-  least make the behavior an explicit documented contract.
+- ~~**Policy revocation doesn't reach established flows for up to 24 h**~~ **FIXED**
+  (firewall redesign increment B5, branch `fw/b-classifier`) — not by a sweep: a node-wide
+  firewall epoch (`FW_EPOCH`), bumped after every `FW_BIND` change, is stamped into each
+  conntrack entry (`CtEntry.policy_epoch`, carved from the pad; 24 B unchanged). A FORWARD
+  entry hit under an older epoch meets the firewall again at that hook (guest egress v4/v6
+  incl. the same-node destination check, uplink ingress v4/v6); a refusal drops and forgets
+  the flow. Pre-seeded reverse entries carry `CT_F_REPLY` and, like NAT reverse entries, are
+  never re-evaluated. A bare TCP SYN on a tracked tuple is always re-evaluated (Calico's
+  port-reuse rule). The stamp is the epoch read BEFORE the evaluation, and the dataplane
+  writes the binding before it bumps, so a racing change can only cause an extra
+  re-evaluation, never a stale verdict marked current. Hardware-offloaded flows: a stale
+  forward entry stops being offload-eligible, so the manager withdraws it within one
+  reconcile interval. Contract documented in `docs/features/firewall.md` ("Connections and
+  policy changes"). Correction to the plan: it put a per-scope generation in `FwMeta`; a
+  per-interface or per-scope stamp cannot cover the same-node path (two interfaces'
+  policies, one u8/u32 slot), and a node-wide epoch costs one array read per packet instead
+  of a hash lookup — every forward flow on the node re-evaluates once per change.
 - Peering: non-transitivity is enforced structurally (good — matches GCP); overlap
   non-rejection is a deliberate deviation (local-precedence). Fine, but surface a warning
   condition on the peering when exposed prefixes overlap the local VPC's subnets.
@@ -265,6 +284,8 @@ get mirrored, and each gap is individually "known" but the set is growing.
   flow is GC'd at the 24 h established timeout, tearing down the HW filter and forcing a
   fresh firewall evaluation mid-flow (`offload.rs` vs `conntrack_gc.rs`). **Fix:** have
   the offload manager write back liveness to the CT entry when HW counters advance.
+  (Since B5 the manager also withdraws flows whose conntrack epoch is stale, so a policy
+  change reaches offloaded flows within one reconcile interval; liveness is still open.)
 - **Sim-oracle coverage:** floating-IP egress SNAT/DNAT lives only in raw eBPF
   (`flowplane-ebpf/src/floatingip.rs`), outside `flowplane-core` — it is invisible to the
   sim oracle, violating the project's own "sim must test all cases" rule. Move it into
@@ -308,7 +329,7 @@ get mirrored, and each gap is individually "known" but the set is growing.
    doc making every remaining map ceiling an explicit budget.
 5. **Policy semantics:** ~~firewall priority field, DefaultPolicy wire-or-delete,
    FirewallPolicy admission validation~~ (done, firewall redesign increment A),
-   revocation-vs-established-flows contract (increment B: CT epoch).
+   ~~revocation-vs-established-flows contract~~ (done, increment B5: CT epoch).
 6. **Symmetry debt:** v6 conntrack aging, v6 ingress policing, floating-IP into core (sim
    coverage), offload liveness write-back, multi-NIC container fix.
 7. **Docs sweep** (one PR, list above).

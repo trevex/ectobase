@@ -257,7 +257,7 @@ sim-anchor: verifier ## Privileged BPF_PROG_TEST_RUN byte-parity anchors (native
 	sudo -E $$(command -v cargo) test -p flowplane --test anchor_uplink -- --ignored    # uplink_rx fails safe (base N-S)
 	sudo -E $$(command -v cargo) test -p flowplane --test anchor_lb -- --ignored         # uplink_rx fails safe (LB local-deliver)
 	sudo -E $$(command -v cargo) test -p flowplane --test anchor_dnat -- --ignored       # uplink_rx fails safe (DNAT return)
-	sudo -E $$(command -v cargo) test -p flowplane --test anchor_guest_tx -- --ignored   # tc_guest_tx encap: redirect + inner-unchanged
+	sudo -E $$(command -v cargo) test -p flowplane --test anchor_guest_tx -- --ignored   # tc_guest_tx encap + fw classifier v4/v6 + CT epoch
 	sudo -E $$(command -v cargo) test -p flowplane --test anchor_dhcp -- --ignored       # tc_guest_dhcp DHCPv4 OFFER (native + golden)
 	# NOT YET ANCHORED (coverage gaps, tracked separately — do not assume these are covered):
 	#   - tc_guest_dhcp DHCPv6 ADVERTISE/REPLY (only the DHCPv4 OFFER is byte-anchored above).
@@ -270,8 +270,11 @@ e2e: ## 3-node netns end-to-end overlay test (needs sudo)
 	./test/netns-e2e.sh run
 
 .PHONY: ha
-ha: ## HA pinned-maps smoke (kill+adopt; needs sudo)
-	./test/ha-smoke.sh run
+ha: ## Pinned-maps restart-adopt contract through the real Control, in private namespaces (needs sudo)
+	# Exit + adopt: pinned maps are re-bound, the IFACE_META journal rebuilds the bookkeeping and
+	# the pinned guest link is re-pointed. Forwarding continuity across a pod restart is the live
+	# lab's TestRestartContinuity.
+	sudo -E $$(command -v cargo) test -p flowplane --bin flowplane adopt_test -- --ignored
 
 .PHONY: tap-dhcp-probe
 tap-dhcp-probe: ## Native-mode DHCP frame-growth fidelity probe on a real tap (needs sudo)

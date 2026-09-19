@@ -20,6 +20,8 @@ use crate::maps::{
 
 // The `impl Control` blocks are split by domain into these child modules. Each is pure code
 // movement out of this file; they reach `Inner`'s private state via `super`.
+#[cfg(test)]
+mod adopt_test;
 mod aya_writer;
 mod bringup;
 mod firewall;
@@ -226,6 +228,18 @@ impl Control {
     /// v6 sibling of [`Control::route_lookup_v4`] (`ROUTES6`).
     pub fn route_lookup_v6(&self, vni: u32, dst: [u8; 16]) -> Option<RouteValue> {
         self.inner.lock().core.writer().routes6.get(vni, dst)
+    }
+
+    /// The node's firewall epoch (`FW_EPOCH[0]`); 0 if unreadable, which only makes entries look
+    /// stale (never current) to the offload manager.
+    pub fn fw_epoch(&self) -> u32 {
+        self.inner
+            .lock()
+            .core
+            .writer()
+            .fw_epoch
+            .get()
+            .unwrap_or(0)
     }
 
     /// Whether `tap`'s `PORT_META` entry is offload-eligible (`offloaded == 1`); `false` if the

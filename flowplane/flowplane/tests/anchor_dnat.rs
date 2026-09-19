@@ -95,7 +95,8 @@ fn reverse_ct_entry() -> CtEntry {
         flags: CT_REWRITE_DST | CT_F_SRC_NAT,
         tcp_state: 0,
         fwall_action: 0,
-        _pad: [0; 7],
+        _pad: [0; 3],
+        policy_epoch: 0,
     }
 }
 
@@ -235,7 +236,7 @@ fn dnat_return_bytecode_fails_safe_without_tunnel_key() {
         .tempdir_in("/sys/fs/bpf")
         .expect("bpffs tempdir");
     let mut ebpf = aya::EbpfLoader::new()
-        .map_pin_path(pin.path())
+        .default_map_pin_directory(pin.path())
         .load(bytes)
         .expect("load compiled eBPF object");
 
