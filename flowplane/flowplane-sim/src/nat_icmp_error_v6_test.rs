@@ -273,7 +273,7 @@ fn owner_drops_an_icmpv6_error_for_an_unknown_flow() {
 fn edge_relays_the_icmpv6_error_to_the_port_block_owner() {
     let mut e = SimNode::with_local(local_for(EDGE_UL));
     e.maps.local = Some(local_for(EDGE_UL));
-    e.maps.neighbor_nat6.push(NeighborNat6Entry {
+    e.maps.add_neighbor_nat6(NeighborNat6Entry {
         underlay: OWNER_UL,
         nat_ip6: NAT_IP6,
         vni: VNI,

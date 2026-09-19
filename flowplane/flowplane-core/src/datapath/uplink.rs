@@ -51,7 +51,7 @@ pub struct UplinkIn<'a> {
 /// Mechanism TWO (NAT-return) and mechanism THREE (LB remote-backend /
 /// neighbor-NAT relay) are resolved by their own callers instead — a plain `ROUTES`/`ROUTES6` lookup
 /// on the CURRENT packet bytes isn't the right tool for those (mechanism TWO keys off the reverse
-/// conntrack entry's restored guest IP, not the packet; mechanism THREE keys off `NEIGHBOR_NAT`, not
+/// conntrack entry's restored guest IP, not the packet; mechanism THREE keys off `NAT_OWNERS`, not
 /// `ROUTES`) — but mechanism TWO's callers reuse THIS resolver once they have the restored guest IP,
 /// since that address is exactly what the guest's own self-route is keyed on. Protocol-agnostic (the
 /// `tap_ifindex`/`guest_mac` a v4 self-route and a v6 self-route resolve to look identical) — shared
@@ -351,7 +351,9 @@ pub fn process_uplink<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &UplinkIn
                 // node (an owned nat_ip instead demuxes via the CT-based `nat_guest` path one level up,
                 // in `process_uplink_rx`). Mirrors ingress.rs's "Neighbor NAT" block.
                 if let Some((_proto, _sport, dport)) = l4_ports(&*pkt, inner_off) {
-                    if let Some(owner_ul) = maps.neighbor_nat_lookup(in_.vni, dst, dport) {
+                    if let Some(owner_ul) =
+                        crate::nat::neighbor_nat_owner(&*maps, in_.vni, &dst, dport)
+                    {
                         let tunnel = reforward(in_.vni, &owner_ul);
                         return UplinkOut {
                             action: Action::Redirect(in_.local.uplink_ifindex),
@@ -493,12 +495,12 @@ fn uplink_track_flow6<P: Pkt, M: Maps>(
 /// [`process_uplink`], sharing the core orchestrator shape so the sim and the eBPF program run the
 /// same code:
 ///   1. `lb_select_forward_v6` → local backend (deliver to its tap) | remote (reforward, no decap) |
-///      None → mechanisms #1/#4 (`resolve_uplink_target6`) — v6 has NO mechanism #3 (neighbor-NAT
-///      relay is a v4-only NAT_IPS/NEIGHBOR_NAT concept; there is no v6 NAT) and NO mechanism #2
-///      caller (v6 has no NAT-return/NAT64-return dispatch — those translate a v4 inner, so they can
-///      only ever be reached via the v4 [`process_uplink_rx`]). A `ROUTES6` miss that is also not the
-///      WAN-edge sentinel is a genuine miss: **`Drop`, fail-closed** — a decapped overlay v6 frame
-///      with no legitimate local claimant must never leak into the local kernel netns;
+///      None → mechanism #3 (NAT66 neighbor-NAT relay, [`Maps::nat_owner6`]) then mechanisms #1/#4
+///      (`resolve_uplink_target6`) — v6 has NO mechanism #2 caller (v6 has no NAT-return/NAT64-return
+///      dispatch — those translate a v4 inner, so they can only ever be reached via the v4
+///      [`process_uplink_rx`]). A `ROUTES6` miss that is also not the WAN-edge sentinel is a genuine
+///      miss: **`Drop`, fail-closed** — a decapped overlay v6 frame with no legitimate local
+///      claimant must never leak into the local kernel netns;
 ///   2. ingress firewall on the inner v6 5-tuple against the deliver tap (new-flow gate);
 ///   3. conntrack6 create-on-miss / refresh-on-hit, **skipped for LB** (DSR, no ct — mirrors
 ///      [`process_uplink`] step 3 exactly: LB is stateless-firewalled, every packet re-checked,
@@ -580,7 +582,9 @@ pub fn process_uplink_v6<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &Uplin
             // ANOTHER node (an OWNED nat_ip6 instead demuxes via the CT-based return path at the top
             // of this fn). Mirror of v4 `process_uplink`'s neighbor-NAT relay.
             if let Some((_proto, _sport, dport)) = l4_ports_v6(&*pkt, inner_off) {
-                if let Some(owner_ul) = maps.neighbor_nat_lookup6(in_.vni, dst, dport) {
+                if let Some(owner_ul) =
+                    crate::nat::neighbor_nat_owner6(&*maps, in_.vni, &dst, dport)
+                {
                     let tunnel = reforward(in_.vni, &owner_ul);
                     return UplinkOut {
                         action: Action::Redirect(in_.local.uplink_ifindex),

@@ -28,14 +28,13 @@ pub struct WanRxOut {
 
 /// Edge WAN-LB address ingress, in place on `pkt`. Mirrors `ingress.rs::try_wan_rx`: dispatch on ethertype
 /// (offset 12) — 0x86DD → v6 core select; else v4 core select, falling back to mechanism #3
-/// (neighbor-NAT relay, v4-only — `NEIGHBOR_NAT` has no v6 WAN-return path) on an LB miss. On a
+/// (neighbor-NAT relay, both families — [`Maps::nat_owner`]/[`Maps::nat_owner6`]) on an LB miss. On a
 /// LB address hit or a neighbor-NAT relay hit, emit the tunnel-key decision (no byte write — see
 /// [`TunnelEncap`]) → `Redirect(uplink_ifindex)`; else `Pass`. The WAN LB service space is `vni = 0`
-/// (mirrors the `lb_select_forward*(.., 0)` lookup below). The relay hit uses the REAL owner VNI
-/// from [`Maps::neighbor_nat_lookup_any`]. The eBPF `try_wan_rx` (ingress.rs:452) discards it
-/// (`let (owner_ul, _vni) = ..`); without the owner's VNI, the relayed packet's tunnel key would
-/// carry the WRONG VNI and the owner's peer-independent reverse conntrack key
-/// `(vni,0,nat_ip,0,nat_port)` would never match.
+/// (mirrors the `lb_select_forward*(.., 0)` lookup below). The relay hit carries the REAL owner VNI
+/// from `Maps::nat_owner{,6}` — the edge has no VNI of its own to relay with, and without the
+/// owner's VNI the relayed packet's tunnel key would carry the WRONG VNI and the owner's
+/// peer-independent reverse conntrack key `(vni,0,nat_ip,0,nat_port)` would never match.
 pub fn process_wan_rx<P: Pkt, M: Maps>(pkt: &mut P, maps: &M, in_: &WanRxIn) -> WanRxOut {
     let ethertype = match pkt.read_array::<2>(12) {
         Some(b) => u16::from_be_bytes(b),
@@ -132,12 +131,12 @@ pub fn process_wan_rx<P: Pkt, M: Maps>(pkt: &mut P, maps: &M, in_: &WanRxIn) -> 
             let relay_port = nat_icmp_error_relay_port(&*pkt, ETH_LEN, &dst)
                 .or_else(|| l4_ports(&*pkt, ETH_LEN).map(|(_proto, _sport, dport)| dport));
             if let Some(port) = relay_port {
-                if let Some((owner_ul, owner_vni)) = maps.neighbor_nat_lookup_any(dst, port) {
+                if let Some(owner) = maps.nat_owner(&dst, port) {
                     return WanRxOut {
                         action: Action::Redirect(in_.local.uplink_ifindex),
                         tunnel: Some(TunnelEncap {
-                            vni: owner_vni,
-                            remote: owner_ul,
+                            vni: owner.vni,
+                            remote: owner.underlay,
                         }),
                         dsr: None,
                     };
@@ -147,7 +146,7 @@ pub fn process_wan_rx<P: Pkt, M: Maps>(pkt: &mut P, maps: &M, in_: &WanRxIn) -> 
     }
     // Mechanism #3 (WAN-edge sub-case), v6: a plain WAN-arriving IPv6 packet destined to a nat_ip6
     // block owned by some node, relayed toward the owner WITH the owner's real VNI. Mirror of the v4
-    // arm above via `neighbor_nat_lookup_any6`.
+    // arm above via `Maps::nat_owner6`.
     if ethertype == 0x86DD {
         if let Some(dst) = pkt.read_array::<16>(ETH_LEN + 24) {
             // Same ICMPv6-error preference as the v4 arm above: the owning port block is named by
@@ -155,12 +154,12 @@ pub fn process_wan_rx<P: Pkt, M: Maps>(pkt: &mut P, maps: &M, in_: &WanRxIn) -> 
             let relay_port = nat_icmp_error_relay_port6(&*pkt, ETH_LEN, &dst)
                 .or_else(|| l4_ports_v6(&*pkt, ETH_LEN).map(|(_proto, _sport, dport)| dport));
             if let Some(dport) = relay_port {
-                if let Some((owner_ul, owner_vni)) = maps.neighbor_nat_lookup_any6(dst, dport) {
+                if let Some(owner) = maps.nat_owner6(&dst, dport) {
                     return WanRxOut {
                         action: Action::Redirect(in_.local.uplink_ifindex),
                         tunnel: Some(TunnelEncap {
-                            vni: owner_vni,
-                            remote: owner_ul,
+                            vni: owner.vni,
+                            remote: owner.underlay,
                         }),
                         dsr: None,
                     };

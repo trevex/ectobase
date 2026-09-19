@@ -29,6 +29,34 @@ const IPPROTO_ICMPV6: u8 = 58;
 /// Max reverse-key probes when picking a source port. Mirrors the eBPF `nat::PROBE_LIMIT`.
 pub const PROBE_LIMIT: u16 = 64;
 
+/// The owning node's underlay for a packet to `dst:dport` that arrived in `vni` — the node-side
+/// relay (`uplink_rx` mechanism #3). Blocks are keyed without a VNI (ranges never overlap per
+/// nat_ip, in any VNI), so a block of another VNI is not this packet's.
+#[inline(always)]
+pub fn neighbor_nat_owner<M: Maps>(
+    maps: &M,
+    vni: u32,
+    dst: &[u8; 4],
+    dport: u16,
+) -> Option<[u8; 16]> {
+    maps.nat_owner(dst, dport)
+        .filter(|o| o.vni == vni)
+        .map(|o| o.underlay)
+}
+
+/// IPv6 sibling of [`neighbor_nat_owner`].
+#[inline(always)]
+pub fn neighbor_nat_owner6<M: Maps>(
+    maps: &M,
+    vni: u32,
+    dst: &[u8; 16],
+    dport: u16,
+) -> Option<[u8; 16]> {
+    maps.nat_owner6(dst, dport)
+        .filter(|o| o.vni == vni)
+        .map(|o| o.underlay)
+}
+
 /// Outcome of an egress SNAT attempt.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SnatOutcome {

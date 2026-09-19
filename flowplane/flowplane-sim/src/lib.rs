@@ -66,6 +66,8 @@ mod nat_icmp_error_v6_test;
 #[cfg(test)]
 mod nat_test;
 #[cfg(test)]
+mod neighbor_nat_test;
+#[cfg(test)]
 mod ns_scenario_test;
 #[cfg(test)]
 mod ns_scenario_v6_test;

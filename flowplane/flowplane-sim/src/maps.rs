@@ -1,8 +1,8 @@
 use flowplane_common::{
     CtEntry, CtEntry6, CtKey, CtKey6, DhcpConfig, DhcpMeta, DsrLbIP, FwBind, FwPolKey, FwRule,
     FwRule6, IfaceValue, LbBackend, LbKey, LbValue, Local, MaglevKey, MeterState, NatKey, NatKey6,
-    NatValue, NatValue6, NeighborNat6Entry, NeighborNatEntry, PortMeta, RouteValue, UnderlayValue,
-    FW_DIR_EGRESS, FW_DIR_INGRESS,
+    NatOwner, NatOwnerKey, NatOwnerKey6, NatValue, NatValue6, NeighborNat6Entry, NeighborNatEntry,
+    PortMeta, RouteValue, UnderlayValue, FW_DIR_EGRESS, FW_DIR_INGRESS,
 };
 use flowplane_control::fwclass::{compile_scope, Scope};
 use flowplane_core::maps::Maps;
@@ -55,10 +55,9 @@ pub struct MemMaps {
     /// src ip+port are zeroed so the CT lookup hits the globally-unique `(vni,0,nat_ip,0,nat_port)`
     /// reverse entry the egress allocator stored.
     pub nat_ips: HashSet<(u32, [u8; 4])>,
-    /// Neighbor-NAT return-route table (`NEIGHBOR_NAT`), linear-scanned like the eBPF array — see
-    /// `Maps::neighbor_nat_lookup`. Tests populate directly (`m.neighbor_nat.push(..)`), mirroring
-    /// how `m.lb`/`m.maglev` are seeded.
-    pub neighbor_nat: Vec<NeighborNatEntry>,
+    /// Neighbor-NAT owners (`NAT_OWNERS`): `(prefix_len, key, owner)` entries, matched by longest
+    /// prefix over `[nat_ip ++ port]` like the kernel trie. Seed with [`Self::add_neighbor_nat`].
+    pub nat_owners4: Vec<(u32, NatOwnerKey, NatOwner)>,
     /// NAT66 (v6 network SNAT) config (`NAT6` map), keyed `(vni, guest-ipv6)`.
     pub nat6: HashMap<NatKey6, NatValue6>,
     /// Registered NAT66 public source IPs (`NAT_IPS6`), keyed `(vni, ipv6)` — v6 sibling of `nat_ips`.
@@ -66,8 +65,8 @@ pub struct MemMaps {
     /// Dedicated NAT66 conntrack (`NAT_CT6`), fwd + reverse xlate — the v4 `conntrack`'s xlate is
     /// v4-only, so v6 NAT gets its own CtKey6->CtEntry6 map.
     pub nat_ct6: HashMap<CtKey6, CtEntry6>,
-    /// NAT66 neighbor-NAT return table (`NEIGHBOR_NAT6`), v6 sibling of `neighbor_nat`.
-    pub neighbor_nat6: Vec<NeighborNat6Entry>,
+    /// IPv6 sibling (`NAT_OWNERS6`). Seed with [`Self::add_neighbor_nat6`].
+    pub nat_owners6: Vec<(u32, NatOwnerKey6, NatOwner)>,
     pub routes4: Vec<Route4>,
     pub routes6: Vec<Route6>,
     /// Server-wide DHCP config (`DHCP_CONFIG[0]`): MTU + DNS lists.
@@ -210,6 +209,17 @@ impl MemMaps {
     pub fn add_maglev(&mut self, table_id: u32, slot: u32, backend: LbBackend) {
         self.maglev.insert(MaglevKey { table_id, slot }, backend);
     }
+    /// Seed a neighbor-NAT block the way the dataplane stores it: its trie prefixes, from the
+    /// dataplane's own decomposition.
+    pub fn add_neighbor_nat(&mut self, b: NeighborNatEntry) {
+        self.nat_owners4
+            .extend(flowplane_control::natowner::owner_prefixes4(&b));
+    }
+    /// IPv6 sibling of [`Self::add_neighbor_nat`].
+    pub fn add_neighbor_nat6(&mut self, b: NeighborNat6Entry) {
+        self.nat_owners6
+            .extend(flowplane_control::natowner::owner_prefixes6(&b));
+    }
 }
 
 impl Maps for MemMaps {
@@ -315,25 +325,14 @@ impl Maps for MemMaps {
     fn maglev_get(&self, key: &MaglevKey) -> Option<LbBackend> {
         self.maglev.get(key).copied()
     }
-    fn neighbor_nat_lookup(&self, vni: u32, dst: [u8; 4], dport: u16) -> Option<[u8; 16]> {
-        self.neighbor_nat
+    fn nat_owner(&self, nat_ip: &[u8; 4], port: u16) -> Option<NatOwner> {
+        let key_bytes = |ip: &[u8; 4], p: [u8; 2]| [ip[0], ip[1], ip[2], ip[3], p[0], p[1]];
+        let want = key_bytes(nat_ip, port.to_be_bytes());
+        self.nat_owners4
             .iter()
-            .find(|e| {
-                e.enabled != 0
-                    && e.vni == vni
-                    && e.nat_ip == dst
-                    && dport >= e.port_min
-                    && dport < e.port_max
-            })
-            .map(|e| e.underlay)
-    }
-    fn neighbor_nat_lookup_any(&self, dst: [u8; 4], dport: u16) -> Option<([u8; 16], u32)> {
-        self.neighbor_nat
-            .iter()
-            .find(|e| {
-                e.enabled != 0 && e.nat_ip == dst && dport >= e.port_min && dport < e.port_max
-            })
-            .map(|e| (e.underlay, e.vni))
+            .filter(|(plen, k, _)| prefix_match(&key_bytes(&k.nat_ip, k.port), &want, *plen as u8))
+            .max_by_key(|(plen, _, _)| *plen)
+            .map(|(_, _, o)| *o)
     }
     fn nat_get(&self, key: &NatKey) -> Option<NatValue> {
         self.nat.get(key).copied()
@@ -348,25 +347,19 @@ impl Maps for MemMaps {
     fn is_nat_ip6(&self, vni: u32, ip: &[u8; 16]) -> bool {
         self.nat_ips6.contains(&(vni, *ip))
     }
-    fn neighbor_nat_lookup6(&self, vni: u32, dst: [u8; 16], dport: u16) -> Option<[u8; 16]> {
-        self.neighbor_nat6
+    fn nat_owner6(&self, nat_ip: &[u8; 16], port: u16) -> Option<NatOwner> {
+        let key_bytes = |ip: &[u8; 16], p: [u8; 2]| {
+            let mut b = [0u8; 18];
+            b[..16].copy_from_slice(ip);
+            b[16..].copy_from_slice(&p);
+            b
+        };
+        let want = key_bytes(nat_ip, port.to_be_bytes());
+        self.nat_owners6
             .iter()
-            .find(|e| {
-                e.enabled != 0
-                    && e.vni == vni
-                    && e.nat_ip6 == dst
-                    && dport >= e.port_min
-                    && dport < e.port_max
-            })
-            .map(|e| e.underlay)
-    }
-    fn neighbor_nat_lookup_any6(&self, dst: [u8; 16], dport: u16) -> Option<([u8; 16], u32)> {
-        self.neighbor_nat6
-            .iter()
-            .find(|e| {
-                e.enabled != 0 && e.nat_ip6 == dst && dport >= e.port_min && dport < e.port_max
-            })
-            .map(|e| (e.underlay, e.vni))
+            .filter(|(plen, k, _)| prefix_match(&key_bytes(&k.nat_ip6, k.port), &want, *plen as u8))
+            .max_by_key(|(plen, _, _)| *plen)
+            .map(|(_, _, o)| *o)
     }
     fn nat_ct6_get(&self, key: &CtKey6) -> Option<CtEntry6> {
         self.nat_ct6.get(key).copied()

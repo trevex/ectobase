@@ -925,7 +925,7 @@ fn snat_port_exhaustion_drops_instead_of_colliding() {
 
 // ─── (e) Neighbor-NAT relay — mechanism #3 of the ingress delivery-target reconstruction ──────────
 //
-// `NEIGHBOR_NAT` entries are installed ONLY for nat_ip blocks owned by ANOTHER node (never a
+// `NAT_OWNERS` entries are installed ONLY for nat_ip blocks owned by ANOTHER node (never a
 // locally-owned block — see `mesh/agent/bus_test.go::TestApplyNatInstallsNeighborNatOnlyForRemoteOwners`).
 // A packet whose inner dst is such a nat_ip, arriving at a node that does NOT own it, must be
 // re-forwarded byte-unchanged toward the real owner — with the OWNER's real vni, not a discarded one.
@@ -971,7 +971,7 @@ fn neigh_encapped(dport: u16) -> Vec<u8> {
 
 /// Mechanism #3 (uplink-internal neighbor-NAT relay, `ingress.rs`'s "Neighbor NAT" block 245-261):
 /// an inbound frame whose inner dst is a nat_ip this node does NOT own, but which IS registered in
-/// `NEIGHBOR_NAT` pointing at another node, must be re-forwarded byte-unchanged toward the real
+/// `NAT_OWNERS` pointing at another node, must be re-forwarded byte-unchanged toward the real
 /// owner — same vni, new remote.
 #[test]
 fn uplink_relays_to_neighbor_nat_owner_when_not_locally_claimed() {
@@ -979,7 +979,7 @@ fn uplink_relays_to_neighbor_nat_owner_when_not_locally_claimed() {
     let encapped = neigh_encapped(dport);
 
     let mut node = SimNode::with_local(neigh_local());
-    node.maps.neighbor_nat.push(neigh_nat_entry());
+    node.maps.add_neighbor_nat(neigh_nat_entry());
 
     let out = node.uplink_rx(&encapped, NEIGH_VNI, &neigh_local());
 
@@ -1003,10 +1003,10 @@ fn uplink_relays_to_neighbor_nat_owner_when_not_locally_claimed() {
 }
 
 /// Mechanism #3 (WAN-edge neighbor-NAT relay, `try_wan_rx`): a plain WAN-arriving IPv4 return (no
-/// VNI on the wire) whose dst+port matches a `NEIGHBOR_NAT` block must relay toward the owner WITH
-/// THE OWNER'S REAL VNI. Regression: `ingress.rs`'s `try_wan_rx` (line 452) discards the VNI
-/// `neighbor_nat_lookup_any` returns (`let (owner_ul, _vni) = ..`) — this core reconstruction fixes
-/// it; using the wrong vni would mean the owner's peer-independent reverse conntrack key
+/// VNI on the wire) whose dst+port matches a `NAT_OWNERS` block must relay toward the owner WITH
+/// THE OWNER'S REAL VNI. Regression: an older `ingress.rs`'s `try_wan_rx` discarded the VNI
+/// `Maps::nat_owner` returns (`let (owner_ul, _vni) = ..`) — this core code carries it through;
+/// using the wrong vni would mean the owner's peer-independent reverse conntrack key
 /// `(vni,0,nat_ip,0,nat_port)` never matches on the owner's uplink.
 #[test]
 fn wan_rx_relays_to_neighbor_nat_owner_with_the_real_owner_vni() {
@@ -1018,7 +1018,7 @@ fn wan_rx_relays_to_neighbor_nat_owner_with_the_real_owner_vni() {
     builder.write(&mut plain, &[]).unwrap();
 
     let mut node = SimNode::with_local(neigh_local());
-    node.maps.neighbor_nat.push(neigh_nat_entry());
+    node.maps.add_neighbor_nat(neigh_nat_entry());
 
     let out = node.wan_rx(&plain);
 
@@ -1038,7 +1038,7 @@ fn wan_rx_relays_to_neighbor_nat_owner_with_the_real_owner_vni() {
     assert_eq!(out.pkt, plain, "wan_rx relay does not rewrite bytes");
 }
 
-/// A WAN-arriving packet with no matching LB address AND no matching `NEIGHBOR_NAT` block falls through
+/// A WAN-arriving packet with no matching LB address AND no matching `NAT_OWNERS` block falls through
 /// to `Pass` (handed to the local kernel — VyOS routing/BGP), exactly as `try_wan_rx` does for
 /// traffic it does not recognize at all. Distinct from the uplink-side genuine-miss case (which
 /// DROPS): `wan_rx` is the WAN's own ingress point, not a fabric decap path with overlay bytes to
