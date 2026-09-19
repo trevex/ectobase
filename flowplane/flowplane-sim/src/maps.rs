@@ -1,7 +1,8 @@
 use flowplane_common::{
-    CtEntry, CtEntry6, CtKey, CtKey6, DhcpConfig, DhcpMeta, DsrLbIP, FwMeta, FwRule, FwRuleKey,
-    IfaceValue, LbBackend, LbKey, LbValue, Local, MaglevKey, MeterState, NatKey, NatKey6, NatValue,
-    NatValue6, NeighborNat6Entry, NeighborNatEntry, PortMeta, RouteValue, UnderlayValue,
+    CtEntry, CtEntry6, CtKey, CtKey6, DhcpConfig, DhcpMeta, DsrLbIP, FwBind, FwMeta, FwPolKey,
+    FwRule, FwRuleKey, IfaceValue, LbBackend, LbKey, LbValue, Local, MaglevKey, MeterState, NatKey,
+    NatKey6, NatValue, NatValue6, NeighborNat6Entry, NeighborNatEntry, PortMeta, RouteValue,
+    UnderlayValue,
 };
 use flowplane_core::maps::Maps;
 use std::collections::{HashMap, HashSet};
@@ -83,6 +84,35 @@ pub struct MemMaps {
     pub ifaces6: HashMap<(u32, [u8; 16]), IfaceValue>,
     /// 1:1 floating-IP map (`FLOATING_IPS`), keyed `(vni, V)` → guest `G`. Seed with [`Self::add_floating_ip`].
     pub floating_ips: HashMap<(u32, [u8; 4]), [u8; 4]>,
+    /// Firewall classifier binding (`FW_BIND[ifindex]`).
+    pub fw_bind: HashMap<u32, FwBind>,
+    /// Per-scope v4 peer-class tries (`FW_CLASS[scope]`): `(addr, prefix_len, class)`, matched by
+    /// longest prefix like the eBPF inner LPM trie.
+    pub fw_class4: HashMap<u64, Vec<([u8; 4], u8, u32)>>,
+    /// Per-scope v6 peer-class tries (`FW_CLASS6[scope]`).
+    pub fw_class6: HashMap<u64, Vec<([u8; 16], u8, u32)>>,
+    /// Per-scope v4 policy tries (`FW_POLICY[scope]`): `(prefix_len, key, precedence)`, the prefix
+    /// counted over the key's bytes in memory order (class, proto, big-endian port).
+    pub fw_policy4: HashMap<u64, Vec<(u32, FwPolKey, u32)>>,
+    /// Per-scope v6 policy tries (`FW_POLICY6[scope]`).
+    pub fw_policy6: HashMap<u64, Vec<(u32, FwPolKey, u32)>>,
+}
+
+/// The bytes an LPM trie compares for a policy key: class (native byte order, always matched in
+/// full), proto, port (big-endian). The pad byte is never covered by a prefix.
+fn pol_key_bytes(k: &FwPolKey) -> [u8; 7] {
+    let c = k.class.to_ne_bytes();
+    [c[0], c[1], c[2], c[3], k.proto, k.port[0], k.port[1]]
+}
+
+/// Longest-prefix match over a sim policy trie for a full-length key → the entry's precedence.
+fn policy_lpm(entries: Option<&Vec<(u32, FwPolKey, u32)>>, key: &FwPolKey) -> Option<u32> {
+    let want = pol_key_bytes(key);
+    entries?
+        .iter()
+        .filter(|(plen, k, _)| prefix_match(&pol_key_bytes(k), &want, *plen as u8))
+        .max_by_key(|(plen, _, _)| *plen)
+        .map(|(_, _, prec)| *prec)
 }
 
 /// True if the first `prefix` bits of `a` and `b` (big-endian byte order) are equal.
@@ -178,6 +208,31 @@ impl Maps for MemMaps {
     }
     fn fw_rule6(&self, key: &FwRuleKey) -> Option<flowplane_common::FwRule6> {
         self.fw_rules6.get(&(key.ifindex, key.idx)).copied()
+    }
+    fn fw_bind(&self, ifindex: u32) -> Option<FwBind> {
+        self.fw_bind.get(&ifindex).copied()
+    }
+    fn fw_class4(&self, scope: u64, addr: &[u8; 4]) -> Option<u32> {
+        self.fw_class4
+            .get(&scope)?
+            .iter()
+            .filter(|(a, len, _)| prefix_match(a, addr, *len))
+            .max_by_key(|(_, len, _)| *len)
+            .map(|(_, _, class)| *class)
+    }
+    fn fw_class6(&self, scope: u64, addr: &[u8; 16]) -> Option<u32> {
+        self.fw_class6
+            .get(&scope)?
+            .iter()
+            .filter(|(a, len, _)| prefix_match(a, addr, *len))
+            .max_by_key(|(_, len, _)| *len)
+            .map(|(_, _, class)| *class)
+    }
+    fn fw_policy4(&self, scope: u64, key: &FwPolKey) -> Option<u32> {
+        policy_lpm(self.fw_policy4.get(&scope), key)
+    }
+    fn fw_policy6(&self, scope: u64, key: &FwPolKey) -> Option<u32> {
+        policy_lpm(self.fw_policy6.get(&scope), key)
     }
     fn lb_get(&self, key: &LbKey) -> Option<LbValue> {
         self.lb.get(key).copied()

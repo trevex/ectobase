@@ -47,6 +47,30 @@ pub trait Maps {
     fn fw_rule6(&self, _key: &FwRuleKey) -> Option<flowplane_common::FwRule6> {
         None
     }
+    /// Firewall classifier binding (`FW_BIND[ifindex]`): the interface's ingress/egress scopes +
+    /// policy generation. DEFAULT `None` — a backend without classifier wiring denies (see
+    /// [`crate::firewall::fw_classify`]).
+    fn fw_bind(&self, _ifindex: u32) -> Option<flowplane_common::FwBind> {
+        None
+    }
+    /// Stage 1 (`FW_CLASS[scope]`, v4): longest-prefix match of the peer address in the scope's
+    /// class trie → its class, or `None` when no class covers it. DEFAULT `None`.
+    fn fw_class4(&self, _scope: u64, _addr: &[u8; 4]) -> Option<u32> {
+        None
+    }
+    /// Stage 1 (`FW_CLASS6[scope]`), v6 sibling of [`Self::fw_class4`]. DEFAULT `None`.
+    fn fw_class6(&self, _scope: u64, _addr: &[u8; 16]) -> Option<u32> {
+        None
+    }
+    /// Stage 2 (`FW_POLICY[scope]`, v4): longest-prefix match of a full-length policy key in the
+    /// scope's policy trie → the matched entry's precedence. DEFAULT `None`.
+    fn fw_policy4(&self, _scope: u64, _key: &flowplane_common::FwPolKey) -> Option<u32> {
+        None
+    }
+    /// Stage 2 (`FW_POLICY6[scope]`), v6 sibling of [`Self::fw_policy4`]. DEFAULT `None`.
+    fn fw_policy6(&self, _scope: u64, _key: &flowplane_common::FwPolKey) -> Option<u32> {
+        None
+    }
     fn lb_get(&self, key: &LbKey) -> Option<LbValue>;
     /// IPv6 LB service lookup (`LB6`), keyed on the FULL v6 address — see [`LbKey6`].
     fn lb6_get(&self, key: &flowplane_common::LbKey6) -> Option<LbValue>;
