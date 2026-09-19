@@ -17,15 +17,14 @@
 use std::path::Path;
 use std::process::Command;
 
+use aya::maps::lpm_trie::{Key, LpmTrie};
 use aya::maps::{of_maps::HashOfMaps, Array, HashMap as AyaHashMap, MapData};
 use aya::programs::{SchedClassifier, TcAttachType};
-use flowplane_common::{FwBind, FwPolKey};
+use flowplane_common::{FwBind, FwPolKey, NatOwner, NatOwnerKey};
 
 use super::{hex_encode, Control, IfaceParams};
+use crate::loader::RETIRED_PINNED_MAPS;
 use crate::{handlers, pb};
-
-/// The old first-match evaluator's pinned maps, gone since the classifier replaced it.
-const RETIRED_MAPS: [&str; 4] = ["FW_RULES", "FW_META", "FW_RULES6", "FW_META6"];
 
 fn sh(args: &[&str]) {
     let st = Command::new(args[0])
@@ -64,6 +63,29 @@ fn scopes_pinned(pin: &Path) -> Vec<u64> {
     let mut ids: Vec<u64> = map.keys().filter_map(Result::ok).collect();
     ids.sort_unstable();
     ids
+}
+
+fn nat_owners_trie(pin: &Path) -> LpmTrie<MapData, NatOwnerKey, NatOwner> {
+    let map = MapData::from_pin(pin.join("NAT_OWNERS")).expect("reopen pinned NAT_OWNERS");
+    LpmTrie::try_from(aya::maps::Map::LpmTrie(map)).expect("NAT_OWNERS is an LPM trie")
+}
+
+/// The pinned NAT_OWNERS trie's entries, sorted by (port, prefix_len).
+fn nat_owners_pinned(pin: &Path) -> Vec<(u32, NatOwnerKey, NatOwner)> {
+    let mut v: Vec<_> = nat_owners_trie(pin)
+        .iter()
+        .filter_map(Result::ok)
+        .map(|(k, o)| (k.prefix_len(), k.data(), o))
+        .collect();
+    v.sort_by_key(|(p, k, _)| (u16::from_be_bytes(k.port), *p));
+    v
+}
+
+/// Delete one prefix straight from the pinned NAT_OWNERS trie, behind the control plane's back.
+fn drop_nat_owner_pinned(pin: &Path, (plen, key, _): (u32, NatOwnerKey, NatOwner)) {
+    nat_owners_trie(pin)
+        .remove(&Key::new(plen, key))
+        .expect("remove one NAT_OWNERS prefix");
 }
 
 fn replace_fw(ctl: &Control, rules: Vec<pb::FwRuleSpec>) {
@@ -200,6 +222,23 @@ fn restart_adopts_pinned_state_and_relinks_guests() {
         "one scope per direction; the first set was freed"
     );
 
+    // A neighbor-NAT block whose edges are not aligned, so the trie holds it as several prefixes
+    // and a crash can leave it partly written.
+    let nat_req = pb::AddNeighborNatRequest {
+        vni: 7,
+        nat_ip: "198.51.100.7".into(),
+        owner_underlay: "fd00::99".into(),
+        port_min: 20000,
+        port_max: 30000,
+    };
+    ctl.with_core(|c| handlers::add_neighbor_nat(c, &nat_req))
+        .expect("add neighbor NAT");
+    let owners = nat_owners_pinned(pin.path());
+    assert!(
+        owners.len() > 1,
+        "an unaligned block is several prefixes: {owners:?}"
+    );
+
     // The process "exits": every fd and in-memory structure goes, only pins remain.
     drop(ctl);
     let guest_link = pin
@@ -227,10 +266,16 @@ fn restart_adopts_pinned_state_and_relinks_guests() {
         "scopes survive with no control plane"
     );
     assert_eq!(fw_epoch_pinned(pin.path()), 2, "the epoch survives");
+    assert_eq!(nat_owners_pinned(pin.path()), owners, "NAT owners survive");
 
-    // A node upgraded from before the classifier still has the old evaluator's maps pinned; nothing
+    // A crash mid-write: one of the block's prefixes never made it into the trie. The rest still
+    // name the whole block, so adopt can tell what is missing.
+    drop_nat_owner_pinned(pin.path(), owners[owners.len() / 2]);
+
+    // A node upgraded from an older build still has the maps that build declared and this one does
+    // not (the first-match firewall's rule slots, the scanned neighbor-NAT slots) pinned; nothing
     // reads them any more, and adopt must not leave them holding kernel memory.
-    for name in RETIRED_MAPS {
+    for name in RETIRED_PINNED_MAPS {
         let path = pin.path().join(name);
         if !path.exists() {
             Array::<MapData, u32>::create(1, 0)
@@ -242,7 +287,7 @@ fn restart_adopts_pinned_state_and_relinks_guests() {
 
     // Incarnation 2: adopt.
     let ctl = bring_up(pin.path(), true);
-    for name in RETIRED_MAPS {
+    for name in RETIRED_PINNED_MAPS {
         assert!(
             !pin.path().join(name).exists(),
             "retired map {name} still pinned after adopt"
@@ -290,6 +335,69 @@ fn restart_adopts_pinned_state_and_relinks_guests() {
         scopes_pinned(pin.path()).is_empty(),
         "unreferenced scopes deleted"
     );
+
+    // Adopt rebuilt the block list from the trie and rewrote the block's full prefix set, so the
+    // prefix the crash lost is back.
+    assert_eq!(
+        nat_owners_pinned(pin.path()),
+        owners,
+        "adopt completes the block a crash left partial"
+    );
+    // The overlap check sees the adopted block: without the rebuilt list this would be written
+    // over the live block's ports.
+    let overlap = pb::AddNeighborNatRequest {
+        vni: 8,
+        port_min: 25000,
+        port_max: 35000,
+        ..nat_req.clone()
+    };
+    let err = ctl
+        .with_core(|c| handlers::add_neighbor_nat(c, &overlap))
+        .expect_err("a block overlapping the adopted one is refused");
+    assert_eq!(
+        tonic::Status::from(err).code(),
+        tonic::Code::AlreadyExists,
+        "an overlap with an adopted block is a conflict"
+    );
+    // The mesh agent replays its blocks after a restart: a re-announce with a new owner replaces
+    // the adopted block in place, every prefix now naming the new owner.
+    let new_owner: std::net::Ipv6Addr = "fd00::aa".parse().unwrap();
+    let reannounce = pb::AddNeighborNatRequest {
+        owner_underlay: new_owner.to_string(),
+        ..nat_req
+    };
+    ctl.with_core(|c| handlers::add_neighbor_nat(c, &reannounce))
+        .expect("re-announce the adopted block");
+    let reowned: Vec<_> = owners
+        .iter()
+        .map(|&(plen, key, o)| {
+            let underlay = new_owner.octets();
+            (plen, key, NatOwner { underlay, ..o })
+        })
+        .collect();
+    assert_eq!(
+        nat_owners_pinned(pin.path()),
+        reowned,
+        "the re-announce moves every prefix to the new owner"
+    );
+    // A prefix already gone must not wedge the withdraw (a withdraw retried after a partial
+    // failure removes every prefix of its block again): the kernel writer takes the absent prefix
+    // as removed. The in-memory writer cannot tell this ENOENT path from a present key.
+    drop_nat_owner_pinned(pin.path(), reowned[reowned.len() - 1]);
+    let withdraw = pb::WithdrawNeighborNatRequest {
+        vni: 7,
+        nat_ip: "198.51.100.7".into(),
+        port_min: 20000,
+        port_max: 30000,
+    };
+    ctl.with_core(|c| handlers::withdraw_neighbor_nat(c, &withdraw))
+        .expect("withdraw a block missing a prefix");
+    assert!(
+        nat_owners_pinned(pin.path()).is_empty(),
+        "the withdraw removes the block's remaining prefixes"
+    );
+    ctl.with_core(|c| handlers::withdraw_neighbor_nat(c, &withdraw))
+        .expect("a repeated withdraw is a no-op");
 
     // Unpinning detaches; the netns (and its devices) goes away with this thread.
     drop(ctl);
