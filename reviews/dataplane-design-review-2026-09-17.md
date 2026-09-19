@@ -240,10 +240,12 @@ firewalls. v4 and v6, sim and eBPF. The refusal now removes the entries the flow
    deferred cleanup (`mesh/reflector/server.go`) removes by that id — `RIB.UnregisterSink`
    (`nattable.go`) and `RIB.DropOrigin` (`rib.go`) both delete unconditionally, with no notion of
    which session instance registered the entry. If a node reconnects before its old session's
-   `Recv` fails (silent path loss, waiting out the keepalive timeout), the new session registers
-   under the same id, and the old session's eventual cleanup unregisters the NEW session's sink,
-   drops its subscriptions from every VNI, and `DropOrigin` withdraws its freshly announced routes
-   and NAT/public records fabric-wide — the new session is left connected but invisible to the RIB.
+   `Recv` fails (silent path loss: the reflector's keepalive is a 2 s ping + 3 s timeout, so the old
+   session lingers ~5 s), the new session registers under the same id, and the old session's
+   eventual cleanup unregisters the NEW session's sink, drops its subscriptions from every VNI, and
+   `DropOrigin` withdraws its freshly announced routes and NAT/public records fabric-wide. The new
+   session is left connected but deaf, its announced state withdrawn; the agent sends only
+   changes, so it re-announces nothing until its next reconnect.
    Related to the self-asserted `node_id` (4b). Not fixed; candidate for Increment 4 (a per-session
    generation/token so cleanup only removes what that session itself registered).
 4. ~~**dispatch-controller has no leader election**~~ **FIXED** (`42c6ea1d`, merged in

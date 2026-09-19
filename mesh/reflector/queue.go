@@ -20,10 +20,10 @@ const maxPendingDeltas = 1024
 // be pruned against nor ever report converged. Only live deltas are dropped, past
 // maxPendingDeltas.
 //
-// maxPendingDeltas is not the queue's real memory bound: a snapshot is unbounded per call — each
-// Subscribe queues a whole VNI replay, and a client that re-subscribes without reading grows the
-// queue further. Acceptable because agents are mTLS-authenticated and subscribe only on a
-// desired-set change, not at will.
+// maxPendingDeltas is not the queue's real memory bound: snapshots are not capped — each is
+// bounded by the RIB, but every Subscribe queues another whole VNI replay, so a client that
+// re-subscribes without reading grows the queue without limit. Acceptable because agents are
+// mTLS-authenticated and subscribe only on a desired-set change, not at will.
 type sessionQueue struct {
 	id   string
 	wake chan struct{} // capacity 1: something was queued, or the queue closed
