@@ -1,5 +1,5 @@
 //! NAT / NAT66 config map key & value types plus the neighbor-NAT entries (the `NAT_CONFIG`,
-//! `NAT_CONFIG6`, `NEIGHBOR_NAT`, `NEIGHBOR_NAT6` maps).
+//! `NAT_CONFIG6`, `NAT_OWNERS`, `NAT_OWNERS6` maps).
 
 /// NAT-GW config key: (vni, local guest IPv4).
 #[repr(C)]
@@ -59,7 +59,7 @@ pub struct NatOwnerKey6 {
 /// the block's VNI — and the block itself (`[port_min, port_max)`), so the dataplane can rebuild
 /// its block list from the pinned trie after a restart.
 #[repr(C)]
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Default)]
+#[derive(Copy, Clone, Eq, PartialEq, Debug, Default)]
 pub struct NatOwner {
     pub underlay: [u8; 16],
     pub vni: u32,
@@ -126,7 +126,7 @@ mod user_impls {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use core::mem::{align_of, size_of};
+    use core::mem::{align_of, offset_of, size_of};
 
     #[test]
     fn nat_key_word_packed() {
@@ -156,12 +156,24 @@ mod tests {
 
     #[test]
     fn nat_owner_layouts() {
-        use core::mem::size_of;
-        // 4 (nat_ip) + 2 (port): the trie key is 4 (prefix length) + 6.
+        // NatOwnerKey: 4 (nat_ip) + 2 (port); the trie key is 4 (prefix length) + 6.
         assert_eq!(size_of::<NatOwnerKey>(), 6);
-        // 16 (nat_ip6) + 2 (port).
+        assert_eq!(align_of::<NatOwnerKey>(), 1);
+        assert_eq!(offset_of!(NatOwnerKey, nat_ip), 0);
+        assert_eq!(offset_of!(NatOwnerKey, port), 4);
+
+        // NatOwnerKey6: 16 (nat_ip6) + 2 (port).
         assert_eq!(size_of::<NatOwnerKey6>(), 18);
-        // 16 (underlay) + 4 (vni) + 2 + 2 (the block's ports).
+        assert_eq!(align_of::<NatOwnerKey6>(), 1);
+        assert_eq!(offset_of!(NatOwnerKey6, nat_ip6), 0);
+        assert_eq!(offset_of!(NatOwnerKey6, port), 16);
+
+        // NatOwner: 16 (underlay) + 4 (vni) + 2 (port_min) + 2 (port_max) = 24.
         assert_eq!(size_of::<NatOwner>(), 24);
+        assert_eq!(align_of::<NatOwner>(), 4);
+        assert_eq!(offset_of!(NatOwner, underlay), 0);
+        assert_eq!(offset_of!(NatOwner, vni), 16);
+        assert_eq!(offset_of!(NatOwner, port_min), 20);
+        assert_eq!(offset_of!(NatOwner, port_max), 22);
     }
 }
