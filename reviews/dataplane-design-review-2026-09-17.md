@@ -40,7 +40,7 @@ asymmetries plus doc drift.
 |---|---|---|
 | §1 Correctness (P0) | all seven (`0e2e601f`) | — |
 | §2 Scale ceilings | firewall rule cap (firewall redesign, `acd0d55b` + `ec23ad68`); neighbor-NAT keyed tries (NAT return scaling Inc. 1, `f681d367`) | NAT/public broadcast, map ceilings, conntrack pressure, IPAM + peering list costs, sizing doc |
-| §3 Control-plane resilience | NAT/public prune (`a334ef8`), route-prune guard (`cb4188e6`), fence completeness (`a4dd915`), dispatch-controller leader election (`54dda54c`), lossless route-bus snapshots (NAT return scaling Inc. 2, branch `routebus/lossless-snapshot`) | edge `/readyz` not consumed, `replicas: 1` everywhere, `GenerationApplied`, broker sync ordering, NAT/public record ownership (4b), a reconnect torn down by its own stale session (4c) |
+| §3 Control-plane resilience | NAT/public prune (`a334ef8`), route-prune guard (`cb4188e6`), fence completeness (`a4dd915`), dispatch-controller leader election (`54dda54c`), lossless route-bus snapshots (NAT return scaling Inc. 2, `545ae93a`) | edge `/readyz` not consumed, `replicas: 1` everywhere, `GenerationApplied`, broker sync ordering, NAT/public record ownership (4b), a reconnect torn down by its own stale session (4c) |
 | §4 Policy model | priorities, `defaultPolicy`, FirewallPolicy validation, revocation (`b19cbb3`, `99d3880`, `acd0d55b`) | Route intent, source selectors, remaining validation, peering-overlap warning |
 | §5 Symmetry | — | all items |
 | §6 Doc drift | overlay MTU, NAT return wording | the rest of the list |
@@ -221,7 +221,7 @@ firewalls. v4 and v6, sim and eBPF. The refusal now removes the entries the flow
    session never prunes and never reports converged. Per-VNI `Subscribe` replays use the same sink:
    a VNI with more routes than the drain keeps up with loses records the same way (the count guard
    prevents a wrong prune, not the non-convergence). Planned: NAT return scaling, Increment 2.
-   **RESOLVED** (NAT return scaling Increment 2, branch `routebus/lossless-snapshot`): a session
+   **RESOLVED** (NAT return scaling Increment 2, merged in `545ae93a`): a session
    queue keeps every snapshot whole — global and per-VNI, each handed over to the sink as one
    batch under the RIB lock — so a session always converges; only live deltas past 1024 queued and
    not yet taken by the drain are dropped (the reflector logs each drop episode and the total when
