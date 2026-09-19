@@ -94,6 +94,9 @@ pub trait MapWriter {
     /// Point an interface at its scopes (`FW_BIND`): one write cuts both directions and families.
     fn fw_bind_upsert(&mut self, ifindex: u32, val: FwBind) -> anyhow::Result<()>;
     fn fw_bind_remove(&mut self, ifindex: u32) -> anyhow::Result<()>;
+    /// Advance the node's firewall epoch (`FW_EPOCH`) after a binding change, so established flows
+    /// meet their interfaces' new policy on their next packet.
+    fn fw_epoch_bump(&mut self) -> anyhow::Result<()>;
     /// Adopt: the bindings and scope ids that survived a restart in the pinned maps.
     fn fw_bind_entries(&self) -> Vec<(u32, FwBind)>;
     fn fw_scope_ids(&self) -> Vec<u64>;

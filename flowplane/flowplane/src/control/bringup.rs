@@ -141,6 +141,7 @@ impl Control {
         let fw_meta6 = FwMetaMap6::open(&mut ebpf)?;
         let fw_bind = crate::maps::FwBindMap::open(&mut ebpf)?;
         let fw_scopes = crate::maps::FwScopes::open(&mut ebpf)?;
+        let fw_epoch = crate::maps::FwEpochMap::open(&mut ebpf)?;
         let underlay = crate::maps::Underlay::open(&mut ebpf)?;
         let meter = Meter::open(&mut ebpf)?;
         let neigh_nat = NeighborNat::open(&mut ebpf)?;
@@ -181,6 +182,7 @@ impl Control {
             fw_meta6,
             fw_bind,
             fw_scopes,
+            fw_epoch,
             ports,
             ifaces,
             ifaces6,

@@ -144,6 +144,30 @@ the budget is refused with `RESOURCE_EXHAUSTED` and an unknown interface with `N
 before either family's maps are touched. With the compiler enforcing the budget, the first
 should not happen; it remains as a backstop.
 
+## Connections and policy changes
+
+The firewall is stateful. A flow's first packet meets the source interface's egress rules
+and the destination interface's ingress rules; allowed, it is tracked in conntrack, and its
+later packets and all of its replies ride that entry without being evaluated again. Replies
+are allowed because their flow was: a guest never needs a rule for the return traffic of a
+connection it opened, or of one it accepted.
+
+A policy change reaches established connections on their next packet. The dataplane keeps a
+node-wide firewall epoch and advances it whenever an interface's rules change; every
+conntrack entry records the epoch it was last evaluated under. A packet that finds its flow
+evaluated under an older epoch meets the current rules first, as a new flow would. If they
+still allow it, the flow carries on and is re-stamped. If not, the packet is dropped and the
+flow is forgotten, so its replies stop too. Replies are never re-evaluated on their own. No
+conntrack sweep runs; the node's other connections each pay one extra evaluation, once.
+
+A TCP SYN that lands on a tracked connection is a new connection reusing the port. It meets
+the current rules even when no epoch has changed, so port reuse cannot inherit a verdict.
+
+Hardware-offloaded connections (the `--offload` tier) never reach the evaluator. The offload
+manager withdraws a connection whose epoch is stale, and its next packet takes the eBPF path.
+For those connections a change takes effect within one reconcile interval rather than on the
+next packet.
+
 ## The two-step: reachability vs. permission
 
 Learning a route grants reachability, not firewall permission. These are two independent

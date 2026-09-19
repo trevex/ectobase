@@ -55,7 +55,9 @@ pub enum SnatOutcome {
 ///
 /// `ip_off` is the offset of the inner IPv4 header (e.g. `ETH_LEN` for a guest Ethernet frame).
 /// `now` is the monotonic time (ns) written into the conntrack `last_seen` field (eBPF: `now()`,
-/// sim: `0`). Byte-identical to the eBPF `nat::nat_snat_egress`.
+/// sim: `0`); `epoch` is the firewall epoch the forward entry records — the one the caller read
+/// before its egress firewall check (see `conntrack::ct_create_default`). Byte-identical to the eBPF
+/// `nat::nat_snat_egress`.
 #[inline(always)]
 pub fn snat_egress<P: Pkt, M: Maps>(
     pkt: &mut P,
@@ -64,6 +66,7 @@ pub fn snat_egress<P: Pkt, M: Maps>(
     vni: u32,
     is_external: bool,
     now: u64,
+    epoch: u32,
 ) -> SnatOutcome {
     if !is_external {
         return SnatOutcome::Continue;
@@ -139,7 +142,9 @@ pub fn snat_egress<P: Pkt, M: Maps>(
                             flags: CT_REWRITE_DST | CT_F_SRC_NAT,
                             tcp_state: 0,
                             fwall_action: 0,
-                            _pad: [0; 7],
+                            _pad: [0; 3],
+                            // A reply entry: never re-evaluated, so its epoch is never read.
+                            policy_epoch: 0,
                         },
                     );
                     break;
@@ -162,7 +167,8 @@ pub fn snat_egress<P: Pkt, M: Maps>(
                     flags: CT_REWRITE_SRC | CT_F_SRC_NAT,
                     tcp_state: 0,
                     fwall_action: 0,
-                    _pad: [0; 7],
+                    _pad: [0; 3],
+                    policy_epoch: epoch,
                 },
             );
             chosen

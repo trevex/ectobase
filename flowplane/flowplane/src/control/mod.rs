@@ -230,6 +230,18 @@ impl Control {
         self.inner.lock().core.writer().routes6.get(vni, dst)
     }
 
+    /// The node's firewall epoch (`FW_EPOCH[0]`); 0 if unreadable, which only makes entries look
+    /// stale (never current) to the offload manager.
+    pub fn fw_epoch(&self) -> u32 {
+        self.inner
+            .lock()
+            .core
+            .writer()
+            .fw_epoch
+            .get()
+            .unwrap_or(0)
+    }
+
     /// Whether `tap`'s `PORT_META` entry is offload-eligible (`offloaded == 1`); `false` if the
     /// port has no entry.
     pub fn port_offloaded(&self, tap: u32) -> bool {

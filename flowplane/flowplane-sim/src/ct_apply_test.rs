@@ -76,7 +76,8 @@ fn snat_entry() -> CtEntry {
         flags: CT_REWRITE_SRC,
         tcp_state: 0,
         fwall_action: 0,
-        _pad: [0; 7],
+        _pad: [0; 3],
+        policy_epoch: 0,
     }
 }
 
@@ -243,7 +244,8 @@ fn ct_apply_reports_failure_when_a_required_rewrite_cannot_be_applied() {
         flags: CT_REWRITE_SRC,
         tcp_state: 0,
         fwall_action: 0,
-        _pad: [0; 7],
+        _pad: [0; 3],
+        policy_epoch: 0,
     };
 
     let mut pkt = VecPkt::from_bytes(&with_options);
@@ -272,7 +274,8 @@ fn ct_apply_default_entry_is_noop() {
             flags,
             tcp_state: 0,
             fwall_action: 0,
-            _pad: [0; 7],
+            _pad: [0; 3],
+            policy_epoch: 0,
         };
 
         let mut pkt = VecPkt::from_bytes(&raw);

@@ -7,7 +7,10 @@ use flowplane_common::{
     GENEVE_OVERHEAD,
 };
 
-use crate::conntrack::{ct_apply, ct_create_default, ct_key, ct_key6, ct_refresh, rewrite_v6_addr};
+use crate::conntrack::{
+    ct_apply, ct_create_default, ct_forget_default, ct_hit_recheck, ct_key, ct_key6, ct_refresh,
+    rewrite_v6_addr,
+};
 use crate::decap::GW_MAC;
 use crate::egress::{deliver, egress_fw_ct6, route4, route_decision6, Deliver, EgressFwCt6};
 use crate::encap::{tunnel_encap, TunnelEncap, ETH_LEN};
@@ -74,20 +77,37 @@ pub fn process_guest_tx<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &GuestT
     let mut edt_tstamp: Option<u64> = None;
     let ip_off = ETH_LEN;
 
-    // 1. Conntrack miss → source egress firewall (deny-by-default). Fresh flow only.
-    let mut was_new = false;
+    // 1. Conntrack → source egress firewall (deny-by-default). A miss is a new flow; a hit that
+    //    `ct_hit_recheck` flags (a forward entry from an older firewall epoch, or a bare SYN) meets
+    //    the firewall again as one. `check_dest` carries that to the same-node destination check.
+    //    `epoch` is read before any firewall lookup and is what this hook stamps.
+    let epoch = maps.fw_epoch();
+    let mut check_dest = false;
     if let Some(key) = ct_key(&*pkt, ip_off, in_.meta.vni) {
-        if maps.conntrack_get(&key).is_none() {
-            was_new = true;
-            // Egress firewall keyed on the SOURCE interface. The sim keys FW_META/FW_RULES on a
-            // synthetic ifindex == meta.vni's port; the fixture installs it under `src_ifindex`.
+        let hit = maps.conntrack_get(&key);
+        if hit.is_none_or(|e| ct_hit_recheck(&*pkt, ip_off, &e, epoch)) {
+            check_dest = true;
             if fw_classify(&*pkt, &*maps, ip_off, in_.src_ifindex, FW_DIR_EGRESS) == FW_ACTION_DROP
             {
+                if hit.is_some() {
+                    ct_forget_default(&*pkt, maps, ip_off, in_.meta.vni);
+                }
                 return GuestTxOut {
                     action: Action::Drop,
                     edt_tstamp,
                     tunnel: None,
                 };
+            }
+            // Re-evaluated and still allowed: stamp the epoch (the eBPF path's `ct_touch` on this
+            // same hit). Step 5 refreshes the post-SNAT key, which for a NAT flow is not this one.
+            if let Some(e) = hit {
+                maps.conntrack_insert(
+                    key,
+                    CtEntry {
+                        policy_epoch: epoch,
+                        ..e
+                    },
+                );
             }
         }
     } else {
@@ -174,7 +194,8 @@ pub fn process_guest_tx<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &GuestT
     // DSR reverse-SNAT above are mutually exclusive translations of the same src field.
     let is_ext = route.is_external != 0;
     if !is_dsr
-        && snat_egress(pkt, maps, ip_off, in_.meta.vni, is_ext, in_.now) != SnatOutcome::Continue
+        && snat_egress(pkt, maps, ip_off, in_.meta.vni, is_ext, in_.now, epoch)
+            != SnatOutcome::Continue
     {
         return GuestTxOut {
             action: Action::Drop,
@@ -188,8 +209,8 @@ pub fn process_guest_tx<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &GuestT
     //    Keyed on the POST-SNAT 5-tuple, exactly as the create path (and the reverse NAT entry).
     if let Some(key) = ct_key(&*pkt, ip_off, in_.meta.vni) {
         match maps.conntrack_get(&key) {
-            None => ct_create_default(&*pkt, maps, ip_off, in_.meta.vni, in_.now),
-            Some(mut e) => ct_refresh(&*pkt, maps, ip_off, &key, &mut e, in_.now),
+            None => ct_create_default(&*pkt, maps, ip_off, in_.meta.vni, in_.now, epoch),
+            Some(mut e) => ct_refresh(&*pkt, maps, ip_off, &key, &mut e, in_.now, epoch),
         }
     }
 
@@ -227,13 +248,13 @@ pub fn process_guest_tx<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &GuestT
             tap_ifindex,
             guest_mac,
         } => {
-            // Destination ingress firewall on NEW flows (same-node delivery).
-            if was_new
+            // Destination ingress firewall on new and re-evaluated flows (same-node delivery).
+            if check_dest
                 && fw_classify(&*pkt, &*maps, ip_off, tap_ifindex, FW_DIR_INGRESS) == FW_ACTION_DROP
             {
-                // The flow's entries were created after the egress check (step 4); drop them so the
-                // next packet is new again and meets this check instead of a conntrack bypass.
-                crate::conntrack::ct_forget_default(&*pkt, maps, ip_off, in_.meta.vni);
+                // The flow's entries exist (created or refreshed in step 5); drop them so the next
+                // packet is new again and meets this check instead of a conntrack bypass.
+                ct_forget_default(&*pkt, maps, ip_off, in_.meta.vni);
                 return GuestTxOut {
                     action: Action::Drop,
                     edt_tstamp,
@@ -283,14 +304,15 @@ pub fn process_guest_tx<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &GuestT
 /// prefix (the caller runs [`process_guest_tx_nat64`] first for `64:ff9b::/96` dsts). Composes the
 /// two SHARED core stages the eBPF `egress::forward_decision_v6` delegates to, in its exact order +
 /// gates:
-///   1. egress firewall + firewall-only v6 conntrack ([`egress_fw_ct6`]): deny-by-default on a fresh
-///      flow (CT miss → `fw_eval_dir6` DROP), else track (`ct_create_default6`) / refresh
-///      (`ct_refresh6`); carries `was_new` (CT miss) up to the local fast path;
+///   1. egress firewall + firewall-only v6 conntrack ([`egress_fw_ct6`]): deny-by-default on a new
+///      or re-evaluated flow (CT miss or recheck → `fw_classify6` DROP), else track
+///      (`ct_create_default6`) / refresh (`ct_refresh6`); carries `check_dest` up to the local fast
+///      path;
 ///   2. route6 + deliver ([`route_decision6`]): `route6` → Pass on miss, else `deliver` →
 ///      Local / Encap / Pass. The flow label is folded from the (immutable, no-SNAT) inner v6
 ///      5-tuple, matching the eBPF `egress_flow_label(.., is_v6 = true)`;
-///   3. on `Deliver::Local` to a SAME-NODE guest, enforce the DESTINATION's ingress firewall on NEW
-///      flows only (`fw_eval_dir6` INGRESS, deny-by-default) — mirrors the v4 [`process_guest_tx`]
+///   3. on `Deliver::Local` to a SAME-NODE guest, enforce the DESTINATION's ingress firewall on new
+///      and re-evaluated flows only (`fw_classify6` INGRESS, deny-by-default) — mirrors the v4 [`process_guest_tx`]
 ///      Local arm (the cross-node `uplink_rx` ingress path is bypassed for same-node delivery).
 ///
 /// Verdict mapping (mirrors [`process_guest_tx`]):
@@ -315,17 +337,19 @@ pub fn process_guest_tx_v6<P: Pkt, M: Maps>(
     let mut edt_tstamp: Option<u64> = None;
     let ip_off = ETH_LEN;
 
-    // Stage 1: egress firewall + firewall-only v6 conntrack (deny-by-default on a fresh flow).
-    let was_new = match egress_fw_ct6(&*pkt, maps, ip_off, in_.src_ifindex, in_.meta.vni, in_.now) {
-        EgressFwCt6::Drop => {
-            return GuestTxOut {
-                action: Action::Drop,
-                edt_tstamp,
-                tunnel: None,
+    // Stage 1: egress firewall + firewall-only v6 conntrack (deny-by-default on a new or
+    // re-evaluated flow).
+    let check_dest =
+        match egress_fw_ct6(&*pkt, maps, ip_off, in_.src_ifindex, in_.meta.vni, in_.now) {
+            EgressFwCt6::Drop => {
+                return GuestTxOut {
+                    action: Action::Drop,
+                    edt_tstamp,
+                    tunnel: None,
+                }
             }
-        }
-        EgressFwCt6::Pass { was_new } => was_new,
-    };
+            EgressFwCt6::Pass { check_dest } => check_dest,
+        };
 
     // DSR reverse-SNAT. If this is the guest's REPLY to a DSR-load-balanced flow, the backend's
     // ingress `uplink_dsr_note6` tcx pre-program already noted the LB address the edge dispatched, keyed
@@ -375,9 +399,9 @@ pub fn process_guest_tx_v6<P: Pkt, M: Maps>(
             tap_ifindex,
             guest_mac,
         } => {
-            // Stage 3: destination ingress firewall on NEW flows (same-node delivery). Deny-by-default.
-            // v6 evaluator (fw_eval_dir6 / FW_META6) — mirrors the eBPF fw_drop_v6 (ingress).
-            if was_new
+            // Stage 3: destination ingress firewall on new and re-evaluated flows (same-node
+            // delivery). Deny-by-default. Mirrors the eBPF fw_drop_v6 (ingress).
+            if check_dest
                 && crate::firewall::fw_classify6(&*pkt, &*maps, ip_off, tap_ifindex, FW_DIR_INGRESS)
                     == FW_ACTION_DROP
             {

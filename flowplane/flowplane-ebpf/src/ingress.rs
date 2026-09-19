@@ -69,7 +69,7 @@ pub(crate) fn resolve_dsr_opt(skb: *mut __sk_buff) -> Option<DsrOpt> {
 /// `process_uplink`/`process_uplink_v6` because:
 ///   - inlining the DSR `ct_key` build (~48B) into `uplink_rx`'s own frame pushes its combined
 ///     call-stack over the eBPF verifier's 512-byte budget (`uplink_rx`(288) ->
-///     `uplink_ingress_firewall_drop`(280) -> leaf(8) = 576 > 512, and `main` is already at the
+///     `uplink_ingress_firewall`(280) -> leaf(8) = 576 > 512, and `main` is already at the
 ///     ceiling on this shared path);
 ///   - out-of-lining the note instead (a `#[inline(never)]` helper taking `pkt` + calling into `Maps`)
 ///     hits "R2 pointer arithmetic on pkt_end prohibited": a pkt-taking + map-calling subprogram can't

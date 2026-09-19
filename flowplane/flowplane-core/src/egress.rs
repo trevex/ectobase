@@ -10,7 +10,9 @@
 
 use flowplane_common::{Local, PortMeta, RouteValue, FW_ACTION_DROP, FW_DIR_EGRESS};
 
-use crate::conntrack::{ct_create_default6, ct_key6, ct_refresh6};
+use crate::conntrack::{
+    ct_create_default6, ct_forget_default6, ct_hit_recheck6, ct_key6, ct_refresh6,
+};
 use crate::encap::{tunnel_encap, TunnelEncap, ETH_LEN};
 use crate::firewall::fw_classify6;
 use crate::maps::Maps;
@@ -62,7 +64,7 @@ pub fn route6<M: Maps>(maps: &M, vni: u32, dst: &[u8; 16]) -> Option<RouteValue>
 /// `dst` is the 16-byte overlay destination; `is_v6` selects the map (v4 callers pass the 4-byte
 /// dst left-justified in the 16-byte buffer). `route` is still needed for the encap-on-miss arm
 /// (the tunnel key rides `route.nexthop_ipv6`). The destination ingress-firewall gate on the v4
-/// local path stays in the eBPF wrapper (it needs `was_new` + the packet), exactly as the wrapper
+/// local path stays in the eBPF wrapper (it needs `check_dest` + the packet), exactly as the wrapper
 /// still owns conntrack/lb_ip/meter.
 ///
 /// Note: the old `inner_proto` (outer next-header) and `flow_label` (RFC 6438 outer flow-label
@@ -103,18 +105,19 @@ pub fn deliver<M: Maps>(
 }
 
 /// Result of the shared inner-v6 egress firewall/conntrack stage ([`egress_fw_ct6`]): either DROP
-/// (deny-by-default on a fresh flow), or PASS carrying whether this was a NEW flow (a conntrack
-/// MISS). `was_new` is consumed downstream so the local fast path can enforce the DESTINATION's
-/// ingress firewall on new flows only — mirroring the v4 [`crate::datapath::process_guest_tx`] Local
-/// arm; established flows (CT hit, incl. the pre-seeded reverse entry for a same-node reply) skip
-/// both egress and dest-ingress firewalls.
+/// (deny-by-default), or PASS carrying whether the flow met the firewall here — a NEW flow (a
+/// conntrack MISS) or a re-evaluated one ([`EgressCt6::Recheck`]). `check_dest` is consumed
+/// downstream so the local fast path enforces the DESTINATION's ingress firewall on exactly those —
+/// mirroring the v4 [`crate::datapath::process_guest_tx`] Local arm; established flows (CT hit,
+/// incl. the pre-seeded reverse entry for a same-node reply) skip both firewalls.
 ///
 /// The native SimNode runs [`egress_fw_ct6`] via [`crate::datapath::process_guest_tx_v6`]; the eBPF
-/// `egress::forward_decision_v6` runs the SAME three parts ([`egress_ct6`], [`fw_eval_dir6`],
-/// [`ct_create_default6`]) as sequential out-of-line subprograms, in the same order.
+/// `egress::forward_decision_v6` runs the SAME parts ([`egress_ct6`], [`fw_classify6`],
+/// [`ct_create_default6`] / [`ct_forget_default6`]) as sequential out-of-line subprograms, in the
+/// same order.
 pub enum EgressFwCt6 {
     Drop,
-    Pass { was_new: bool },
+    Pass { check_dest: bool },
 }
 
 /// What the conntrack half of STAGE 1 found for an inner-v6 egress frame ([`egress_ct6`]).
@@ -122,6 +125,10 @@ pub enum EgressFwCt6 {
 pub enum EgressCt6 {
     /// A tracked flow; its entry was refreshed. The firewall is skipped.
     Established,
+    /// A tracked flow that must meet the firewall again ([`ct_hit_recheck6`]: a forward entry from
+    /// an older firewall epoch, or a bare SYN). Its entry was refreshed (and stamped with the
+    /// current epoch); a refusal must forget it ([`ct_forget_default6`]).
+    Recheck,
     /// No entry: the egress firewall decides, and an allowed flow is then tracked.
     Miss,
     /// The frame is too short to key. Keying gates the firewall, so this must DROP: passing it
@@ -130,10 +137,11 @@ pub enum EgressCt6 {
 }
 
 /// STAGE 1a (shared core) — the conntrack lookup of [`egress_fw_ct6`]: build the v6 5-tuple key
-/// ([`ct_key6`]) and, on a HIT, refresh the entry (`ct_refresh6`, map-only, byte-neutral). Split out
-/// so the eBPF dispatcher can run the CT lookup, the firewall scan and the CT create as SEQUENTIAL
-/// `#[inline(never)]` frames: nested, the CtKey6/CtEntry locals and the 16-slot `FwRule6` scan
-/// exceed what the 512B combined stack leaves after `tc_guest_egress_v6`'s own frame.
+/// ([`ct_key6`]) and, on a HIT, decide whether it must meet the firewall again
+/// ([`ct_hit_recheck6`]) and refresh it, stamping `epoch` (`ct_refresh6`, map-only, byte-neutral).
+/// `epoch` is the caller's `FW_EPOCH` read, taken before any firewall lookup. Split out so the eBPF
+/// dispatcher can run the CT lookup, the firewall and the CT create as SEQUENTIAL
+/// `#[inline(never)]` frames, keeping each one's locals off the others' 512B combined stack.
 #[inline(always)]
 pub fn egress_ct6<P: Pkt, M: Maps>(
     pkt: &P,
@@ -141,14 +149,21 @@ pub fn egress_ct6<P: Pkt, M: Maps>(
     ip_off: usize,
     vni: u32,
     now: u64,
+    epoch: u32,
 ) -> EgressCt6 {
     let Some(key) = ct_key6(pkt, ip_off, vni) else {
         return EgressCt6::Unkeyable;
     };
     match maps.conntrack6_get(&key) {
         Some(mut e) => {
-            ct_refresh6(pkt, maps, ip_off, &key, &mut e, now);
-            EgressCt6::Established
+            // Decide before the refresh stamps `epoch`.
+            let recheck = ct_hit_recheck6(pkt, ip_off, &e, epoch);
+            ct_refresh6(pkt, maps, ip_off, &key, &mut e, now, epoch);
+            if recheck {
+                EgressCt6::Recheck
+            } else {
+                EgressCt6::Established
+            }
         }
         None => EgressCt6::Miss,
     }
@@ -156,8 +171,9 @@ pub fn egress_ct6<P: Pkt, M: Maps>(
 
 /// STAGE 1 (shared core) — stateful egress firewall + firewall-only IPv6 conntrack for a native
 /// v6→v6 guest egress flow: [`egress_ct6`]; on a MISS enforce the SOURCE egress firewall
-/// ([`fw_eval_dir6`], deny-by-default → DROP), then create the default (firewall-track) v6
-/// conntrack entry (`ct_create_default6`) and report `was_new = true`. An unkeyable frame DROPs.
+/// ([`fw_classify6`], deny-by-default → DROP), then create the default (firewall-track) v6
+/// conntrack entry (`ct_create_default6`); on a RECHECK enforce it again and forget a refused flow.
+/// Either way reports `check_dest = true`. An unkeyable frame DROPs.
 /// `ip_off` is the inner IPv6 header offset (`ETH_LEN` for a guest frame).
 #[inline(always)]
 pub fn egress_fw_ct6<P: Pkt, M: Maps>(
@@ -168,15 +184,24 @@ pub fn egress_fw_ct6<P: Pkt, M: Maps>(
     vni: u32,
     now: u64,
 ) -> EgressFwCt6 {
-    match egress_ct6(pkt, maps, ip_off, vni, now) {
-        EgressCt6::Established => EgressFwCt6::Pass { was_new: false },
+    // Read before any firewall lookup; the epoch this stage stamps (see `ct_needs_recheck`).
+    let epoch = maps.fw_epoch();
+    match egress_ct6(pkt, maps, ip_off, vni, now, epoch) {
+        EgressCt6::Established => EgressFwCt6::Pass { check_dest: false },
         EgressCt6::Unkeyable => EgressFwCt6::Drop,
         EgressCt6::Miss => {
             if fw_classify6(pkt, &*maps, ip_off, ifindex, FW_DIR_EGRESS) == FW_ACTION_DROP {
                 return EgressFwCt6::Drop;
             }
-            ct_create_default6(pkt, maps, ip_off, vni, now);
-            EgressFwCt6::Pass { was_new: true }
+            ct_create_default6(pkt, maps, ip_off, vni, now, epoch);
+            EgressFwCt6::Pass { check_dest: true }
+        }
+        EgressCt6::Recheck => {
+            if fw_classify6(pkt, &*maps, ip_off, ifindex, FW_DIR_EGRESS) == FW_ACTION_DROP {
+                ct_forget_default6(pkt, maps, ip_off, vni);
+                return EgressFwCt6::Drop;
+            }
+            EgressFwCt6::Pass { check_dest: true }
         }
     }
 }

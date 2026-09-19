@@ -63,15 +63,14 @@ pub const fn fw_precedence_allows(precedence: u32) -> bool {
 }
 
 /// Per-interface scope binding (`FW_BIND[ifindex]`), both families and both directions in one value
-/// so an interface cuts over to new rules with ONE map write. `gen` is bumped whenever either scope
-/// changes; conntrack compares it to re-evaluate established flows after a policy change.
+/// so an interface cuts over to new rules with ONE map write. Established flows learn of a changed
+/// binding through the node-wide firewall epoch (`FW_EPOCH`) the dataplane bumps after every binding
+/// change, compared against [`CtEntry::policy_epoch`](crate::CtEntry::policy_epoch).
 #[repr(C)]
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Default)]
 pub struct FwBind {
     pub ingress_scope: u64,
     pub egress_scope: u64,
-    pub gen: u8,
-    pub _pad: [u8; 7],
 }
 
 impl FwBind {
@@ -128,8 +127,8 @@ mod tests {
 
     #[test]
     fn layouts() {
-        // 8 + 8 (scopes) + 1 (gen) + 7 (pad) = 24.
-        assert_eq!(size_of::<FwBind>(), 24);
+        // 8 + 8 (scopes), no padding.
+        assert_eq!(size_of::<FwBind>(), 16);
         // 4 (class) + 1 (proto) + 2 (port) + 1 (pad) = 8: a multiple of the u32 value's alignment.
         assert_eq!(size_of::<FwPolKey>(), 8);
     }
@@ -155,7 +154,6 @@ mod tests {
         let b = FwBind {
             ingress_scope: 7,
             egress_scope: 9,
-            ..Default::default()
         };
         assert_eq!(b.scope(crate::FW_DIR_INGRESS), 7);
         assert_eq!(b.scope(crate::FW_DIR_EGRESS), 9);

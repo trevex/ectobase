@@ -77,6 +77,13 @@ pub trait Maps {
     fn fw_policy6(&self, _scope: u64, _key: &flowplane_common::FwPolKey) -> Option<u32> {
         None
     }
+    /// The node's firewall epoch (`FW_EPOCH[0]`): bumped by the dataplane after every change of an
+    /// interface's scope binding. A forward conntrack entry stamped with an older epoch meets the
+    /// firewall again on its next packet (see [`crate::conntrack::ct_needs_recheck`]). DEFAULT 0: a
+    /// backend without the epoch never re-evaluates established flows on a policy change.
+    fn fw_epoch(&self) -> u32 {
+        0
+    }
     fn lb_get(&self, key: &LbKey) -> Option<LbValue>;
     /// IPv6 LB service lookup (`LB6`), keyed on the FULL v6 address — see [`LbKey6`].
     fn lb6_get(&self, key: &flowplane_common::LbKey6) -> Option<LbValue>;

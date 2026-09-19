@@ -14,23 +14,29 @@ use crate::parse::{l4_ports, l4_ports_v6, IPPROTO_ICMP, IPPROTO_TCP, IPPROTO_UDP
 use crate::pkt::Pkt;
 use flowplane_common::csum::{csum_replace2, csum_replace4};
 use flowplane_common::{
-    CtEntry, CtEntry6, CtKey, DsrLbIP, CT_F_DEFAULT, CT_F_DST_LB, CT_F_NAT64, CT_F_SRC_NAT,
-    CT_REWRITE_DST, CT_REWRITE_SRC, TCP_ESTABLISHED, TCP_FINWAIT, TCP_NEW_SYN, TCP_NEW_SYNACK,
-    TCP_RST_FIN,
+    CtEntry, CtEntry6, CtKey, DsrLbIP, CT_F_DEFAULT, CT_F_DST_LB, CT_F_NAT64, CT_F_REPLY,
+    CT_F_SRC_NAT, CT_REWRITE_DST, CT_REWRITE_SRC, TCP_ESTABLISHED, TCP_FINWAIT, TCP_NEW_SYN,
+    TCP_NEW_SYNACK, TCP_RST_FIN,
 };
 
 /// A conntrack entry is hardware-offload-eligible iff it is a plain established East/West overlay
 /// flow: `CT_F_DEFAULT` set, NONE of the NAT/LB/NAT64/rewrite bits (those must stay on the eBPF
 /// path), no translation, and TCP-ESTABLISHED. TCP-only (UDP "established" is not expressible via
 /// `tcp_state`). Used by the userspace offload manager to pick flows to hardware-offload.
+///
+/// And it must not be due a firewall re-evaluation under the node's current `epoch`
+/// ([`ct_needs_recheck`], packet-free): offloaded packets never reach the eBPF recheck, so a stale
+/// forward entry leaves hardware — the manager removes what is no longer eligible — and its next
+/// packet meets the current policy on the eBPF path, which re-stamps it if it still passes.
 #[inline(always)]
-pub fn offload_eligible(e: &CtEntry) -> bool {
+pub fn offload_eligible(e: &CtEntry, epoch: u32) -> bool {
     const DISQUALIFY: u8 =
         CT_REWRITE_SRC | CT_REWRITE_DST | CT_F_SRC_NAT | CT_F_DST_LB | CT_F_NAT64;
     e.flags & CT_F_DEFAULT != 0
         && e.flags & DISQUALIFY == 0
         && e.xlate_ip == [0u8; 4]
         && e.tcp_state == TCP_ESTABLISHED
+        && !ct_needs_recheck(e, epoch, None)
 }
 
 /// v6 sibling of [`offload_eligible`] (`CtEntry6.xlate_ip6`).
@@ -374,10 +380,15 @@ fn tcp_flags<P: Pkt>(pkt: &P, ip_off: usize) -> Option<u8> {
 /// (ebpf/conntrack.rs:57), generic over `Pkt`/`Maps`. Named `ct_refresh` to avoid clashing with the
 /// eBPF `ct_touch` (which re-exports `tcp_advance` from here).
 ///
-/// This ONLY writes the conntrack map (last_seen + tcp_state); it never mutates the packet, so it is
-/// byte-parity-neutral. Without it an established TCP flow keeps `tcp_state = 0` forever, so
-/// `timeout_ns` returns the 30 s idle timeout instead of the 24 h ESTABLISHED timeout and the GC
-/// evicts active NAT'd flows after 30 s.
+/// This ONLY writes the conntrack map (last_seen + tcp_state + policy_epoch); it never mutates the
+/// packet, so it is byte-parity-neutral. Without it an established TCP flow keeps `tcp_state = 0`
+/// forever, so `timeout_ns` returns the 30 s idle timeout instead of the 24 h ESTABLISHED timeout
+/// and the GC evicts active NAT'd flows after 30 s.
+///
+/// Also stamps `epoch`, which the caller read from `FW_EPOCH` BEFORE its hook's firewall
+/// evaluation (see [`ct_needs_recheck`]): a refreshed entry has met the policy of that epoch — every
+/// caller refreshes after its hook's check passed, or (the v6 guest egress) forgets the entry when
+/// the check that follows the refresh refuses the flow.
 #[inline(always)]
 pub fn ct_refresh<P: Pkt, M: Maps>(
     pkt: &P,
@@ -386,8 +397,10 @@ pub fn ct_refresh<P: Pkt, M: Maps>(
     key: &CtKey,
     e: &mut CtEntry,
     now: u64,
+    epoch: u32,
 ) {
     e.last_seen = now;
+    e.policy_epoch = epoch;
     if let Some(fl) = tcp_flags(pkt, ip_off) {
         e.tcp_state = tcp_advance(e.tcp_state, fl);
     }
@@ -399,7 +412,10 @@ pub fn ct_refresh<P: Pkt, M: Maps>(
 /// reverse-direction entry so return traffic is immediately recognised as established.
 ///
 /// `now` is the current monotonic time (ns); the eBPF wrapper passes `now()`, the sim passes 0.
-/// Faithful port of the eBPF `conntrack::ct_ensure_default`.
+/// `epoch` is the firewall epoch the caller read BEFORE the evaluation that admitted the flow: read
+/// after it, a binding change landing in between would stamp the new epoch on a verdict of the old
+/// policy, and the flow would never be re-evaluated. Faithful port of the eBPF
+/// `conntrack::ct_ensure_default`.
 #[inline(always)]
 pub fn ct_create_default<P: Pkt, M: Maps>(
     pkt: &P,
@@ -407,6 +423,7 @@ pub fn ct_create_default<P: Pkt, M: Maps>(
     ip_off: usize,
     vni: u32,
     now: u64,
+    epoch: u32,
 ) {
     let key = match ct_key(pkt, ip_off, vni) {
         Some(k) => k,
@@ -422,23 +439,66 @@ pub fn ct_create_default<P: Pkt, M: Maps>(
         flags: CT_F_DEFAULT,
         tcp_state: tcp,
         fwall_action: 0,
-        _pad: [0; 7],
+        _pad: [0; 3],
+        policy_epoch: epoch,
     };
     maps.conntrack_insert(key, e);
     // Pre-seed the reverse direction so return traffic is immediately recognised as established,
-    // but only if no entry already exists (NAT reverse entries must not be overwritten).
+    // but only if no entry already exists (NAT reverse entries must not be overwritten). Marked
+    // CT_F_REPLY: the replies ride on this flow's verdict and are never re-evaluated.
     let rev = invert_key(&key);
     if maps.conntrack_get(&rev).is_none() {
-        maps.conntrack_insert(rev, e);
+        maps.conntrack_insert(
+            rev,
+            CtEntry {
+                flags: CT_F_DEFAULT | CT_F_REPLY,
+                ..e
+            },
+        );
     }
 }
 
-/// Undo [`ct_create_default`] for a flow a later check refused: remove its forward entry and the
-/// reverse entry it pre-seeded. The same-node path creates the entries after the SOURCE's egress
-/// firewall but before the DESTINATION's ingress check; left behind, they would carry every later
-/// packet of the refused flow past both firewalls, and the destination's own traffic back along
-/// the reverse entry. A reverse entry that is not a plain default entry (e.g. NAT's) is kept — the
-/// refused flow did not create it.
+/// Whether a conntrack HIT must meet the firewall again, exactly as a new flow would, before it is
+/// used:
+///
+/// - a FORWARD entry last evaluated under an older firewall epoch (`epoch` is the node's current
+///   `FW_EPOCH`): a binding changed since, and the flow must still be allowed. Replies — pre-seeded
+///   [`CT_F_REPLY`] entries and NAT reverse (`CT_REWRITE_DST`) entries — are allowed because their
+///   flow is, and are never re-evaluated for an epoch;
+/// - any entry hit by a bare TCP SYN (SYN without ACK): a new connection reusing a tracked tuple
+///   meets the current policy (Calico's port-reuse rule), whichever direction created the entry.
+///
+/// `epoch` must be read once per hook, BEFORE any firewall lookup, and be the value that hook stamps
+/// (create, refresh): a binding change racing the hook then leaves the entry at the older epoch —
+/// re-evaluated again — never at the newer one on a verdict of the old policy. The dataplane writes
+/// the binding before it bumps the epoch. A re-evaluation that passes lets the refresh stamp
+/// `epoch`; one that refuses drops the packet and forgets the flow ([`ct_forget_default`]).
+#[inline(always)]
+pub fn ct_needs_recheck(e: &CtEntry, epoch: u32, tcp_flags: Option<u8>) -> bool {
+    let bare_syn = tcp_flags.is_some_and(|f| f & (TCP_SYN | TCP_ACK) == TCP_SYN);
+    let reply = e.flags & (CT_F_REPLY | CT_REWRITE_DST) != 0;
+    bare_syn || (!reply && e.policy_epoch != epoch)
+}
+
+/// [`ct_needs_recheck`] for the IPv4 packet at `ip_off` that hit `e`.
+#[inline(always)]
+pub fn ct_hit_recheck<P: Pkt>(pkt: &P, ip_off: usize, e: &CtEntry, epoch: u32) -> bool {
+    ct_needs_recheck(e, epoch, tcp_flags(pkt, ip_off))
+}
+
+/// IPv6 sibling of [`ct_hit_recheck`].
+#[inline(always)]
+pub fn ct_hit_recheck6<P: Pkt>(pkt: &P, ip_off: usize, e: &CtEntry, epoch: u32) -> bool {
+    ct_needs_recheck(e, epoch, tcp_flags_v6(pkt, ip_off))
+}
+
+/// Forget a flow a firewall check refused: remove the entry the packet keys to and the reply entry
+/// it pre-seeded. Two callers: the same-node path, which creates the entries after the SOURCE's
+/// egress firewall but before the DESTINATION's ingress check — left behind, they would carry every
+/// later packet of the refused flow past both firewalls, and the destination's own traffic back
+/// along the reverse entry; and a [`ct_needs_recheck`] re-evaluation that the current policy
+/// refuses. The inverse entry is removed only if it is a pre-seeded reply ([`CT_F_REPLY`]): a NAT
+/// entry, or the forward entry of the opposite direction's own flow, was not created by this one.
 #[inline(always)]
 pub fn ct_forget_default<P: Pkt, M: Maps>(pkt: &P, maps: &mut M, ip_off: usize, vni: u32) {
     let Some(key) = ct_key(pkt, ip_off, vni) else {
@@ -448,7 +508,7 @@ pub fn ct_forget_default<P: Pkt, M: Maps>(pkt: &P, maps: &mut M, ip_off: usize, 
     let rev = invert_key(&key);
     if maps
         .conntrack_get(&rev)
-        .is_some_and(|e| e.flags == CT_F_DEFAULT)
+        .is_some_and(|e| e.flags == CT_F_DEFAULT | CT_F_REPLY)
     {
         maps.conntrack_remove(&rev);
     }
@@ -465,7 +525,7 @@ pub fn ct_forget_default6<P: Pkt, M: Maps>(pkt: &P, maps: &mut M, ip_off: usize,
     let rev = invert_key6(&key);
     if maps
         .conntrack6_get(&rev)
-        .is_some_and(|e| e.flags == CT_F_DEFAULT)
+        .is_some_and(|e| e.flags == CT_F_DEFAULT | CT_F_REPLY)
     {
         maps.conntrack6_remove(&rev);
     }
@@ -485,7 +545,7 @@ fn tcp_flags_v6<P: Pkt>(pkt: &P, ip_off: usize) -> Option<u8> {
 
 /// Insert a no-translation DEFAULT IPv6 conntrack entry on conntrack-miss so every v6 flow is tracked
 /// (firewall + aging see it), pre-seeding the reverse direction. Firewall-only v6 mirror of
-/// [`ct_create_default`]; `now` is the current monotonic time (ns), 0 in the sim.
+/// [`ct_create_default`]; `now` is the current monotonic time (ns), 0 in the sim; `epoch` as there.
 #[inline(always)]
 pub fn ct_create_default6<P: Pkt, M: Maps>(
     pkt: &P,
@@ -493,6 +553,7 @@ pub fn ct_create_default6<P: Pkt, M: Maps>(
     ip_off: usize,
     vni: u32,
     now: u64,
+    epoch: u32,
 ) {
     let key = match ct_key6(pkt, ip_off, vni) {
         Some(k) => k,
@@ -508,18 +569,25 @@ pub fn ct_create_default6<P: Pkt, M: Maps>(
         flags: CT_F_DEFAULT,
         tcp_state: tcp,
         fwall_action: 0,
-        _pad: [0; 7],
+        _pad: [0; 3],
+        policy_epoch: epoch,
     };
     maps.conntrack6_insert(key, e);
     let rev = invert_key6(&key);
     if maps.conntrack6_get(&rev).is_none() {
-        maps.conntrack6_insert(rev, e);
+        maps.conntrack6_insert(
+            rev,
+            CtEntry {
+                flags: CT_F_DEFAULT | CT_F_REPLY,
+                ..e
+            },
+        );
     }
 }
 
-/// Refresh a matched IPv6 conntrack entry on a HIT: bump `last_seen = now` and advance `tcp_state`
-/// from the packet's TCP flags (TCP only). v6 mirror of [`ct_refresh`] / the eBPF `ct_touch6`
-/// (ebpf/conntrack.rs:145). Map-only; never mutates the packet.
+/// Refresh a matched IPv6 conntrack entry on a HIT: bump `last_seen = now`, advance `tcp_state`
+/// from the packet's TCP flags (TCP only) and stamp `epoch`. v6 mirror of [`ct_refresh`]. Map-only;
+/// never mutates the packet.
 #[inline(always)]
 pub fn ct_refresh6<P: Pkt, M: Maps>(
     pkt: &P,
@@ -528,8 +596,10 @@ pub fn ct_refresh6<P: Pkt, M: Maps>(
     key: &flowplane_common::CtKey6,
     e: &mut CtEntry,
     now: u64,
+    epoch: u32,
 ) {
     e.last_seen = now;
+    e.policy_epoch = epoch;
     if let Some(fl) = tcp_flags_v6(pkt, ip_off) {
         e.tcp_state = tcp_advance(e.tcp_state, fl);
     }
@@ -630,49 +700,71 @@ mod tests {
             tcp_state: TCP_ESTABLISHED,
             ..Default::default()
         };
+        let eligible = |e: &CtEntry| offload_eligible(e, 0);
         assert!(
-            offload_eligible(&base),
+            eligible(&base),
             "plain established E/W flow is eligible"
         );
         assert!(
-            !offload_eligible(&CtEntry {
+            !eligible(&CtEntry {
                 tcp_state: TCP_NEW_SYN,
                 ..base
             }),
             "not-yet-established"
         );
         assert!(
-            !offload_eligible(&CtEntry {
+            !eligible(&CtEntry {
                 flags: CT_F_DEFAULT | CT_F_SRC_NAT,
                 ..base
             }),
             "NAT flow excluded"
         );
         assert!(
-            !offload_eligible(&CtEntry {
+            !eligible(&CtEntry {
                 flags: CT_F_DEFAULT | CT_F_DST_LB,
                 ..base
             }),
             "LB flow excluded"
         );
         assert!(
-            !offload_eligible(&CtEntry {
+            !eligible(&CtEntry {
                 flags: CT_F_DEFAULT | CT_F_NAT64,
                 ..base
             }),
             "NAT64 excluded"
         );
         assert!(
-            !offload_eligible(&CtEntry {
+            !eligible(&CtEntry {
                 xlate_ip: [1, 2, 3, 4],
                 ..base
             }),
             "translated flow excluded"
         );
         assert!(
-            !offload_eligible(&CtEntry { flags: 0, ..base }),
+            !eligible(&CtEntry { flags: 0, ..base }),
             "non-default excluded"
         );
+    }
+
+    // Hardware-offloaded packets never reach the eBPF recheck, so a forward entry from an older
+    // epoch must leave hardware (the manager's reconcile removes what is no longer eligible) and
+    // meet the policy on the eBPF path; a reply entry has no epoch to meet.
+    #[test]
+    fn offload_requires_a_current_epoch_on_forward_entries() {
+        use flowplane_common::{CtEntry, CT_F_DEFAULT, CT_F_REPLY, TCP_ESTABLISHED};
+        let fwd = CtEntry {
+            flags: CT_F_DEFAULT,
+            tcp_state: TCP_ESTABLISHED,
+            policy_epoch: 4,
+            ..Default::default()
+        };
+        assert!(offload_eligible(&fwd, 4));
+        assert!(!offload_eligible(&fwd, 5), "stale forward entry stays on eBPF");
+        let reply = CtEntry {
+            flags: CT_F_DEFAULT | CT_F_REPLY,
+            ..fwd
+        };
+        assert!(offload_eligible(&reply, 5), "replies are never re-evaluated");
     }
 
     #[test]

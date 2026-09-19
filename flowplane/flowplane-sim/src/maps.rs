@@ -98,6 +98,9 @@ pub struct MemMaps {
     pub fw_policy4: HashMap<u64, Vec<(u32, FwPolKey, u32)>>,
     /// Per-scope v6 policy tries (`FW_POLICY6[scope]`).
     pub fw_policy6: HashMap<u64, Vec<(u32, FwPolKey, u32)>>,
+    /// The node's firewall epoch (`FW_EPOCH[0]`). Bump it after changing a binding (or the legacy
+    /// seeds a binding is derived from) to have established flows meet the new policy.
+    pub fw_epoch: u32,
     /// Scopes DERIVED from the legacy rule-slot seeds (`fw_meta`/`fw_rules`,
     /// `fw_meta6`/`fw_rules6`) for an interface with no explicit `fw_bind` entry — see
     /// [`MemMaps::derived_bind`].
@@ -264,6 +267,9 @@ impl Maps for MemMaps {
     }
     fn fw_rule6(&self, key: &FwRuleKey) -> Option<flowplane_common::FwRule6> {
         self.fw_rules6.get(&(key.ifindex, key.idx)).copied()
+    }
+    fn fw_epoch(&self) -> u32 {
+        self.fw_epoch
     }
     fn fw_bind(&self, ifindex: u32) -> Option<FwBind> {
         match self.fw_bind.get(&ifindex) {

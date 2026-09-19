@@ -34,6 +34,7 @@ pub struct MemMapWriter {
     /// Call counters, so tests can assert an unchanged replace writes nothing.
     pub fw_scope_creates: usize,
     pub fw_bind_writes: usize,
+    pub fw_epoch: u32,
     pub meter: HashMap<u32, MeterState>,
     pub dhcp_config: Option<DhcpConfig>,
     // INTERFACE domain.
@@ -223,6 +224,10 @@ impl MapWriter for MemMapWriter {
     }
     fn fw_bind_remove(&mut self, ifindex: u32) -> anyhow::Result<()> {
         self.fw_bind.remove(&ifindex);
+        Ok(())
+    }
+    fn fw_epoch_bump(&mut self) -> anyhow::Result<()> {
+        self.fw_epoch = self.fw_epoch.wrapping_add(1);
         Ok(())
     }
     fn fw_bind_entries(&self) -> Vec<(u32, FwBind)> {

@@ -103,6 +103,22 @@ macro_rules! bpf_array_map {
             self.map.set(0, value, 0).context(concat!("write ", $name, "[0]"))
         }
     };
+    (@get $val:ty, $name:literal) => {
+        /// Slot 0's value.
+        pub fn get(&self) -> anyhow::Result<$val> {
+            self.map.get(&0, 0).context(concat!("read ", $name, "[0]"))
+        }
+    };
+    (@bump $val:ty, $name:literal) => {
+        /// Advance the counter in slot 0 (wrapping). Read-modify-write: the dataplane is its only
+        /// writer, under the control-plane lock.
+        pub fn bump(&mut self) -> anyhow::Result<()> {
+            let v = self.map.get(&0, 0).context(concat!("read ", $name, "[0]"))?;
+            self.map
+                .set(0, v.wrapping_add(1), 0)
+                .context(concat!("write ", $name, "[0]"))
+        }
+    };
     (
         $(#[$meta:meta])*
         $ty:ident, $name:literal, $val:ty $(, $method:ident)* $(,)?
@@ -196,9 +212,15 @@ bpf_hash_map!(
 );
 
 bpf_hash_map!(
-    /// Typed handle over the `FW_BIND` BPF map (ifindex -> the interface's classifier scopes + policy
-    /// generation).
+    /// Typed handle over the `FW_BIND` BPF map (ifindex -> the interface's classifier scopes).
     FwBindMap, "FW_BIND", u32, flowplane_common::FwBind, upsert, remove_owned, entries
+);
+
+bpf_array_map!(
+    /// Typed handle over the single-entry `FW_EPOCH` Array map: the node's firewall epoch, bumped
+    /// after every `FW_BIND` change so established flows meet the new policy. Pinned, so a restart
+    /// keeps counting instead of reusing epochs that live conntrack entries still carry.
+    FwEpochMap, "FW_EPOCH", u32, get, bump
 );
 
 /// The firewall classifier's four outer map-of-maps (`FW_CLASS{,6}` / `FW_POLICY{,6}`): scope id ->

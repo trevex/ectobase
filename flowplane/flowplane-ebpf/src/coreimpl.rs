@@ -52,6 +52,10 @@ impl Maps for GlobalMaps {
     fn fw_bind(&self, ifindex: u32) -> Option<flowplane_common::FwBind> {
         unsafe { crate::maps::FW_BIND.get(&ifindex).copied() }
     }
+    #[inline(always)]
+    fn fw_epoch(&self) -> u32 {
+        crate::maps::FW_EPOCH.get(0).copied().unwrap_or(0)
+    }
     // The classifier lookups fuse the outer (scope) and inner (trie) lookups in one call
     // (`HashOfMaps::get_value`): fewer instructions between the two helpers, less verifier state.
     #[inline(always)]

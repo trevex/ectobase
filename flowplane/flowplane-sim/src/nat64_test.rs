@@ -431,7 +431,8 @@ fn rev_ct(orig_sport: u16) -> CtEntry {
         flags: CT_REWRITE_DST | CT_F_SRC_NAT | CT_F_NAT64,
         tcp_state: 0,
         fwall_action: 0,
-        _pad: [0; 7],
+        _pad: [0; 3],
+        policy_epoch: 0,
     }
 }
 

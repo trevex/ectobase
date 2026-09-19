@@ -28,7 +28,7 @@ fn local() -> Local {
 /// A node that owns floating IP LB address->GUEST and has GUEST as a local interface.
 ///
 /// DEVIATION from the task's given verbatim `floating_ip_node()`: also seeds a permissive ingress `FW_META`/
-/// `FW_RULES` ALLOW-all entry for `TAP`. `process_uplink`'s step 2 (`uplink_ingress_firewall_drop`)
+/// `FW_RULES` ALLOW-all entry for `TAP`. `process_uplink`'s step 2 (`uplink_ingress_firewall`)
 /// evaluates the deny-by-default ingress firewall on every NEW flow's delivery tap unconditionally —
 /// including the F2 LB address-DNAT arm, which sets `is_lb = false` exactly like normal guest delivery — so
 /// without an explicit ALLOW rule for `TAP` every local-delivery sim test in this codebase (e.g.

@@ -23,7 +23,6 @@ fn bound(ingress: u64, egress: u64) -> MemMaps {
         FwBind {
             ingress_scope: ingress,
             egress_scope: egress,
-            ..Default::default()
         },
     );
     m

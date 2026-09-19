@@ -42,7 +42,7 @@ use flowplane_common::csum::csum_replace4;
 /// module.
 ///
 /// `#[inline(never)]`: keeps this out of `process_uplink`'s already-tight combined call stack (same
-/// BPF-stack-relief discipline as `uplink_ingress_firewall_drop`).
+/// BPF-stack-relief discipline as `uplink_ingress_firewall`).
 #[inline(never)]
 pub(crate) fn floating_ip_dnat_rewrite<P: Pkt>(
     pkt: &mut P,

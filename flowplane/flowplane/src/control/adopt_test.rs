@@ -17,7 +17,7 @@
 use std::path::Path;
 use std::process::Command;
 
-use aya::maps::{of_maps::HashOfMaps, HashMap as AyaHashMap, MapData};
+use aya::maps::{of_maps::HashOfMaps, Array, HashMap as AyaHashMap, MapData};
 use aya::programs::{SchedClassifier, TcAttachType};
 use flowplane_common::{FwBind, FwMeta, FwPolKey};
 
@@ -43,6 +43,14 @@ fn fw_bind_pinned(pin: &Path, ifindex: u32) -> Option<FwBind> {
     let map: AyaHashMap<_, u32, FwBind> =
         AyaHashMap::try_from(aya::maps::Map::HashMap(map)).expect("FW_BIND is a hash map");
     map.get(&ifindex, 0).ok()
+}
+
+/// The node's firewall epoch from the pinned FW_EPOCH map.
+fn fw_epoch_pinned(pin: &Path) -> u32 {
+    let map = MapData::from_pin(pin.join("FW_EPOCH")).expect("reopen pinned FW_EPOCH");
+    let map: Array<_, u32> =
+        Array::try_from(aya::maps::Map::Array(map)).expect("FW_EPOCH is an array");
+    map.get(&0, 0).expect("FW_EPOCH[0]")
 }
 
 /// The scope ids present in the pinned FW_POLICY outer map.
@@ -179,7 +187,7 @@ fn restart_adopts_pinned_state_and_relinks_guests() {
             },
         ]
     };
-    // Two cutovers, so the surviving generation (2) is not what a fresh process would write.
+    // Two cutovers, so the surviving epoch (2) is not what a fresh process would start from.
     replace_fw(&ctl, rules()[..1].to_vec());
     replace_fw(&ctl, rules());
     assert_eq!(tcx_ingress_prog_count("fpt-g0"), 1, "tc_guest_tx attached");
@@ -188,7 +196,7 @@ fn restart_adopts_pinned_state_and_relinks_guests() {
         bind.ingress_scope != 0 && bind.egress_scope != 0,
         "{bind:?}"
     );
-    assert_eq!(bind.gen, 2);
+    assert_eq!(fw_epoch_pinned(pin.path()), 2, "one epoch bump per cutover");
     let scopes = scopes_pinned(pin.path());
     assert_eq!(
         scopes.len(),
@@ -224,6 +232,7 @@ fn restart_adopts_pinned_state_and_relinks_guests() {
         scopes,
         "scopes survive with no control plane"
     );
+    assert_eq!(fw_epoch_pinned(pin.path()), 2, "the epoch survives");
 
     // Incarnation 2: adopt.
     let ctl = bring_up(pin.path(), true);
@@ -256,13 +265,15 @@ fn restart_adopts_pinned_state_and_relinks_guests() {
     assert!(meta6_path.exists(), "v6 firewall meta is pinned too");
 
     // The agent re-pushes the same rules after a restart: the adopted scopes are reused and the
-    // binding is untouched (same generation, so established flows are not re-evaluated).
+    // binding is untouched (no epoch bump, so established flows are not re-evaluated). Without the
+    // adopt rebuild the re-push would rebind and bump.
     replace_fw(&ctl, rules());
     assert_eq!(
         fw_bind_pinned(pin.path(), guest_ifindex),
         Some(bind),
         "re-push is a no-op"
     );
+    assert_eq!(fw_epoch_pinned(pin.path()), 2, "re-push bumps nothing");
     assert_eq!(scopes_pinned(pin.path()), scopes, "no duplicate scopes");
 
     // The adopted control plane is fully functional: a fresh replace lands in the same maps, and
@@ -272,11 +283,7 @@ fn restart_adopts_pinned_state_and_relinks_guests() {
     assert_eq!((meta.ingress_count, meta.egress_count), (0, 0));
     let emptied = fw_bind_pinned(pin.path(), guest_ifindex).expect("binding after replace");
     assert_eq!((emptied.ingress_scope, emptied.egress_scope), (0, 0));
-    assert_eq!(
-        emptied.gen,
-        bind.gen.wrapping_add(1),
-        "a rebind bumps the generation"
-    );
+    assert_eq!(fw_epoch_pinned(pin.path()), 3, "a rebind bumps the epoch");
     assert!(
         scopes_pinned(pin.path()).is_empty(),
         "unreferenced scopes deleted"

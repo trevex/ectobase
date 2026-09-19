@@ -88,9 +88,15 @@ pub static FW_META6: HashMap<u32, FwMeta> = HashMap::pinned(1024, 0);
 
 // ---- Firewall classifier (see flowplane_common::FwBind / FwPolKey and core `fw_classify{,6}`) ----
 
-/// ifindex -> the interface's ingress/egress scopes + policy generation. One write cuts over.
+/// ifindex -> the interface's ingress/egress scopes. One write cuts over.
 #[map]
 pub static FW_BIND: HashMap<u32, FwBind> = HashMap::pinned(1024, 0);
+
+/// The node's firewall epoch (slot 0), bumped by the dataplane after every `FW_BIND` change.
+/// Conntrack entries record the epoch they were last evaluated under
+/// (`CtEntry::policy_epoch`); a forward entry from an older one meets the firewall again.
+#[map]
+pub static FW_EPOCH: Array<u32> = Array::pinned(1, 0);
 
 /// A scope's v4 / v6 peer-class trie: peer address prefix -> scope-local class.
 pub type FwClassTrie4 = BtfLpmTrie<[u8; 4], u32, { FW_SCOPE_MAX_CLASSES as usize }>;

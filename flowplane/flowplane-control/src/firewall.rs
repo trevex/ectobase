@@ -105,15 +105,19 @@ impl<W: MapWriter> ControlCore<W> {
         self.fw6.remove(&ifindex);
         if let Some(old) = self.fw_binds.remove(&ifindex) {
             let _ = self.w.fw_bind_remove(ifindex);
+            let _ = self.w.fw_epoch_bump();
             self.fw_release_scopes(&old);
         }
     }
 
     /// Point `ifindex` at the given scopes: create the ones not yet present (fully built before
     /// they are reachable), then ONE binding write cuts the interface over — both directions, both
-    /// families — and bumps its policy generation, then scopes no longer referenced are deleted.
-    /// An unchanged binding writes nothing. A failure before the binding write removes the scopes
-    /// it created and leaves the old binding in force.
+    /// families — for new flows; the epoch bump that follows makes established flows meet the new
+    /// policy on their next packet (the binding must be written first: see
+    /// `flowplane_core::conntrack::ct_needs_recheck`). Then scopes no longer referenced are
+    /// deleted. An unchanged binding writes nothing. A failure before the binding write removes the
+    /// scopes it created and leaves the old binding in force; a failed bump leaves the new binding
+    /// in force for new flows and is reported.
     fn fw_bind_scopes(
         &mut self,
         ifindex: u32,
@@ -140,8 +144,6 @@ impl<W: MapWriter> ControlCore<W> {
         let bind = FwBind {
             ingress_scope: in_id,
             egress_scope: eg_id,
-            gen: old.map_or(0, |b| b.gen).wrapping_add(1),
-            _pad: [0; 7],
         };
         if let Err(e) = self.w.fw_bind_upsert(ifindex, bind) {
             self.fw_discard_scopes(&created);
@@ -153,10 +155,11 @@ impl<W: MapWriter> ControlCore<W> {
                 *self.fw_scope_refs.entry(id).or_insert(0) += 1;
             }
         }
+        let bumped = self.w.fw_epoch_bump();
         if let Some(old) = old {
             self.fw_release_scopes(&old);
         }
-        Ok(())
+        bumped.map_err(Into::into)
     }
 
     fn fw_discard_scopes(&mut self, ids: &[u64]) {
@@ -622,15 +625,15 @@ mod tests {
         replace(&mut c, b"a", &[allow_from(1, 0)]).unwrap();
         replace(&mut c, b"b", &[allow_from(1, 0)]).unwrap();
         let shared = c.w.fw_bind[&1].ingress_scope;
-        let gen = c.w.fw_bind[&1].gen;
+        let epoch = c.w.fw_epoch;
 
         replace(&mut c, b"a", &[allow_from(2, 0)]).unwrap();
         let a = c.w.fw_bind[&1];
         assert_ne!(a.ingress_scope, shared);
         assert_eq!(
-            a.gen,
-            gen.wrapping_add(1),
-            "a rebind bumps the policy generation"
+            c.w.fw_epoch,
+            epoch + 1,
+            "a rebind bumps the epoch: established flows meet the new rules"
         );
         assert!(
             c.w.fw_scopes.contains_key(&shared),
@@ -655,14 +658,19 @@ mod tests {
         )
         .unwrap();
         let (bind, creates, binds) = (c.w.fw_bind[&1], c.w.fw_scope_creates, c.w.fw_bind_writes);
+        let epoch = c.w.fw_epoch;
         replace(
             &mut c,
             b"a",
             &[allow_from(1, 0), allow_from(1, FW_DIR_EGRESS)],
         )
         .unwrap();
-        assert_eq!(c.w.fw_bind[&1], bind, "same scopes, same generation");
+        assert_eq!(c.w.fw_bind[&1], bind, "same scopes");
         assert_eq!((c.w.fw_scope_creates, c.w.fw_bind_writes), (creates, binds));
+        assert_eq!(
+            c.w.fw_epoch, epoch,
+            "nothing changed: established flows keep going"
+        );
     }
 
     #[test]
@@ -697,12 +705,18 @@ mod tests {
     fn detach_unbinds_and_frees_the_scope() {
         let mut c = core_with(&[(b"a", 1)]);
         replace(&mut c, b"a", &[allow_from(1, 0)]).unwrap();
+        let epoch = c.w.fw_epoch;
         c.remove_fw_rules(1);
         assert!(
             !c.w.fw_bind.contains_key(&1),
             "a reused ifindex must not inherit the binding"
         );
         assert!(c.w.fw_scopes.is_empty());
+        assert_eq!(
+            c.w.fw_epoch,
+            epoch + 1,
+            "flows of the detached interface are re-evaluated"
+        );
     }
 
     // After a restart the pinned bindings and scopes survive but the in-memory refcounts do not:

@@ -44,8 +44,14 @@ pub struct CtEntry {
     pub flags: u8,
     pub tcp_state: u8,
     pub fwall_action: u8,
-    /// Trailing padding to keep the eBPF `CONNTRACK`/`CONNTRACK6` map value ABI at 24 bytes / align 8.
-    pub _pad: [u8; 7],
+    /// Padding up to `policy_epoch`'s alignment; the whole value stays 24 bytes / align 8 (the eBPF
+    /// `CONNTRACK`/`CONNTRACK6` map value ABI).
+    pub _pad: [u8; 3],
+    /// The node's firewall epoch (`FW_EPOCH`) this flow was last evaluated under. A FORWARD entry
+    /// (see [`CT_F_REPLY`]) hit under a newer epoch meets the firewall again before it is used, so a
+    /// policy change reaches established flows on their next packet. 32 bits: never wraps in
+    /// practice, so a stale entry cannot alias the current epoch.
+    pub policy_epoch: u32,
 }
 
 // CtEntry.flags bits
@@ -59,8 +65,11 @@ pub const CT_F_FIREWALL: u8 = 0x20;
 /// and reverse conntrack entries carry this flag so the ingress reply path knows to expand
 /// IPv4 back to IPv6 when delivering the translated reply to the guest.
 pub const CT_F_NAT64: u8 = 0x40;
-// 0x80 is unused/reserved. DSR reverse-SNAT state lives in the dedicated `DSR`/`DSR6` maps (see
-// `DsrLbIP`), not in CtEntry flags.
+/// A pre-seeded REVERSE default entry: it carries the replies of the flow that created it and is
+/// never re-evaluated by the firewall (a reply is allowed because its flow was). NAT reverse entries
+/// are replies too; they are recognised by `CT_REWRITE_DST`. DSR reverse-SNAT state lives in the
+/// dedicated `DSR`/`DSR6` maps (see `DsrLbIP`), not in CtEntry flags.
+pub const CT_F_REPLY: u8 = 0x80;
 
 /// Dedicated v6 NAT (NAT66) conntrack value, keyed by `CtKey6` in the `NAT_CT6` map. The v4 NAT
 /// stores its xlate state in `CtEntry.xlate_ip` (`[u8;4]`, v4-only), which is not grown to hold a v6
@@ -127,12 +136,14 @@ mod tests {
     #[test]
     fn ct_entry_layout() {
         // 8 (last_seen) + 4 (xlate_ip) + 2 (xlate_port) + 1 (flags) + 1 (tcp_state)
-        // + 1 (fwall_action) + 7 (_pad) = 24, u64-aligned. CONNTRACK/CONNTRACK6 are RUNTIME LRU maps
+        // + 1 (fwall_action) + 3 (_pad) + 4 (policy_epoch) = 24, u64-aligned. CONNTRACK/CONNTRACK6 are RUNTIME LRU maps
         // re-created on load — growing/shrinking the value is NOT a wire/journal ABI concern; the
         // coupling is the core+ebpf ct_apply twins + the aya_writer GC + this test, changed together.
         assert_eq!(size_of::<CtEntry>(), 24);
         // Alignment must also be unchanged (u64 = 8) — a bigger alignment would change the map layout.
         assert_eq!(align_of::<CtEntry>(), 8);
+        // The epoch took over the old trailing pad: no hole before it.
+        assert_eq!(offset_of!(CtEntry, policy_epoch), 20);
     }
 
     #[test]
