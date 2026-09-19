@@ -75,8 +75,8 @@ impl AyaWriter {
 /// For NAT flows this removes both the forward entry (CT_REWRITE_SRC, key.src_ip == gip)
 /// and the reverse entry (CT_REWRITE_DST, key.dst_ip == nat_ip with xlate_port in range).
 ///
-/// Moved verbatim from `control/nat.rs` (was `Control::ct_flush_for_guest`); the CONNTRACK map
-/// lives in the eBPF backend, so the scan/remove belongs to `AyaWriter::conntrack_flush`.
+/// The CONNTRACK map lives in the eBPF backend, so the scan/remove belongs to
+/// `AyaWriter::conntrack_flush`.
 fn ct_flush_for_guest(
     ct: &mut Conntrack,
     vni: u32,

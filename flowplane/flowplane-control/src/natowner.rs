@@ -76,7 +76,8 @@ impl fmt::Display for NeighborNatError {
             NeighborNatError::EmptyRange => {
                 f.write_str("neighbor NAT block has an empty port range")
             }
-            // The "ALREADY_EXISTS:" prefix predates this type; callers grep for it.
+            // The "ALREADY_EXISTS:" prefix predates the typed error and stays in the status
+            // message clients see.
             NeighborNatError::Overlap => f.write_str(
                 "ALREADY_EXISTS: neighbor NAT block overlaps an existing block on this nat_ip",
             ),

@@ -25,7 +25,6 @@ mod adopt_test;
 mod aya_writer;
 mod bringup;
 mod lb;
-mod nat;
 mod recover;
 mod routes;
 

@@ -472,50 +472,77 @@ impl Routes6 {
 }
 
 /// Typed handle over a `NAT_OWNERS{,6}` LPM trie: `[nat_ip ++ port]` prefix -> the block's owner.
-pub struct NatOwnerTrie<K: aya::Pod> {
+/// Each key type opens its own map, so a handle cannot be bound to the other family's trie.
+pub struct NatOwnerTrie<K> {
     map: LpmTrie<MapData, K, NatOwner>,
+    name: &'static str,
+}
+
+pub type NatOwners = NatOwnerTrie<NatOwnerKey>;
+pub type NatOwners6 = NatOwnerTrie<NatOwnerKey6>;
+
+impl NatOwners {
+    pub fn open(ebpf: &mut Ebpf) -> anyhow::Result<Self> {
+        Self::open_named(ebpf, "NAT_OWNERS")
+    }
+}
+
+impl NatOwners6 {
+    pub fn open(ebpf: &mut Ebpf) -> anyhow::Result<Self> {
+        Self::open_named(ebpf, "NAT_OWNERS6")
+    }
 }
 
 impl<K: aya::Pod> NatOwnerTrie<K> {
-    pub fn open(ebpf: &mut Ebpf, name: &'static str) -> anyhow::Result<Self> {
+    fn open_named(ebpf: &mut Ebpf, name: &'static str) -> anyhow::Result<Self> {
         let map = LpmTrie::try_from(
             ebpf.take_map(name)
                 .with_context(|| format!("{name} map missing"))?,
         )?;
-        Ok(Self { map })
+        Ok(Self { map, name })
     }
 
     pub fn upsert(&mut self, prefix_len: u32, key: K, val: NatOwner) -> anyhow::Result<()> {
         self.map
             .insert(&Key::new(prefix_len, key), val, 0)
-            .context("insert NAT owner")
+            .with_context(|| format!("insert {}", self.name))
     }
 
     pub fn remove(&mut self, prefix_len: u32, key: K) -> anyhow::Result<()> {
         match self.map.remove(&Key::new(prefix_len, key)) {
             // Absent is success (the `MapWriter` contract): a withdraw retried after a partial
             // failure removes every prefix of its block again, including those already gone.
+            // aya reports a delete's ENOENT as a syscall error today; `KeyNotFound` is how it
+            // reports a lookup's.
+            Err(MapError::KeyNotFound) => Ok(()),
             Err(MapError::SyscallError(SyscallError { io_error, .. }))
                 if io_error.kind() == std::io::ErrorKind::NotFound =>
             {
                 Ok(())
             }
-            r => r.context("remove NAT owner"),
+            r => r.with_context(|| format!("remove {}", self.name)),
         }
     }
 
-    /// Every `(prefix_len, key, owner)` in the trie (adopt).
+    /// Every `(prefix_len, key, owner)` in the trie (adopt). A read error is logged, not returned:
+    /// what was read is still worth adopting.
     pub fn entries(&self) -> Vec<(u32, K, NatOwner)> {
-        self.map
-            .iter()
-            .filter_map(Result::ok)
-            .map(|(k, v)| (k.prefix_len(), k.data(), v))
-            .collect()
+        let mut out = Vec::new();
+        for r in self.map.iter() {
+            match r {
+                Ok((k, v)) => out.push((k.prefix_len(), k.data(), v)),
+                // A key-walk error ends aya's iteration: the prefixes past it go unlisted.
+                Err(e) => eprintln!(
+                    "adopt: WARNING reading {} failed ({:#}); prefixes it skipped stay programmed \
+                     but unlisted",
+                    self.name,
+                    anyhow::Error::from(e)
+                ),
+            }
+        }
+        out
     }
 }
-
-pub type NatOwners = NatOwnerTrie<NatOwnerKey>;
-pub type NatOwners6 = NatOwnerTrie<NatOwnerKey6>;
 
 /// Typed handle over the `CONNTRACK` BPF map (LRU hash map).
 pub struct Conntrack {

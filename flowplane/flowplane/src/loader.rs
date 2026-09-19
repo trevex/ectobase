@@ -13,7 +13,7 @@ use aya::Ebpf;
 /// Nothing re-binds them, so after an upgrade they would stay pinned — holding kernel memory — for
 /// good. Removing the pin is safe mid-restart: programs still attached keep their own references,
 /// and the kernel frees each map once the last one is replaced.
-const RETIRED_PINNED_MAPS: [&str; 8] = [
+pub(crate) const RETIRED_PINNED_MAPS: [&str; 8] = [
     "FW_RULES",
     "FW_META",
     "FW_RULES6",
