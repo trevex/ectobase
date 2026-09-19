@@ -245,7 +245,11 @@ func openSession(ctx context.Context, b *Bus) {
 func TestApplyNatIsIgnoredOnAComputeNode(t *testing.T) {
 	dp := newRecordingDP()
 	b := NewBus("nodeB", "fd00::b", dp, false)
-	b.applyNat(context.Background(), &rbv1.NatUpdate{
+	ctx := context.Background()
+	// Past its marker, like its edge siblings: otherwise the record would merely be collected and
+	// the test would pass even if the compute gate were gone.
+	openSession(ctx, b)
+	b.applyNat(ctx, &rbv1.NatUpdate{
 		Vni: 100, SourceIp: "10.0.0.1", NatIp: "1.2.3.4",
 		PortMin: 1024, PortMax: 2048, OwnerUnderlay: "fd00::a", Op: rbv1.RouteOp_ROUTE_OP_ADD,
 	})

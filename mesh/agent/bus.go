@@ -374,8 +374,10 @@ func (b *Bus) syncNeighborNats(ctx context.Context) {
 }
 
 // transientDataplaneError reports whether err means the RPC never reached the dataplane's state —
-// the socket was down, the deadline passed, or we are shutting down. Nothing was applied, so the
-// caller has nothing to repair and retrying the same call per block would only fail N times.
+// the socket was down, the deadline passed, or we are shutting down. Either nothing was applied or
+// we can no longer tell and cannot retry on this context anyway, and retrying the same call per
+// block would only fail N times. Nothing is pruned either way; the next resync replaces from
+// scratch.
 func transientDataplaneError(err error) bool {
 	switch status.Code(err) {
 	case codes.Unavailable, codes.DeadlineExceeded, codes.Canceled:

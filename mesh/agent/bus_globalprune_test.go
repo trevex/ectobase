@@ -252,6 +252,7 @@ func TestEdgeReplaceFailureRepairsOnlyWhatMayHaveLanded(t *testing.T) {
 	}{
 		{codes.Unavailable, 0},
 		{codes.DeadlineExceeded, 0},
+		{codes.Canceled, 0}, // shutting down: N doomed per-block RPCs would be pure waste
 		{codes.Internal, 2}, // the dataplane answered: the set may be part-way applied
 	}
 	for _, tc := range cases {
