@@ -158,3 +158,23 @@ func TestRegisterSinkSendsEndOfGlobalOnAnEmptyRIB(t *testing.T) {
 		t.Fatalf("want EndOfGlobal{record_count: 0}, got %+v", s.msgs[0].Msg)
 	}
 }
+
+// The global replay reaches the sink as ONE snapshot ending in EndOfGlobal, never as deltas.
+func TestRegisterSinkReplaysOneSnapshotEndingInEndOfGlobal(t *testing.T) {
+	r := NewRIB()
+	r.AnnounceNat("nodeA", natBlock(100, "10.0.0.1", "1.2.3.4", 1024, 2048, "fd00::a"))
+	r.AnnounceNat("nodeA", natBlock(100, "10.0.0.2", "1.2.3.5", 1024, 2048, "fd00::a"))
+	r.AnnouncePublic("nodeA", PublicRecord{
+		Kind: pb.PublicKind_PUBLIC_KIND_LB_IP, Prefix: "203.0.113.50/32",
+		OwnerUnderlay: "fd00::a", OverlayIP: "10.0.0.1", Vni: 100,
+	})
+	s := &fakeSink{id: "late"}
+	r.RegisterSink(s)
+	if len(s.snapshots) != 1 || len(s.msgs) != len(s.snapshots[0]) {
+		t.Fatalf("want the replay as exactly one snapshot and nothing else, got %d snapshots / %d messages", len(s.snapshots), len(s.msgs))
+	}
+	snap := s.snapshots[0]
+	if eog := snap[len(snap)-1].GetEndOfGlobal(); eog == nil || eog.RecordCount != 3 || len(snap) != 4 {
+		t.Fatalf("want 3 records then EndOfGlobal{3}, got %d messages ending in %+v", len(snap), snap[len(snap)-1].Msg)
+	}
+}

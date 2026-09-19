@@ -10,11 +10,17 @@ import (
 	pb "github.com/trevex/ectobase/mesh/gen/routebusv1"
 )
 
-// Sink is a subscriber's outbound path. Send MUST NOT block — implementations
-// enqueue to a buffered channel and drop on overflow (recovered by a resync).
+// Sink is a subscriber's outbound path. Neither method may block: the RIB calls both with its
+// lock held.
+//   - Send carries one live delta (a fanout). It may be dropped when the consumer has fallen far
+//     behind; that consumer converges on its next reconnect's snapshot.
+//   - SendSnapshot carries a whole replay — every record and the marker that closes it — and must
+//     queue all of it, in order: a replay missing records or its marker can neither be pruned
+//     against nor ever report converged.
 type Sink interface {
 	ID() string
 	Send(*pb.ServerMsg)
+	SendSnapshot([]*pb.ServerMsg)
 }
 
 type routeKey struct {
@@ -123,16 +129,18 @@ func (r *RIB) Subscribe(vni uint32, s Sink) {
 		}
 	}
 	sort.Slice(keys, func(i, j int) bool { return keys[i].prefix < keys[j].prefix })
+	snap := make([]*pb.ServerMsg, 0, len(keys)+1)
 	var n uint32
 	for _, k := range keys {
 		e := r.routes[k]
-		s.Send(routeUpdate(k, mergeNexthops(e.origins), pb.RouteOp_ROUTE_OP_ADD, e.external))
+		snap = append(snap, routeUpdate(k, mergeNexthops(e.origins), pb.RouteOp_ROUTE_OP_ADD, e.external))
 		n++
 	}
-	// The count lets the subscriber tell a complete replay from one its outbound queue dropped
-	// records from, and prune only on the former — see EndOfRIB in routebus.proto. Sent while r.mu
-	// is still held, so a concurrent fanout cannot slip in ahead of it and inflate that count.
-	s.Send(&pb.ServerMsg{Msg: &pb.ServerMsg_EndOfRib{EndOfRib: &pb.EndOfRIB{Vni: vni, RecordCount: n}}})
+	// One snapshot, handed over while r.mu is still held: the sink queues all of it (see Sink), and
+	// no concurrent fanout can interleave with it or slip in ahead of the marker, so the marker's
+	// count is exactly what the subscriber receives before it.
+	snap = append(snap, &pb.ServerMsg{Msg: &pb.ServerMsg_EndOfRib{EndOfRib: &pb.EndOfRIB{Vni: vni, RecordCount: n}}})
+	s.SendSnapshot(snap)
 }
 
 func (r *RIB) Unsubscribe(vni uint32, sinkID string) {

@@ -34,6 +34,13 @@ func (c *chanSink) Send(m *pb.ServerMsg) {
 	}
 }
 
+// SendSnapshot is the old lossy behavior, kept only until Session drains a sessionQueue.
+func (c *chanSink) SendSnapshot(ms []*pb.ServerMsg) {
+	for _, m := range ms {
+		c.Send(m)
+	}
+}
+
 func (s *Server) Session(stream pb.RouteBus_SessionServer) error {
 	first, err := stream.Recv()
 	if err != nil {
