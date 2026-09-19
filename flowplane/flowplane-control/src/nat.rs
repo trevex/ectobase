@@ -4,9 +4,10 @@
 //! `g.by_id` -> `self.ifaces_meta`, `g.lbs` -> `self.lbs`, `g.nat`/`g.nat_ips`/`g.neigh_nat*`
 //! map ops -> `self.w.<map>_<op>`, and the CT flush -> `self.w.conntrack_flush(scope)`.
 
-use crate::{ControlCore, CtFlushScope, CtFlushScope6, MapWriter};
+use crate::natowner::{owner_prefixes4, owner_prefixes6};
+use crate::{ControlCore, CtFlushScope, CtFlushScope6, MapWriter, NeighborNatError};
 use flowplane_common::{
-    NatKey, NatKey6, NatValue, NatValue6, NeighborNat6Entry, NeighborNatEntry, NB_MAX_ENTRIES,
+    NatKey, NatKey6, NatValue, NatValue6, NeighborNat6Entry, NeighborNatEntry, NAT_OWNERS_MAX,
 };
 
 impl<W: MapWriter> ControlCore<W> {
@@ -118,17 +119,10 @@ impl<W: MapWriter> ControlCore<W> {
     // Neighbor NAT management (distributed NAT return)
     // -----------------------------------------------------------------------
 
-    /// Reprogram NEIGHBOR_NAT and NEIGHBOR_NAT_COUNT from the in-memory vec.
-    fn neigh_nat_reprogram(&mut self) -> anyhow::Result<()> {
-        let n = self.neigh_nats.len() as u32;
-        for (i, e) in self.neigh_nats.iter().enumerate() {
-            self.w.neigh_nat_upsert(i as u32, *e)?;
-        }
-        self.w.neigh_nat_count_set(n)?;
-        Ok(())
-    }
-
-    /// Add a neighbor-NAT entry (capped at NB_MAX_ENTRIES).
+    /// Add a neighbor-NAT block: `[port_min, port_max)` of `nat_ip` is owned by the node at
+    /// `underlay`, in `vni`. Refused whole — nothing written — if the range is empty, overlaps
+    /// another block on the same nat_ip (in any VNI: blocks are keyed without one), or would not
+    /// fit the trie. A failed write removes the prefixes already written.
     pub fn add_neighbor_nat(
         &mut self,
         vni: u32,
@@ -136,25 +130,18 @@ impl<W: MapWriter> ControlCore<W> {
         port_min: u16,
         port_max: u16,
         underlay: [u8; 16],
-    ) -> anyhow::Result<()> {
-        if self.neigh_nats.len() >= NB_MAX_ENTRIES as usize {
-            anyhow::bail!("neighbor NAT table full (max {})", NB_MAX_ENTRIES);
+    ) -> Result<(), NeighborNatError> {
+        if port_min >= port_max {
+            return Err(NeighborNatError::EmptyRange);
         }
-        // Check for duplicate or overlapping port range.
-        if self.neigh_nats.iter().any(|e| {
-            e.nat_ip == nat_ip
-                && (
-                    // Exact match (same vni and ports) → always duplicate.
-                    (e.vni == vni && e.port_min == port_min && e.port_max == port_max)
-                // Overlapping port range for the same nat_ip (any vni) → also duplicate.
-                || (e.port_min < port_max && e.port_max > port_min)
-                )
-        }) {
-            anyhow::bail!(
-                "ALREADY_EXISTS: neighbor NAT entry already exists or port range overlaps"
-            );
+        if self
+            .neigh_nats
+            .iter()
+            .any(|e| e.nat_ip == nat_ip && e.port_min < port_max && e.port_max > port_min)
+        {
+            return Err(NeighborNatError::Overlap);
         }
-        self.neigh_nats.push(NeighborNatEntry {
+        let b = NeighborNatEntry {
             underlay,
             nat_ip,
             vni,
@@ -162,31 +149,55 @@ impl<W: MapWriter> ControlCore<W> {
             port_max,
             enabled: 1,
             _pad: [0; 3],
-        });
-        self.neigh_nat_reprogram()
+        };
+        let entries = owner_prefixes4(&b);
+        if self.nat_owner_count4 + entries.len() > NAT_OWNERS_MAX as usize {
+            return Err(NeighborNatError::Full {
+                needed: entries.len(),
+                max: NAT_OWNERS_MAX,
+            });
+        }
+        for (i, (plen, key, owner)) in entries.iter().enumerate() {
+            if let Err(e) = self.w.nat_owner_upsert(*plen, *key, *owner) {
+                for (plen, key, _) in &entries[..i] {
+                    let _ = self.w.nat_owner_remove(*plen, key);
+                }
+                return Err(e.into());
+            }
+        }
+        self.nat_owner_count4 += entries.len();
+        self.neigh_nats.push(b);
+        Ok(())
     }
 
-    /// Remove a neighbor-NAT entry matching (vni, nat_ip, port_min, port_max).
-    /// Returns true if removed, false if not found.
+    /// Remove the block `(vni, nat_ip, [port_min, port_max))`. `Ok(false)` if there is none. Every
+    /// prefix is tried even after a failure — stopping would strand the rest in the trie with the
+    /// block already gone from the list — and the first error is returned.
     pub fn del_neighbor_nat(
         &mut self,
         vni: u32,
         nat_ip: [u8; 4],
         port_min: u16,
         port_max: u16,
-    ) -> anyhow::Result<bool> {
-        let before = self.neigh_nats.len();
-        self.neigh_nats.retain(|e| {
-            !(e.vni == vni
-                && e.nat_ip == nat_ip
-                && e.port_min == port_min
-                && e.port_max == port_max)
-        });
-        if self.neigh_nats.len() == before {
+    ) -> Result<bool, NeighborNatError> {
+        let Some(i) = self.neigh_nats.iter().position(|e| {
+            e.vni == vni && e.nat_ip == nat_ip && e.port_min == port_min && e.port_max == port_max
+        }) else {
             return Ok(false);
+        };
+        let b = self.neigh_nats.remove(i);
+        let entries = owner_prefixes4(&b);
+        self.nat_owner_count4 -= entries.len();
+        let mut first_err = None;
+        for (plen, key, _) in &entries {
+            if let Err(e) = self.w.nat_owner_remove(*plen, key) {
+                first_err.get_or_insert(e);
+            }
         }
-        self.neigh_nat_reprogram()?;
-        Ok(true)
+        match first_err {
+            Some(e) => Err(e.into()),
+            None => Ok(true),
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -292,17 +303,7 @@ impl<W: MapWriter> ControlCore<W> {
         Ok(true)
     }
 
-    /// Reprogram NEIGHBOR_NAT6 and NEIGHBOR_NAT6_COUNT from the in-memory vec.
-    fn neigh_nat6_reprogram(&mut self) -> anyhow::Result<()> {
-        let n = self.neigh_nats6.len() as u32;
-        for (i, e) in self.neigh_nats6.iter().enumerate() {
-            self.w.neigh_nat6_upsert(i as u32, *e)?;
-        }
-        self.w.neigh_nat6_count_set(n)?;
-        Ok(())
-    }
-
-    /// Add a NAT66 neighbor-return entry (capped at NB_MAX_ENTRIES).
+    /// IPv6 sibling of [`Self::add_neighbor_nat`].
     pub fn add_neighbor_nat6(
         &mut self,
         vni: u32,
@@ -310,21 +311,18 @@ impl<W: MapWriter> ControlCore<W> {
         port_min: u16,
         port_max: u16,
         underlay: [u8; 16],
-    ) -> anyhow::Result<()> {
-        if self.neigh_nats6.len() >= NB_MAX_ENTRIES as usize {
-            anyhow::bail!("neighbor NAT table full (max {})", NB_MAX_ENTRIES);
+    ) -> Result<(), NeighborNatError> {
+        if port_min >= port_max {
+            return Err(NeighborNatError::EmptyRange);
         }
-        // Check for duplicate or overlapping port range (same nat_ip).
-        if self.neigh_nats6.iter().any(|e| {
-            e.nat_ip6 == nat_ip
-                && ((e.vni == vni && e.port_min == port_min && e.port_max == port_max)
-                    || (e.port_min < port_max && e.port_max > port_min))
-        }) {
-            anyhow::bail!(
-                "ALREADY_EXISTS: neighbor NAT entry already exists or port range overlaps"
-            );
+        if self
+            .neigh_nats6
+            .iter()
+            .any(|e| e.nat_ip6 == nat_ip && e.port_min < port_max && e.port_max > port_min)
+        {
+            return Err(NeighborNatError::Overlap);
         }
-        self.neigh_nats6.push(NeighborNat6Entry {
+        let b = NeighborNat6Entry {
             underlay,
             nat_ip6: nat_ip,
             vni,
@@ -332,37 +330,146 @@ impl<W: MapWriter> ControlCore<W> {
             port_max,
             enabled: 1,
             _pad: [0; 3],
-        });
-        self.neigh_nat6_reprogram()
+        };
+        let entries = owner_prefixes6(&b);
+        if self.nat_owner_count6 + entries.len() > NAT_OWNERS_MAX as usize {
+            return Err(NeighborNatError::Full {
+                needed: entries.len(),
+                max: NAT_OWNERS_MAX,
+            });
+        }
+        for (i, (plen, key, owner)) in entries.iter().enumerate() {
+            if let Err(e) = self.w.nat_owner6_upsert(*plen, *key, *owner) {
+                for (plen, key, _) in &entries[..i] {
+                    let _ = self.w.nat_owner6_remove(*plen, key);
+                }
+                return Err(e.into());
+            }
+        }
+        self.nat_owner_count6 += entries.len();
+        self.neigh_nats6.push(b);
+        Ok(())
     }
 
-    /// Remove a NAT66 neighbor-return entry matching (vni, nat_ip, port_min, port_max).
+    /// IPv6 sibling of [`Self::del_neighbor_nat`].
     pub fn del_neighbor_nat6(
         &mut self,
         vni: u32,
         nat_ip: [u8; 16],
         port_min: u16,
         port_max: u16,
-    ) -> anyhow::Result<bool> {
-        let before = self.neigh_nats6.len();
-        self.neigh_nats6.retain(|e| {
-            !(e.vni == vni
-                && e.nat_ip6 == nat_ip
-                && e.port_min == port_min
-                && e.port_max == port_max)
-        });
-        if self.neigh_nats6.len() == before {
+    ) -> Result<bool, NeighborNatError> {
+        let Some(i) = self.neigh_nats6.iter().position(|e| {
+            e.vni == vni && e.nat_ip6 == nat_ip && e.port_min == port_min && e.port_max == port_max
+        }) else {
             return Ok(false);
+        };
+        let b = self.neigh_nats6.remove(i);
+        let entries = owner_prefixes6(&b);
+        self.nat_owner_count6 -= entries.len();
+        let mut first_err = None;
+        for (plen, key, _) in &entries {
+            if let Err(e) = self.w.nat_owner6_remove(*plen, key) {
+                first_err.get_or_insert(e);
+            }
         }
-        self.neigh_nat6_reprogram()?;
-        Ok(true)
+        match first_err {
+            Some(e) => Err(e.into()),
+            None => Ok(true),
+        }
+    }
+
+    /// Adopt after a restart: the pinned owner tries survived, the block lists did not. Rebuild
+    /// them from the tries' values (each prefix carries its whole block), then rewrite each
+    /// block's full prefix set, since a crash between two prefix writes can leave a block partial.
+    /// A block a crash left half-withdrawn so comes back whole; the next declarative sync prunes it.
+    pub fn adopt_nat_owners(&mut self) {
+        let mut v4: Vec<NeighborNatEntry> = self
+            .w
+            .nat_owner_entries()
+            .into_iter()
+            .map(|(_, key, o)| NeighborNatEntry {
+                underlay: o.underlay,
+                nat_ip: key.nat_ip,
+                vni: o.vni,
+                port_min: o.port_min,
+                port_max: o.port_max,
+                enabled: 1,
+                _pad: [0; 3],
+            })
+            .collect();
+        // Each prefix repeats its block: sort on every field so the repeats are adjacent for
+        // dedup (a `contains` scan would be quadratic in a full trie).
+        v4.sort_unstable_by_key(|b| (b.nat_ip, b.port_min, b.port_max, b.vni, b.underlay));
+        v4.dedup();
+        self.nat_owner_count4 = 0;
+        for b in &v4 {
+            let entries = owner_prefixes4(b);
+            self.nat_owner_count4 += entries.len();
+            for (plen, key, owner) in entries {
+                let _ = self.w.nat_owner_upsert(plen, key, owner);
+            }
+        }
+        self.neigh_nats = v4;
+
+        let mut v6: Vec<NeighborNat6Entry> = self
+            .w
+            .nat_owner6_entries()
+            .into_iter()
+            .map(|(_, key, o)| NeighborNat6Entry {
+                underlay: o.underlay,
+                nat_ip6: key.nat_ip6,
+                vni: o.vni,
+                port_min: o.port_min,
+                port_max: o.port_max,
+                enabled: 1,
+                _pad: [0; 3],
+            })
+            .collect();
+        v6.sort_unstable_by_key(|b| (b.nat_ip6, b.port_min, b.port_max, b.vni, b.underlay));
+        v6.dedup();
+        self.nat_owner_count6 = 0;
+        for b in &v6 {
+            let entries = owner_prefixes6(b);
+            self.nat_owner_count6 += entries.len();
+            for (plen, key, owner) in entries {
+                let _ = self.w.nat_owner6_upsert(plen, key, owner);
+            }
+        }
+        self.neigh_nats6 = v6;
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::{mem::MemMapWriter, shadow::IfaceMeta, ControlCore};
-    use flowplane_common::NeighborNatEntry;
+    use crate::{
+        mem::MemMapWriter,
+        natowner::{owner_prefixes4, owner_prefixes6},
+        shadow::IfaceMeta,
+        ControlCore, NeighborNatError,
+    };
+    use flowplane_common::{
+        NatOwner, NatOwnerKey, NatOwnerKey6, NeighborNat6Entry, NeighborNatEntry,
+    };
+    use std::collections::HashMap;
+
+    /// The `MemMapWriter::nat_owners` contents that store exactly `blocks`.
+    fn prefixes4(blocks: &[NeighborNatEntry]) -> HashMap<(u32, NatOwnerKey), NatOwner> {
+        blocks
+            .iter()
+            .flat_map(owner_prefixes4)
+            .map(|(p, k, o)| ((p, k), o))
+            .collect()
+    }
+
+    /// IPv6 sibling of [`prefixes4`].
+    fn prefixes6(blocks: &[NeighborNat6Entry]) -> HashMap<(u32, NatOwnerKey6), NatOwner> {
+        blocks
+            .iter()
+            .flat_map(owner_prefixes6)
+            .map(|(p, k, o)| ((p, k), o))
+            .collect()
+    }
 
     #[test]
     fn add_and_del_neighbor_nat_programs_maps_and_rejects_overlap() {
@@ -370,45 +477,48 @@ mod tests {
 
         let vni: u32 = 10;
         let nat_ip: [u8; 4] = [203, 0, 113, 1];
+        let nat_ip2: [u8; 4] = [203, 0, 113, 2];
         let underlay: [u8; 16] = [2u8; 16];
+        let block = |nat_ip, underlay| NeighborNatEntry {
+            underlay,
+            nat_ip,
+            vni,
+            port_min: 1024,
+            port_max: 2048,
+            enabled: 1,
+            _pad: [0; 3],
+        };
 
-        // Add first entry: should write slot 0 and set count to 1.
         c.add_neighbor_nat(vni, nat_ip, 1024, 2048, underlay)
             .unwrap();
-        assert_eq!(c.w.neigh_nat_count, 1);
-        assert_eq!(
-            c.w.neigh_nat.get(&0),
-            Some(&NeighborNatEntry {
-                underlay,
-                nat_ip,
-                vni,
-                port_min: 1024,
-                port_max: 2048,
-                enabled: 1,
-                _pad: [0; 3],
-            })
-        );
+        let first = prefixes4(&[block(nat_ip, underlay)]);
+        assert_eq!(c.w.nat_owners, first);
 
         // Exact duplicate (same vni + nat_ip + ports) must be rejected.
-        assert!(c
-            .add_neighbor_nat(vni, nat_ip, 1024, 2048, underlay)
-            .is_err());
+        assert!(matches!(
+            c.add_neighbor_nat(vni, nat_ip, 1024, 2048, underlay),
+            Err(NeighborNatError::Overlap)
+        ));
 
         // Overlapping port range on the same nat_ip (different vni) must also be rejected.
         // [1500, 3000) overlaps [1024, 2048).
-        assert!(c
-            .add_neighbor_nat(vni + 1, nat_ip, 1500, 3000, underlay)
-            .is_err());
+        assert!(matches!(
+            c.add_neighbor_nat(vni + 1, nat_ip, 1500, 3000, underlay),
+            Err(NeighborNatError::Overlap)
+        ));
+        assert_eq!(c.w.nat_owners, first, "a refused block writes nothing");
 
         // Non-overlapping range on a different nat_ip is fine (different nat_ip → no conflict).
-        let nat_ip2: [u8; 4] = [203, 0, 113, 2];
         c.add_neighbor_nat(vni, nat_ip2, 1024, 2048, [3u8; 16])
             .unwrap();
-        assert_eq!(c.w.neigh_nat_count, 2);
+        assert_eq!(
+            c.w.nat_owners,
+            prefixes4(&[block(nat_ip, underlay), block(nat_ip2, [3u8; 16])])
+        );
 
-        // Delete the first entry: count drops back to 1 and returns true.
+        // Delete the first block: only the second's prefixes remain, and it returns true.
         assert!(c.del_neighbor_nat(vni, nat_ip, 1024, 2048).unwrap());
-        assert_eq!(c.w.neigh_nat_count, 1);
+        assert_eq!(c.w.nat_owners, prefixes4(&[block(nat_ip2, [3u8; 16])]));
 
         // Deleting a non-existent entry returns false.
         assert!(!c.del_neighbor_nat(vni, nat_ip, 1024, 2048).unwrap());
@@ -462,38 +572,42 @@ mod tests {
         let mut c = ControlCore::new(MemMapWriter::default());
         let vni: u32 = 10;
         let underlay: [u8; 16] = [2u8; 16];
+        let block = |nat_ip6, underlay| NeighborNat6Entry {
+            underlay,
+            nat_ip6,
+            vni,
+            port_min: 1024,
+            port_max: 2048,
+            enabled: 1,
+            _pad: [0; 3],
+        };
 
         c.add_neighbor_nat6(vni, NAT6_A, 1024, 2048, underlay)
             .unwrap();
-        assert_eq!(c.w.neigh_nat6_count, 1);
-        assert_eq!(
-            c.w.neigh_nat6.get(&0),
-            Some(&flowplane_common::NeighborNat6Entry {
-                underlay,
-                nat_ip6: NAT6_A,
-                vni,
-                port_min: 1024,
-                port_max: 2048,
-                enabled: 1,
-                _pad: [0; 3],
-            })
-        );
+        let first = prefixes6(&[block(NAT6_A, underlay)]);
+        assert_eq!(c.w.nat_owners6, first);
 
         // Exact duplicate rejected.
-        assert!(c
-            .add_neighbor_nat6(vni, NAT6_A, 1024, 2048, underlay)
-            .is_err());
+        assert!(matches!(
+            c.add_neighbor_nat6(vni, NAT6_A, 1024, 2048, underlay),
+            Err(NeighborNatError::Overlap)
+        ));
         // Overlapping range on the same nat_ip (different vni) rejected.
-        assert!(c
-            .add_neighbor_nat6(vni + 1, NAT6_A, 1500, 3000, underlay)
-            .is_err());
+        assert!(matches!(
+            c.add_neighbor_nat6(vni + 1, NAT6_A, 1500, 3000, underlay),
+            Err(NeighborNatError::Overlap)
+        ));
+        assert_eq!(c.w.nat_owners6, first, "a refused block writes nothing");
         // Non-overlapping range on a different nat_ip is fine.
         c.add_neighbor_nat6(vni, NAT6_B, 1024, 2048, [3u8; 16])
             .unwrap();
-        assert_eq!(c.w.neigh_nat6_count, 2);
+        assert_eq!(
+            c.w.nat_owners6,
+            prefixes6(&[block(NAT6_A, underlay), block(NAT6_B, [3u8; 16])])
+        );
 
         assert!(c.del_neighbor_nat6(vni, NAT6_A, 1024, 2048).unwrap());
-        assert_eq!(c.w.neigh_nat6_count, 1);
+        assert_eq!(c.w.nat_owners6, prefixes6(&[block(NAT6_B, [3u8; 16])]));
         assert!(!c.del_neighbor_nat6(vni, NAT6_A, 1024, 2048).unwrap());
     }
 
@@ -525,5 +639,167 @@ mod tests {
             .w
             .nat6
             .contains_key(&flowplane_common::NatKey6 { vni: 5, ipv6: G6 }));
+    }
+}
+
+#[cfg(test)]
+mod neighbor_nat_tests {
+    use crate::{mem::MemMapWriter, natowner::owner_prefixes4, ControlCore, NeighborNatError};
+    use flowplane_common::{NatOwner, NatOwnerKey, NeighborNatEntry};
+
+    const IP: [u8; 4] = [203, 0, 113, 9];
+
+    fn entry(vni: u32, lo: u16, hi: u16, owner: u8) -> NeighborNatEntry {
+        NeighborNatEntry {
+            underlay: [owner; 16],
+            nat_ip: IP,
+            vni,
+            port_min: lo,
+            port_max: hi,
+            enabled: 1,
+            _pad: [0; 3],
+        }
+    }
+
+    fn sorted(mut v: Vec<(u32, NatOwnerKey, NatOwner)>) -> Vec<(u32, NatOwnerKey, NatOwner)> {
+        v.sort_by_key(|(p, k, _)| (u16::from_be_bytes(k.port), *p));
+        v
+    }
+
+    fn stored(c: &ControlCore<MemMapWriter>) -> Vec<(u32, NatOwnerKey, NatOwner)> {
+        sorted(
+            c.w.nat_owners
+                .iter()
+                .map(|((p, k), o)| (*p, *k, *o))
+                .collect(),
+        )
+    }
+
+    /// The capacity check trusts the counters; they must track the tries exactly.
+    fn assert_counted(c: &ControlCore<MemMapWriter>) {
+        assert_eq!(c.nat_owner_count4, c.w.nat_owners.len(), "v4 prefix count");
+        assert_eq!(c.nat_owner_count6, c.w.nat_owners6.len(), "v6 prefix count");
+    }
+
+    #[test]
+    fn a_block_is_stored_as_its_prefixes() {
+        let mut c = ControlCore::new(MemMapWriter::default());
+        c.add_neighbor_nat(7, IP, 20000, 30000, [3; 16]).unwrap();
+        assert_eq!(
+            stored(&c),
+            sorted(owner_prefixes4(&entry(7, 20000, 30000, 3)))
+        );
+        assert_counted(&c);
+    }
+
+    #[test]
+    fn an_overlap_on_the_same_nat_ip_is_refused_in_any_vni() {
+        let mut c = ControlCore::new(MemMapWriter::default());
+        c.add_neighbor_nat(7, IP, 20000, 30000, [3; 16]).unwrap();
+        let before = stored(&c);
+        let err = c
+            .add_neighbor_nat(8, IP, 29999, 31000, [4; 16])
+            .unwrap_err();
+        assert!(matches!(err, NeighborNatError::Overlap), "{err}");
+        assert_eq!(stored(&c), before, "nothing written");
+        assert_counted(&c);
+    }
+
+    #[test]
+    fn an_empty_range_is_refused() {
+        let mut c = ControlCore::new(MemMapWriter::default());
+        assert!(matches!(
+            c.add_neighbor_nat(7, IP, 5, 5, [3; 16]),
+            Err(NeighborNatError::EmptyRange)
+        ));
+    }
+
+    #[test]
+    fn withdraw_removes_exactly_its_prefixes() {
+        let mut c = ControlCore::new(MemMapWriter::default());
+        c.add_neighbor_nat(7, IP, 20000, 30000, [3; 16]).unwrap();
+        c.add_neighbor_nat(7, IP, 1024, 2048, [4; 16]).unwrap();
+        assert_counted(&c);
+        assert!(c.del_neighbor_nat(7, IP, 20000, 30000).unwrap());
+        assert_eq!(stored(&c), owner_prefixes4(&entry(7, 1024, 2048, 4)));
+        assert_counted(&c);
+        assert!(
+            !c.del_neighbor_nat(7, IP, 20000, 30000).unwrap(),
+            "already gone"
+        );
+        assert_counted(&c);
+    }
+
+    // Worst-case blocks (30 prefixes each, [1, 65535)) on distinct nat_ips fill the trie at
+    // floor(65536 / 30) = 2184 blocks; the next is refused whole.
+    #[test]
+    fn the_table_refuses_a_block_it_cannot_hold() {
+        let mut c = ControlCore::new(MemMapWriter::default());
+        let ip = |i: u32| [10, (i >> 16) as u8, (i >> 8) as u8, i as u8];
+        for i in 0..2184 {
+            c.add_neighbor_nat(7, ip(i), 1, 65535, [1; 16]).unwrap();
+        }
+        assert_counted(&c);
+        let n = c.w.nat_owners.len();
+        let err = c
+            .add_neighbor_nat(7, ip(2184), 1, 65535, [1; 16])
+            .unwrap_err();
+        assert!(matches!(err, NeighborNatError::Full { .. }), "{err}");
+        assert_eq!(c.w.nat_owners.len(), n, "nothing written");
+        assert_counted(&c);
+    }
+
+    // After a restart the pinned trie survives and the block list does not: adopt rebuilds it, so
+    // a re-announce is idempotent and a withdraw still finds its block.
+    #[test]
+    fn adopt_rebuilds_the_blocks_from_the_trie() {
+        let mut before = ControlCore::new(MemMapWriter::default());
+        before
+            .add_neighbor_nat(7, IP, 20000, 30000, [3; 16])
+            .unwrap();
+        before
+            .add_neighbor_nat6(9, [9; 16], 1024, 2048, [5; 16])
+            .unwrap();
+        let mut c = ControlCore::new(before.w);
+        c.adopt_nat_owners();
+        assert_counted(&c);
+        assert!(c.del_neighbor_nat(7, IP, 20000, 30000).unwrap());
+        assert!(c.w.nat_owners.is_empty());
+        assert!(c.del_neighbor_nat6(9, [9; 16], 1024, 2048).unwrap());
+        assert!(c.w.nat_owners6.is_empty());
+        assert_counted(&c);
+    }
+
+    // A crash between two prefix writes leaves part of a block in the pinned trie. Adopt must make
+    // it whole again, or its missing ports have no owner and the prefix count disagrees with the
+    // trie.
+    #[test]
+    fn adopt_completes_a_block_a_crash_left_partial() {
+        const IP6: [u8; 16] = [9; 16];
+        let mut before = ControlCore::new(MemMapWriter::default());
+        before
+            .add_neighbor_nat(7, IP, 20000, 30000, [3; 16])
+            .unwrap();
+        before
+            .add_neighbor_nat6(7, IP6, 20000, 30000, [3; 16])
+            .unwrap();
+        let full4 = stored(&before);
+        let full6 = before.w.nat_owners6.clone();
+        assert!(full4.len() > 1 && full6.len() > 1, "multi-prefix blocks");
+        let (p, k, _) = full4[full4.len() / 2];
+        before.w.nat_owners.remove(&(p, k));
+        let k6 = *full6.keys().next().unwrap();
+        before.w.nat_owners6.remove(&k6);
+
+        let mut c = ControlCore::new(before.w);
+        c.adopt_nat_owners();
+        assert_eq!(stored(&c), full4);
+        assert_eq!(c.w.nat_owners6, full6);
+        assert_counted(&c);
+
+        assert!(c.del_neighbor_nat(7, IP, 20000, 30000).unwrap());
+        assert!(c.del_neighbor_nat6(7, IP6, 20000, 30000).unwrap());
+        assert!(c.w.nat_owners.is_empty() && c.w.nat_owners6.is_empty());
+        assert_eq!((c.nat_owner_count4, c.nat_owner_count6), (0, 0));
     }
 }

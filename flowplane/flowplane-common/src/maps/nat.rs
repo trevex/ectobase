@@ -74,9 +74,6 @@ pub const NAT_OWNERS_MAX: u32 = 65536;
 pub const NAT_OWNER_ADDR_BITS4: u32 = 32;
 pub const NAT_OWNER_ADDR_BITS6: u32 = 128;
 
-/// Maximum number of neighbor-NAT entries the datapath will scan.
-pub const NB_MAX_ENTRIES: u32 = 64;
-
 /// A neighbor-NAT block: a remote node owns `(vni, nat_ip, [port_min, port_max))`; return traffic
 /// to that nat_ip:port is re-forwarded to `underlay`. Stored in the datapath as `NAT_OWNERS`
 /// prefixes (see [`NatOwnerKey`]).

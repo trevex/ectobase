@@ -2,8 +2,8 @@
 use crate::writer::{CtFlushScope, CtFlushScope6, MapWriter};
 use flowplane_common::{
     DhcpConfig, FloatingIPKey, FwBind, IfaceKey, IfaceKey6, IfaceMetaKey, IfaceMetaVal, IfaceValue,
-    LbBackend, LbKey, LbKey6, LbValue, MaglevKey, MeterState, NatKey, NatKey6, NatValue, NatValue6,
-    NeighborNat6Entry, NeighborNatEntry, PortMeta, RouteValue, UnderlayValue,
+    LbBackend, LbKey, LbKey6, LbValue, MaglevKey, MeterState, NatKey, NatKey6, NatOwner,
+    NatOwnerKey, NatOwnerKey6, NatValue, NatValue6, PortMeta, RouteValue, UnderlayValue,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -13,13 +13,11 @@ pub struct MemMapWriter {
     pub routes6: HashMap<(u32, [u8; 16], u32), RouteValue>,
     pub nat: HashMap<NatKey, NatValue>,
     pub nat_ips: HashSet<(u32, [u8; 4])>,
-    pub neigh_nat: HashMap<u32, NeighborNatEntry>,
-    pub neigh_nat_count: u32,
-    // NAT66 (v6) siblings of the four v4 nat fields above.
+    pub nat_owners: HashMap<(u32, NatOwnerKey), NatOwner>,
+    // NAT66 (v6) siblings of the three v4 nat fields above.
     pub nat6: HashMap<NatKey6, NatValue6>,
     pub nat_ips6: HashSet<(u32, [u8; 16])>,
-    pub neigh_nat6: HashMap<u32, NeighborNat6Entry>,
-    pub neigh_nat6_count: u32,
+    pub nat_owners6: HashMap<(u32, NatOwnerKey6), NatOwner>,
     pub lb: HashMap<LbKey, LbValue>,
     pub lb6: HashMap<LbKey6, LbValue>,
     pub maglev: HashMap<MaglevKey, LbBackend>,
@@ -93,13 +91,19 @@ impl MapWriter for MemMapWriter {
         self.nat_ips.remove(&(vni, ip));
         Ok(())
     }
-    fn neigh_nat_upsert(&mut self, i: u32, v: NeighborNatEntry) -> anyhow::Result<()> {
-        self.neigh_nat.insert(i, v);
+    fn nat_owner_upsert(&mut self, p: u32, k: NatOwnerKey, v: NatOwner) -> anyhow::Result<()> {
+        self.nat_owners.insert((p, k), v);
         Ok(())
     }
-    fn neigh_nat_count_set(&mut self, c: u32) -> anyhow::Result<()> {
-        self.neigh_nat_count = c;
+    fn nat_owner_remove(&mut self, p: u32, k: &NatOwnerKey) -> anyhow::Result<()> {
+        self.nat_owners.remove(&(p, *k));
         Ok(())
+    }
+    fn nat_owner_entries(&self) -> Vec<(u32, NatOwnerKey, NatOwner)> {
+        self.nat_owners
+            .iter()
+            .map(|((p, k), v)| (*p, *k, *v))
+            .collect()
     }
     fn nat6_upsert(&mut self, k: NatKey6, v: NatValue6) -> anyhow::Result<()> {
         self.nat6.insert(k, v);
@@ -120,13 +124,19 @@ impl MapWriter for MemMapWriter {
         self.nat_ips6.remove(&(vni, ip));
         Ok(())
     }
-    fn neigh_nat6_upsert(&mut self, i: u32, v: NeighborNat6Entry) -> anyhow::Result<()> {
-        self.neigh_nat6.insert(i, v);
+    fn nat_owner6_upsert(&mut self, p: u32, k: NatOwnerKey6, v: NatOwner) -> anyhow::Result<()> {
+        self.nat_owners6.insert((p, k), v);
         Ok(())
     }
-    fn neigh_nat6_count_set(&mut self, c: u32) -> anyhow::Result<()> {
-        self.neigh_nat6_count = c;
+    fn nat_owner6_remove(&mut self, p: u32, k: &NatOwnerKey6) -> anyhow::Result<()> {
+        self.nat_owners6.remove(&(p, *k));
         Ok(())
+    }
+    fn nat_owner6_entries(&self) -> Vec<(u32, NatOwnerKey6, NatOwner)> {
+        self.nat_owners6
+            .iter()
+            .map(|((p, k), v)| (*p, *k, *v))
+            .collect()
     }
     fn lb_upsert(&mut self, k: LbKey, v: LbValue) -> anyhow::Result<()> {
         self.lb.insert(k, v);
