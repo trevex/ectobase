@@ -30,8 +30,8 @@ use crate::FwError;
 
 /// Per scope and family: the most peer classes / policy entries the compiler emits. They bound the
 /// inner tries the dataplane creates; a rule list that expands past them is refused whole.
-pub const SCOPE_MAX_CLASSES: usize = 4096;
-pub const SCOPE_MAX_ENTRIES: usize = 16384;
+pub const SCOPE_MAX_CLASSES: usize = flowplane_common::FW_SCOPE_MAX_CLASSES as usize;
+pub const SCOPE_MAX_ENTRIES: usize = flowplane_common::FW_SCOPE_MAX_ENTRIES as usize;
 
 /// One family's compiled tries.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

@@ -1,6 +1,7 @@
 use anyhow::Context;
 use aya::maps::{
     lpm_trie::{Key, LpmTrie},
+    of_maps::HashOfMaps,
     Array, HashMap, MapData,
 };
 use aya::Ebpf;
@@ -193,6 +194,101 @@ bpf_hash_map!(
     /// (the map otherwise only auto-evicts via LRU).
     NatCt6, "NAT_CT6", CtKey6, CtEntry6, remove, entries
 );
+
+bpf_hash_map!(
+    /// Typed handle over the `FW_BIND` BPF map (ifindex -> the interface's classifier scopes + policy
+    /// generation).
+    FwBindMap, "FW_BIND", u32, flowplane_common::FwBind, upsert, remove_owned, entries
+);
+
+/// The firewall classifier's four outer map-of-maps (`FW_CLASS{,6}` / `FW_POLICY{,6}`): scope id ->
+/// that scope's class trie / policy trie, per family.
+pub struct FwScopes {
+    class4: HashOfMaps<MapData, u64, LpmTrie<MapData, [u8; 4], u32>>,
+    class6: HashOfMaps<MapData, u64, LpmTrie<MapData, [u8; 16], u32>>,
+    policy4: HashOfMaps<MapData, u64, LpmTrie<MapData, flowplane_common::FwPolKey, u32>>,
+    policy6: HashOfMaps<MapData, u64, LpmTrie<MapData, flowplane_common::FwPolKey, u32>>,
+}
+
+/// `BPF_F_NO_PREALLOC`: required for LPM tries, and must equal the eBPF inner-map template's flags
+/// or the kernel refuses the inner map on insert.
+const LPM_FLAGS: u32 = 1;
+
+/// A fresh standalone LPM trie holding `entries`, sized to them (the kernel only compares type,
+/// key/value size and flags against the outer map's template — not max_entries).
+fn lpm_trie<K: aya::Pod, V: aya::Pod>(
+    entries: impl ExactSizeIterator<Item = (u32, K, V)>,
+) -> anyhow::Result<LpmTrie<MapData, K, V>> {
+    let mut trie = LpmTrie::<MapData, K, V>::create(entries.len().max(1) as u32, LPM_FLAGS)
+        .context("create scope trie")?;
+    for (plen, key, val) in entries {
+        trie.insert(&Key::new(plen, key), val, 0)
+            .context("populate scope trie")?;
+    }
+    Ok(trie)
+}
+
+impl FwScopes {
+    pub fn open(ebpf: &mut Ebpf) -> anyhow::Result<Self> {
+        let mut take = |name: &str| {
+            ebpf.take_map(name)
+                .with_context(|| format!("{name} map missing"))
+        };
+        Ok(Self {
+            class4: HashOfMaps::try_from(take("FW_CLASS")?)?,
+            class6: HashOfMaps::try_from(take("FW_CLASS6")?)?,
+            policy4: HashOfMaps::try_from(take("FW_POLICY")?)?,
+            policy6: HashOfMaps::try_from(take("FW_POLICY6")?)?,
+        })
+    }
+
+    /// Build all four of the scope's tries in full, then insert them under its id. The id is only
+    /// reachable through an `FW_BIND` entry written after this returns, so a partial insert (on a
+    /// failure midway) is rolled back and never observed.
+    pub fn create(&mut self, scope: &flowplane_control::fwclass::Scope) -> anyhow::Result<()> {
+        let c4 = lpm_trie(scope.v4.classes.iter().map(|&(a, l, c)| (l as u32, a, c)))?;
+        let c6 = lpm_trie(scope.v6.classes.iter().map(|&(a, l, c)| (l as u32, a, c)))?;
+        let p4 = lpm_trie(scope.v4.policy.iter().copied())?;
+        let p6 = lpm_trie(scope.v6.policy.iter().copied())?;
+        let id = scope.id;
+        let inserted = self
+            .class4
+            .insert(id, &c4, 0)
+            .and_then(|_| self.class6.insert(id, &c6, 0))
+            .and_then(|_| self.policy4.insert(id, &p4, 0))
+            .and_then(|_| self.policy6.insert(id, &p6, 0));
+        if let Err(e) = inserted {
+            let _ = self.delete(id);
+            return Err(e).context("insert scope tries");
+        }
+        Ok(())
+    }
+
+    /// Remove a scope from all four outer maps. In-flight lookups finish on the old tries (the kernel
+    /// frees an inner map after an RCU grace period). Absent entries are not an error.
+    pub fn delete(&mut self, id: u64) -> anyhow::Result<()> {
+        let _ = self.class4.remove(&id);
+        let _ = self.class6.remove(&id);
+        let _ = self.policy4.remove(&id);
+        let _ = self.policy6.remove(&id);
+        Ok(())
+    }
+
+    /// Every scope id present in any of the four outer maps (adopt GC).
+    pub fn ids(&self) -> Vec<u64> {
+        let mut ids: Vec<u64> = self
+            .class4
+            .keys()
+            .chain(self.class6.keys())
+            .chain(self.policy4.keys())
+            .chain(self.policy6.keys())
+            .filter_map(Result::ok)
+            .collect();
+        ids.sort_unstable();
+        ids.dedup();
+        ids
+    }
+}
 
 bpf_hash_map!(
     /// Typed handle over the `FW_RULES` BPF map ((ifindex, slot) -> rule).

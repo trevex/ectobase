@@ -39,6 +39,10 @@ pub struct ControlCore<W: MapWriter> {
     // FIREWALL v6 shadow: ifindex -> ordered (rule_id, rule) pairs. Drives the FW_RULES6 / FW_META6
     // reprogram, mirroring `fw`.
     pub(crate) fw6: std::collections::HashMap<u32, Vec<(Vec<u8>, flowplane_common::FwRule6)>>,
+    // FIREWALL classifier: each interface's current binding (mirrors `FW_BIND`) and how many
+    // (interface, direction) pairs reference each scope — a scope is deleted at zero.
+    pub(crate) fw_binds: std::collections::HashMap<u32, flowplane_common::FwBind>,
+    pub(crate) fw_scope_refs: std::collections::HashMap<u64, u32>,
 }
 
 impl<W: MapWriter> ControlCore<W> {
@@ -54,6 +58,8 @@ impl<W: MapWriter> ControlCore<W> {
             neigh_nats6: Vec::new(),
             fw: std::collections::HashMap::new(),
             fw6: std::collections::HashMap::new(),
+            fw_binds: std::collections::HashMap::new(),
+            fw_scope_refs: std::collections::HashMap::new(),
         }
     }
     pub fn writer_mut(&mut self) -> &mut W {

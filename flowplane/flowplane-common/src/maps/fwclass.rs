@@ -17,6 +17,15 @@ pub const FW_CLASS_ANY: u32 = 0;
 /// Scope 0 in an [`FwBind`] direction: the interface has no rules in that direction → DROP.
 pub const FW_SCOPE_NONE: u64 = 0;
 
+/// Distinct scopes a node holds (the outer `FW_CLASS{,6}` / `FW_POLICY{,6}` maps' capacity). A scope
+/// is one direction's rule set, shared by every interface with identical rules.
+pub const FW_SCOPES_MAX: u32 = 4096;
+/// Per scope and family: the most peer classes (class-trie entries) and policy entries a scope may
+/// hold. The compiler refuses larger rule lists; the eBPF inner-map templates use them as
+/// max_entries; the dataplane sizes each scope's tries to their actual content.
+pub const FW_SCOPE_MAX_CLASSES: u32 = 4096;
+pub const FW_SCOPE_MAX_ENTRIES: u32 = 16384;
+
 /// Policy-trie prefix lengths over [`FwPolKey`] (the LPM key's data bits, class first).
 /// Class only (any proto, any port).
 pub const FW_POL_PREFIX_CLASS: u32 = 32;

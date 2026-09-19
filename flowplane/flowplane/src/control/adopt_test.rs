@@ -17,9 +17,9 @@
 use std::path::Path;
 use std::process::Command;
 
-use aya::maps::{HashMap as AyaHashMap, MapData};
+use aya::maps::{of_maps::HashOfMaps, HashMap as AyaHashMap, MapData};
 use aya::programs::{SchedClassifier, TcAttachType};
-use flowplane_common::FwMeta;
+use flowplane_common::{FwBind, FwMeta, FwPolKey};
 
 use super::{hex_encode, Control, IfaceParams};
 use crate::{handlers, pb};
@@ -36,6 +36,36 @@ fn tcx_ingress_prog_count(dev: &str) -> usize {
     SchedClassifier::query_tcx(dev, TcAttachType::Ingress)
         .map(|(_, progs)| progs.len())
         .unwrap_or(0)
+}
+
+fn fw_bind_pinned(pin: &Path, ifindex: u32) -> Option<FwBind> {
+    let map = MapData::from_pin(pin.join("FW_BIND")).expect("reopen pinned FW_BIND");
+    let map: AyaHashMap<_, u32, FwBind> =
+        AyaHashMap::try_from(aya::maps::Map::HashMap(map)).expect("FW_BIND is a hash map");
+    map.get(&ifindex, 0).ok()
+}
+
+/// The scope ids present in the pinned FW_POLICY outer map.
+fn scopes_pinned(pin: &Path) -> Vec<u64> {
+    let map = MapData::from_pin(pin.join("FW_POLICY")).expect("reopen pinned FW_POLICY");
+    let map: HashOfMaps<_, u64, aya::maps::LpmTrie<MapData, FwPolKey, u32>> =
+        HashOfMaps::try_from(aya::maps::Map::HashOfMaps(map)).expect("FW_POLICY is a hash of maps");
+    let mut ids: Vec<u64> = map.keys().filter_map(Result::ok).collect();
+    ids.sort_unstable();
+    ids
+}
+
+fn replace_fw(ctl: &Control, rules: Vec<pb::FwRuleSpec>) {
+    ctl.with_core(|c| {
+        handlers::replace_interface_firewall(
+            c,
+            &pb::ReplaceInterfaceFirewallRequest {
+                interface_id: "ifA".into(),
+                rules,
+            },
+        )
+    })
+    .expect("replace_interface_firewall");
 }
 
 fn fw_meta_pinned(pin: &Path, ifindex: u32) -> Option<FwMeta> {
@@ -132,31 +162,39 @@ fn restart_adopts_pinned_state_and_relinks_guests() {
         },
     )
     .expect("create_interface");
-    ctl.with_core(|c| {
-        handlers::replace_interface_firewall(
-            c,
-            &pb::ReplaceInterfaceFirewallRequest {
-                interface_id: "ifA".into(),
-                rules: vec![
-                    pb::FwRuleSpec {
-                        rule_id: "in".into(),
-                        src_cidr: "10.0.0.0/8".into(),
-                        allow: true,
-                        ..Default::default()
-                    },
-                    pb::FwRuleSpec {
-                        rule_id: "eg".into(),
-                        dst_cidr: "::/0".into(),
-                        allow: true,
-                        egress: true,
-                        ..Default::default()
-                    },
-                ],
+    let rules = || {
+        vec![
+            pb::FwRuleSpec {
+                rule_id: "in".into(),
+                src_cidr: "10.0.0.0/8".into(),
+                allow: true,
+                ..Default::default()
             },
-        )
-    })
-    .expect("replace_interface_firewall");
+            pb::FwRuleSpec {
+                rule_id: "eg".into(),
+                dst_cidr: "::/0".into(),
+                allow: true,
+                egress: true,
+                ..Default::default()
+            },
+        ]
+    };
+    // Two cutovers, so the surviving generation (2) is not what a fresh process would write.
+    replace_fw(&ctl, rules()[..1].to_vec());
+    replace_fw(&ctl, rules());
     assert_eq!(tcx_ingress_prog_count("fpt-g0"), 1, "tc_guest_tx attached");
+    let bind = fw_bind_pinned(pin.path(), guest_ifindex).expect("classifier binding");
+    assert!(
+        bind.ingress_scope != 0 && bind.egress_scope != 0,
+        "{bind:?}"
+    );
+    assert_eq!(bind.gen, 2);
+    let scopes = scopes_pinned(pin.path());
+    assert_eq!(
+        scopes.len(),
+        2,
+        "one scope per direction; the first set was freed"
+    );
 
     // The process "exits": every fd and in-memory structure goes, only pins remain.
     drop(ctl);
@@ -176,6 +214,16 @@ fn restart_adopts_pinned_state_and_relinks_guests() {
     );
     let meta = fw_meta_pinned(pin.path(), guest_ifindex).expect("FW_META survives the exit");
     assert_eq!((meta.ingress_count, meta.egress_count), (1, 0), "v4 counts");
+    assert_eq!(
+        fw_bind_pinned(pin.path(), guest_ifindex),
+        Some(bind),
+        "binding survives"
+    );
+    assert_eq!(
+        scopes_pinned(pin.path()),
+        scopes,
+        "scopes survive with no control plane"
+    );
 
     // Incarnation 2: adopt.
     let ctl = bring_up(pin.path(), true);
@@ -207,19 +255,32 @@ fn restart_adopts_pinned_state_and_relinks_guests() {
     let meta6_path = pin.path().join("FW_META6");
     assert!(meta6_path.exists(), "v6 firewall meta is pinned too");
 
-    // The adopted control plane is fully functional: a fresh replace lands in the same maps.
-    ctl.with_core(|c| {
-        handlers::replace_interface_firewall(
-            c,
-            &pb::ReplaceInterfaceFirewallRequest {
-                interface_id: "ifA".into(),
-                rules: vec![],
-            },
-        )
-    })
-    .expect("replace after adopt");
+    // The agent re-pushes the same rules after a restart: the adopted scopes are reused and the
+    // binding is untouched (same generation, so established flows are not re-evaluated).
+    replace_fw(&ctl, rules());
+    assert_eq!(
+        fw_bind_pinned(pin.path(), guest_ifindex),
+        Some(bind),
+        "re-push is a no-op"
+    );
+    assert_eq!(scopes_pinned(pin.path()), scopes, "no duplicate scopes");
+
+    // The adopted control plane is fully functional: a fresh replace lands in the same maps, and
+    // the scopes nothing references any more are freed.
+    replace_fw(&ctl, vec![]);
     let meta = fw_meta_pinned(pin.path(), guest_ifindex).expect("FW_META after replace");
     assert_eq!((meta.ingress_count, meta.egress_count), (0, 0));
+    let emptied = fw_bind_pinned(pin.path(), guest_ifindex).expect("binding after replace");
+    assert_eq!((emptied.ingress_scope, emptied.egress_scope), (0, 0));
+    assert_eq!(
+        emptied.gen,
+        bind.gen.wrapping_add(1),
+        "a rebind bumps the generation"
+    );
+    assert!(
+        scopes_pinned(pin.path()).is_empty(),
+        "unreferenced scopes deleted"
+    );
 
     // Unpinning detaches; the netns (and its devices) goes away with this thread.
     drop(ctl);

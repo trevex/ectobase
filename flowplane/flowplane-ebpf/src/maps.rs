@@ -1,13 +1,15 @@
 use aya_ebpf::{
-    macros::map,
+    btf_maps::{lpm_trie::Key as BtfLpmKey, HashOfMaps, LpmTrie as BtfLpmTrie},
+    macros::{btf_map, map},
     maps::{lpm_trie::LpmTrie, Array, HashMap, LruHashMap, ProgramArray},
 };
 use flowplane_common::{
     Config, CtEntry, CtEntry6, CtKey, CtKey6, DhcpConfig, DhcpMeta, DsrLbIP, FloatingIPKey,
-    FloatingIPKey6, FwMeta, FwRule, FwRule6, FwRuleKey, IfaceKey, IfaceKey6, IfaceMetaKey,
-    IfaceMetaVal, IfaceValue, InspectEntry, LbBackend, LbKey, LbKey6, LbValue, Local, MaglevKey,
-    MeterState, NatKey, NatKey6, NatValue, NatValue6, NeighborNat6Entry, NeighborNatEntry,
-    PortMeta, RouteLpmData, RouteLpmData6, RouteValue, UnderlayValue,
+    FloatingIPKey6, FwBind, FwMeta, FwPolKey, FwRule, FwRule6, FwRuleKey, IfaceKey, IfaceKey6,
+    IfaceMetaKey, IfaceMetaVal, IfaceValue, InspectEntry, LbBackend, LbKey, LbKey6, LbValue, Local,
+    MaglevKey, MeterState, NatKey, NatKey6, NatValue, NatValue6, NeighborNat6Entry,
+    NeighborNatEntry, PortMeta, RouteLpmData, RouteLpmData6, RouteValue, UnderlayValue,
+    FW_SCOPES_MAX, FW_SCOPE_MAX_CLASSES, FW_SCOPE_MAX_ENTRIES,
 };
 
 #[map]
@@ -83,6 +85,43 @@ pub static FW_RULES6: HashMap<FwRuleKey, FwRule6> = HashMap::pinned(16384, 0);
 /// IPv6 firewall per-interface meta (ifindex -> per-direction rule counts). Mirror of `FW_META`.
 #[map]
 pub static FW_META6: HashMap<u32, FwMeta> = HashMap::pinned(1024, 0);
+
+// ---- Firewall classifier (see flowplane_common::FwBind / FwPolKey and core `fw_classify{,6}`) ----
+
+/// ifindex -> the interface's ingress/egress scopes + policy generation. One write cuts over.
+#[map]
+pub static FW_BIND: HashMap<u32, FwBind> = HashMap::pinned(1024, 0);
+
+/// A scope's v4 / v6 peer-class trie: peer address prefix -> scope-local class.
+pub type FwClassTrie4 = BtfLpmTrie<[u8; 4], u32, { FW_SCOPE_MAX_CLASSES as usize }>;
+pub type FwClassTrie6 = BtfLpmTrie<[u8; 16], u32, { FW_SCOPE_MAX_CLASSES as usize }>;
+/// A scope's policy trie: [class | proto | port] prefix -> precedence.
+pub type FwPolicyTrie = BtfLpmTrie<FwPolKey, u32, { FW_SCOPE_MAX_ENTRIES as usize }>;
+
+// scope id -> that scope's tries. The dataplane builds each scope's tries in full, then inserts them;
+// an interface only ever reaches a scope through FW_BIND. BTF map definitions carry no pinning
+// attribute in aya-ebpf 0.2, so the loader pins these by name (`map_pin_path`) to survive adopt; the
+// inner tries live on through the outer maps' references.
+#[btf_map]
+pub static FW_CLASS: HashOfMaps<u64, FwClassTrie4, { FW_SCOPES_MAX as usize }> = HashOfMaps::new();
+#[btf_map]
+pub static FW_CLASS6: HashOfMaps<u64, FwClassTrie6, { FW_SCOPES_MAX as usize }> = HashOfMaps::new();
+#[btf_map]
+pub static FW_POLICY: HashOfMaps<u64, FwPolicyTrie, { FW_SCOPES_MAX as usize }> = HashOfMaps::new();
+#[btf_map]
+pub static FW_POLICY6: HashOfMaps<u64, FwPolicyTrie, { FW_SCOPES_MAX as usize }> =
+    HashOfMaps::new();
+
+// rustc emits only a forward declaration for a struct that appears solely behind the `*const`
+// fields of a BTF map definition, and the loader then rejects the map ("unexpected BTF type id").
+// A `#[used]` static of each trie key type keeps its full definition in the debug info (the fwspike
+// finding) — add one for every new btf_map key/value struct.
+#[used]
+static _BTF_KEEP_CLASS4: BtfLpmKey<[u8; 4]> = BtfLpmKey::new(0, [0; 4]);
+#[used]
+static _BTF_KEEP_CLASS6: BtfLpmKey<[u8; 16]> = BtfLpmKey::new(0, [0; 16]);
+#[used]
+static _BTF_KEEP_POLICY: BtfLpmKey<FwPolKey> = BtfLpmKey::new(0, FwPolKey::new(0, 0, [0; 2]));
 /// IPv6 firewall-only conntrack (`CtKey6` -> `CtEntry`). Mirror of `CONNTRACK` (LRU, same cap/flags).
 #[map]
 pub static CONNTRACK6: LruHashMap<CtKey6, CtEntry> = LruHashMap::pinned(1_048_576, 0);

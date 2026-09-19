@@ -36,6 +36,12 @@ pub fn load_ebpf(pin_dir: &Path) -> anyhow::Result<Ebpf> {
     let bytes = aya::include_bytes_aligned!(concat!(env!("OUT_DIR"), "/flowplane-prog"));
     let mut loader = aya::EbpfLoader::new();
     loader.default_map_pin_directory(pin_dir);
+    // BTF map definitions have no pinning attribute in aya-ebpf 0.2, so the classifier's
+    // map-of-maps are pinned by name here: create-or-reuse, like the ByName maps above, so the
+    // scopes survive a restart with the bindings that reference them.
+    for name in ["FW_CLASS", "FW_CLASS6", "FW_POLICY", "FW_POLICY6"] {
+        loader.map_pin_path(name, pin_dir.join(name));
+    }
     // Map name -> env var. Unset => keep the compile-time `with_max_entries` default.
     for (map, var) in [
         ("CONNTRACK", "FLOWPLANE_CONNTRACK_MAX"),

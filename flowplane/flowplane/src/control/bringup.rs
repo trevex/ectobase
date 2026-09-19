@@ -139,6 +139,8 @@ impl Control {
         let fw_meta = FwMetaMap::open(&mut ebpf)?;
         let fw_rules6 = FwRules6::open(&mut ebpf)?;
         let fw_meta6 = FwMetaMap6::open(&mut ebpf)?;
+        let fw_bind = crate::maps::FwBindMap::open(&mut ebpf)?;
+        let fw_scopes = crate::maps::FwScopes::open(&mut ebpf)?;
         let underlay = crate::maps::Underlay::open(&mut ebpf)?;
         let meter = Meter::open(&mut ebpf)?;
         let neigh_nat = NeighborNat::open(&mut ebpf)?;
@@ -177,6 +179,8 @@ impl Control {
             fw_meta,
             fw_rules6,
             fw_meta6,
+            fw_bind,
+            fw_scopes,
             ports,
             ifaces,
             ifaces6,
@@ -208,6 +212,9 @@ impl Control {
         // bookkeeping (by_id/by_ifindex/iface_underlay) and the re-attach list from the surviving
         // IFACE_META journal. A fresh (non-adopt) bring-up starts empty.
         if adopt {
+            // The classifier's bindings and scopes survived in the pinned maps; rebuild the scope
+            // references from them (and collect scopes nothing binds) before any replace runs.
+            inner.core.adopt_fw_classifier();
             let recovered = Self::rebuild_from_maps(&mut inner)?;
             eprintln!(
                 "adopt: recovered {} interface(s) from pinned maps",
