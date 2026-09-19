@@ -8,7 +8,7 @@ behavior.
 
 The sim is not a reimplementation. `SimNode`'s methods compose the same
 `flowplane-core` fns the eBPF programs call — `tunnel_encap`, `lb_select_forward`,
-`fw_eval_dir`, `ct_create_default`, `decap_and_rewrite`, `snat_egress`, `route4`,
+`fw_classify`, `ct_create_default`, `decap_and_rewrite`, `snat_egress`, `route4`,
 `deliver`, the NAT64 and DHCP/ARP/ND cores — in the exact order and gating of the
 corresponding eBPF program. Where the eBPF wrapper has dispatch glue (e.g. the LB
 tail), the sim composes the same glue, and a `BPF_PROG_TEST_RUN` anchor guards that
@@ -24,8 +24,11 @@ the native output equals the real bytecode.
   `bpf_skb_adjust_room` byte-for-byte.
 - `MemMaps` (`maps.rs`) — `HashMap`/`HashSet`-backed mirrors of every BPF map the
   datapath uses: `UNDERLAY`, `ROUTES`/`ROUTES6` (LPM tries), `CONNTRACK`, `LB` +
-  `MAGLEV`, `NAT` + `NAT_IPS`, `FW_META`/`FW_RULES`, `DHCP_CONFIG`/`DHCP_META`, and the
-  per-interface `METER` state.
+  `MAGLEV`, `NAT` + `NAT_IPS`, the firewall classifier (`FW_BIND`, the scopes' class and
+  policy tries, `FW_EPOCH`), `DHCP_CONFIG`/`DHCP_META`, and the per-interface `METER` state.
+  Tests seed each interface's firewall as an ordered rule list (`add_fw_rule`); `MemMaps`
+  compiles it with the dataplane's own classifier compiler, so every scenario runs the
+  classifier the kernel runs.
 
 Adding a datapath feature means adding the new `Maps` accessor to the trait, its
 real-kernel impl in `coreimpl.rs`, and its in-memory impl in `MemMaps` — the sim then
@@ -68,7 +71,7 @@ flowchart LR
     go["Go compiler<br/>Compile() → CompiledNIC"]
     json["CompiledNIC JSON fixture"]
     apply["compilednic::apply()"]
-    maps["SimNode MemMaps<br/>(FW_RULES, LB, …)"]
+    maps["SimNode MemMaps<br/>(firewall rule lists, LB, …)"]
     core["flowplane-core fns"]
     go --> json --> apply --> maps --> core
 ```
@@ -102,10 +105,10 @@ This runs multi-node scenarios in-process that would otherwise need netns or cla
 - North-South — external → edge `wan_rx` → backend host delivery.
 - East-West load balancing — including the relay reforward hop to a remote
   backend (`bpf_redirect` semantics).
-- The LB-DSR firewall case — `lb_scenario_test.rs` reproduces the "LB packets
-  dropped" failure synthetically and pins the fix: because LB is DSR (the inner
-  destination stays the LB address), a policy written for a backend's own overlay IP does not
-  cover its LB traffic, so an explicit `LB address:port` allow rule is required. The dataplane
+- The LB firewall case — `lb_scenario_test.rs` reproduces the "LB packets dropped"
+  failure synthetically and pins the fix: N/S LB traffic reaches a backend with the external
+  client as its source, so a backend policy that admits only internal sources drops it; the
+  backend's ingress policy must admit the clients' range on the service port. The dataplane
   is deny-by-default and LB membership never generates firewall rules; the control
   plane materializes k8s open-until-selected as explicit allow-all for unpolicied NICs.
 

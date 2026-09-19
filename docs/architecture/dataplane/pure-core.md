@@ -55,7 +55,7 @@ wrappers over the map globals and stays verifier-friendly.
 | Production | `flowplane-ebpf` (`coreimpl.rs`) | `TcPkt` over a tc context (raw ptr + bounds checks against `data_end`), and `RawPkt` over a `(data, data_end)` window for tc | `GlobalMaps` — zero-cost wrappers over the `#[map]` statics |
 | Sim | `flowplane-sim` | `VecPkt` over a `Vec<u8>` | `MemMaps` — `HashMap`-backed stand-ins |
 
-Because both impls satisfy the same traits, `flowplane_core::firewall::fw_eval_dir`,
+Because both impls satisfy the same traits, `flowplane_core::firewall::fw_classify`,
 `encap::tunnel_encap`, `decap::decap_and_rewrite`, and every other core function
 execute identical logic whether they run in the kernel or in a native test.
 
@@ -73,7 +73,7 @@ worthless. So the discipline is strict:
   the returned `Action`/`Deliver`/verdict. See the guest-egress route decision
   (`egress::forward_decision_v4` calls `flowplane_core::egress::route4` + `deliver`), the
   uplink tail (`flowplane_core::decap::decap_and_rewrite`), and the firewall
-  (`flowplane_core::firewall::fw_eval_dir`), all invoked directly from `flowplane-ebpf`.
+  (`flowplane_core::firewall::fw_classify`), all invoked directly from `flowplane-ebpf`.
 - If the eBPF verifier cannot accept the seam for some path (e.g. a variable-offset
   parse that blows the stack), the resolution is to move the test to a level that can
   exercise the real program (a `BPF_PROG_TEST_RUN` anchor or a live e2e) — not to keep

@@ -87,13 +87,30 @@ func bringUpGuest(ctx context.Context, cfg *config.Config, node config.DerivedNo
 	_, _ = kubectl(ctx, cfg, node.Cluster, "-n", "ectobase-system", "exec", pod, "--", "sh", "-c", sh)
 }
 
-// addFwEgressAllow programs a deny-by-default-busting egress allow rule (proto 0 =
-// any) on the guest interface, required or all guest egress is dropped.
-func addFwEgressAllow(t *testing.T, ctx context.Context, container, id string) {
+// setFirewall replaces the interface's whole dataplane firewall with `rules` (FwRuleSpec JSON
+// objects, first match wins) — the same declarative ReplaceInterfaceFirewall the node agent uses.
+// The firewall is deny-by-default: a guest with no allow rule in a direction is cut off in it. A
+// rule matches the PEER only (the source of an ingress rule, the destination of an egress rule);
+// the dataplane refuses one that also restricts the interface's own address.
+func setFirewall(t *testing.T, ctx context.Context, container, id string, rules ...string) {
 	t.Helper()
-	body := fmt.Sprintf(`{"interface_id":%q,"rule_id":"eg","proto":0,"allow":true,"egress":true}`, id)
-	out, err := dataplaneGRPC(t, ctx, container, "AddFwRule", body)
-	require.NoError(t, err, "AddFwRule egress-allow on %s: %s", id, out)
+	body := fmt.Sprintf(`{"interface_id":%q,"rules":[%s]}`, id, strings.Join(rules, ","))
+	out, err := dataplaneGRPC(t, ctx, container, "ReplaceInterfaceFirewall", body)
+	require.NoError(t, err, "ReplaceInterfaceFirewall on %s: %s", id, out)
+}
+
+// fwAllowAny is an allow-any IPv4 rule for one direction (proto 0 = any, empty CIDRs = any peer).
+func fwAllowAny(id string, egress bool) string {
+	return fmt.Sprintf(`{"rule_id":%q,"proto":0,"allow":true,"egress":%t}`, id, egress)
+}
+
+// fwAllowAny6 is fwAllowAny's IPv6 twin: an empty CIDR is IPv4, so a v6 flow needs a ::/0 peer.
+func fwAllowAny6(id string, egress bool) string {
+	peer := "src_cidr"
+	if egress {
+		peer = "dst_cidr"
+	}
+	return fmt.Sprintf(`{"rule_id":%q,%q:"::/0","proto":0,"allow":true,"egress":%t}`, id, peer, egress)
 }
 
 // buildStaticBin compiles a cmd/<pkg> to a CGO_ENABLED=0 static binary in t.TempDir()

@@ -1,8 +1,8 @@
 use flowplane_common::{
-    CtEntry, CtEntry6, CtKey, CtKey6, DhcpConfig, DhcpMeta, DsrLbIP, FwBind, FwMeta, FwPolKey,
-    FwRule, FwRuleKey, IfaceValue, LbBackend, LbKey, LbValue, Local, MaglevKey, MeterState, NatKey,
-    NatKey6, NatValue, NatValue6, NeighborNat6Entry, NeighborNatEntry, PortMeta, RouteValue,
-    UnderlayValue, FW_DIR_EGRESS, FW_DIR_INGRESS, FW_MAX_RULES,
+    CtEntry, CtEntry6, CtKey, CtKey6, DhcpConfig, DhcpMeta, DsrLbIP, FwBind, FwPolKey, FwRule,
+    FwRule6, IfaceValue, LbBackend, LbKey, LbValue, Local, MaglevKey, MeterState, NatKey, NatKey6,
+    NatValue, NatValue6, NeighborNat6Entry, NeighborNatEntry, PortMeta, RouteValue, UnderlayValue,
+    FW_DIR_EGRESS, FW_DIR_INGRESS,
 };
 use flowplane_control::fwclass::{compile_scope, Scope};
 use flowplane_core::maps::Maps;
@@ -33,12 +33,12 @@ pub struct Route6 {
 pub struct MemMaps {
     pub local: Option<Local>,
     pub underlay: HashMap<[u8; 16], UnderlayValue>,
-    pub fw_meta: HashMap<u32, FwMeta>,
-    pub fw_rules: HashMap<(u32, u32), FwRule>, // (ifindex, idx)
-    /// IPv6 firewall meta (`FW_META6`).
-    pub fw_meta6: HashMap<u32, FwMeta>,
-    /// IPv6 firewall rule slots (`FW_RULES6`), keyed `(ifindex, idx)`.
-    pub fw_rules6: HashMap<(u32, u32), flowplane_common::FwRule6>,
+    /// Each interface's IPv4 firewall rules in first-match order, as `ReplaceInterfaceFirewall`
+    /// would receive them (both directions in one list). Seed with [`Self::add_fw_rule`]; the
+    /// classifier state is compiled from them (see [`MemMaps::derived_bind`]).
+    pub fw_rules: HashMap<u32, Vec<FwRule>>,
+    /// IPv6 sibling of `fw_rules`. Seed with [`Self::add_fw_rule6`].
+    pub fw_rules6: HashMap<u32, Vec<FwRule6>>,
     pub conntrack: HashMap<CtKey, CtEntry>,
     /// Firewall-only IPv6 conntrack (`CONNTRACK6` map).
     pub conntrack6: HashMap<CtKey6, CtEntry>,
@@ -101,9 +101,8 @@ pub struct MemMaps {
     /// The node's firewall epoch (`FW_EPOCH[0]`). Bump it after changing a binding (or the legacy
     /// seeds a binding is derived from) to have established flows meet the new policy.
     pub fw_epoch: u32,
-    /// Scopes DERIVED from the legacy rule-slot seeds (`fw_meta`/`fw_rules`,
-    /// `fw_meta6`/`fw_rules6`) for an interface with no explicit `fw_bind` entry — see
-    /// [`MemMaps::derived_bind`].
+    /// Scopes DERIVED from the seeded rule lists (`fw_rules`/`fw_rules6`) for an interface with no
+    /// explicit `fw_bind` entry — see [`MemMaps::derived_bind`].
     derived_scopes: RefCell<HashMap<u64, Scope>>,
 }
 
@@ -139,35 +138,20 @@ fn prefix_match(a: &[u8], b: &[u8], prefix: u8) -> bool {
 }
 
 impl MemMaps {
-    /// The classifier binding the dataplane would program for an interface seeded through the legacy
-    /// rule slots: its slot lists (in slot order, a direction included only if its count is non-zero
-    /// — exactly what the old evaluator scanned) compiled with the dataplane's own
-    /// `fwclass::compile_scope`, the scopes cached for the stage lookups. Scenario tests keep seeding
-    /// rule lists; the classifier is what evaluates them.
+    /// The classifier binding the dataplane would program for an interface with seeded rule lists:
+    /// each direction compiled with the dataplane's own `fwclass::compile_scope`, the scopes cached
+    /// for the stage lookups. An interface with no rule list in either family is unbound (DROP).
     fn derived_bind(&self, ifindex: u32) -> Option<FwBind> {
-        let (m4, m6) = (self.fw_meta.get(&ifindex), self.fw_meta6.get(&ifindex));
-        if m4.is_none() && m6.is_none() {
+        let (v4, v6) = (self.fw_rules.get(&ifindex), self.fw_rules6.get(&ifindex));
+        if v4.is_none() && v6.is_none() {
             return None;
         }
-        let counted = |m: Option<&FwMeta>, dir: u8| {
-            m.is_some_and(|m| {
-                if dir == FW_DIR_EGRESS {
-                    m.egress_count > 0
-                } else {
-                    m.ingress_count > 0
-                }
-            })
-        };
+        let (v4, v6) = (
+            v4.map_or(&[][..], Vec::as_slice),
+            v6.map_or(&[][..], Vec::as_slice),
+        );
         let mut bind = FwBind::default();
         for dir in [FW_DIR_INGRESS, FW_DIR_EGRESS] {
-            let v4: Vec<FwRule> = (0..FW_MAX_RULES)
-                .filter_map(|i| self.fw_rules.get(&(ifindex, i)).copied())
-                .filter(|_| counted(m4, dir))
-                .collect();
-            let v6: Vec<flowplane_common::FwRule6> = (0..FW_MAX_RULES)
-                .filter_map(|i| self.fw_rules6.get(&(ifindex, i)).copied())
-                .filter(|_| counted(m6, dir))
-                .collect();
             let scope = compile_scope(dir, v4.iter(), v6.iter()).unwrap_or_else(|e| {
                 panic!("sim seed for ifindex {ifindex} cannot be compiled for the classifier: {e}")
             });
@@ -181,6 +165,15 @@ impl MemMaps {
             }
         }
         Some(bind)
+    }
+
+    /// Append an IPv4 rule to `ifindex`'s first-match list.
+    pub fn add_fw_rule(&mut self, ifindex: u32, rule: FwRule) {
+        self.fw_rules.entry(ifindex).or_default().push(rule);
+    }
+    /// Append an IPv6 rule to `ifindex`'s first-match list.
+    pub fn add_fw_rule6(&mut self, ifindex: u32, rule: FwRule6) {
+        self.fw_rules6.entry(ifindex).or_default().push(rule);
     }
 
     /// Add an exact-host (`/32`) IPv4 route — the common case for the datapath tests/anchor.
@@ -226,12 +219,6 @@ impl Maps for MemMaps {
     fn underlay_get(&self, addr: &[u8; 16]) -> Option<UnderlayValue> {
         self.underlay.get(addr).copied()
     }
-    fn fw_meta(&self, ifindex: u32) -> Option<FwMeta> {
-        self.fw_meta.get(&ifindex).copied()
-    }
-    fn fw_rule(&self, key: &FwRuleKey) -> Option<FwRule> {
-        self.fw_rules.get(&(key.ifindex, key.idx)).copied()
-    }
     fn conntrack_get(&self, key: &CtKey) -> Option<CtEntry> {
         self.conntrack.get(key).copied()
     }
@@ -261,12 +248,6 @@ impl Maps for MemMaps {
     }
     fn dsr6_insert(&mut self, key: CtKey6, v: DsrLbIP) {
         self.dsr6.insert(key, v);
-    }
-    fn fw_meta6(&self, ifindex: u32) -> Option<FwMeta> {
-        self.fw_meta6.get(&ifindex).copied()
-    }
-    fn fw_rule6(&self, key: &FwRuleKey) -> Option<flowplane_common::FwRule6> {
-        self.fw_rules6.get(&(key.ifindex, key.idx)).copied()
     }
     fn fw_epoch(&self) -> u32 {
         self.fw_epoch

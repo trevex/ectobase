@@ -35,8 +35,8 @@
 
 use etherparse::PacketBuilder;
 use flowplane_common::{
-    DsrLbIP, DsrOpt, FwMeta, FwRule, FwRule6, IfaceValue, LbBackend, LbKey, LbValue, MaglevKey,
-    PortMeta, RouteValue, FW_ACTION_ACCEPT, FW_DIR_EGRESS, FW_DIR_INGRESS,
+    DsrLbIP, DsrOpt, FwRule, FwRule6, IfaceValue, LbBackend, LbKey, LbValue, MaglevKey, PortMeta,
+    RouteValue, FW_ACTION_ACCEPT, FW_DIR_EGRESS, FW_DIR_INGRESS,
 };
 use flowplane_core::conntrack::{ct_key, ct_key6, dsr_note, dsr_note6, invert_key, invert_key6};
 use flowplane_core::encap::ETH_LEN;
@@ -305,15 +305,8 @@ fn install_lb(node: &mut SimNode, backend_underlay: [u8; 16]) {
 /// keeps the inner dst as the LB_IP_CONST, never either backend's own overlay IP, so the rule must not pin
 /// `dst_ip` (mirrors `lb_scenario_test.rs`'s `apply_fw6`).
 fn allow_tcp6_any_dst(maps: &mut MemMaps, tap: u32, port: u16) {
-    maps.fw_meta6.insert(
+    maps.add_fw_rule6(
         tap,
-        FwMeta {
-            ingress_count: 1,
-            egress_count: 0,
-        },
-    );
-    maps.fw_rules6.insert(
-        (tap, 0),
         FwRule6 {
             src_ip: [0; 16],
             src_mask: [0; 16],
@@ -335,15 +328,8 @@ fn allow_tcp6_any_dst(maps: &mut MemMaps, tap: u32, port: u16) {
 
 /// v4 mirror of `allow_tcp6_any_dst`.
 fn allow_tcp_any_dst(maps: &mut MemMaps, tap: u32, port: u16) {
-    maps.fw_meta.insert(
+    maps.add_fw_rule(
         tap,
-        FwMeta {
-            ingress_count: 1,
-            egress_count: 0,
-        },
-    );
-    maps.fw_rules.insert(
-        (tap, 0),
         FwRule {
             src_ip: [0; 4],
             src_mask: [0; 4],
@@ -663,16 +649,7 @@ fn node_for_guest_tx6() -> SimNode {
     let mut node = SimNode::with_local(local_for(HOSTB_UL, 9));
     node.maps.local = Some(local_for(HOSTB_UL, 9));
     node.src_ifindex = TAP;
-    node.maps.fw_meta6.insert(
-        TAP,
-        FwMeta {
-            ingress_count: 0,
-            egress_count: 1,
-        },
-    );
-    node.maps
-        .fw_rules6
-        .insert((TAP, 0), wildcard_egress_rule6());
+    node.maps.add_fw_rule6(TAP, wildcard_egress_rule6());
     node.maps.routes6.push(Route6 {
         vni: VNI,
         ipv6: [0u8; 16],
@@ -692,14 +669,7 @@ fn node_for_guest_tx4() -> SimNode {
     let mut node = SimNode::with_local(local_for(HOSTB_UL, 9));
     node.maps.local = Some(local_for(HOSTB_UL, 9));
     node.src_ifindex = TAP;
-    node.maps.fw_meta.insert(
-        TAP,
-        FwMeta {
-            ingress_count: 0,
-            egress_count: 1,
-        },
-    );
-    node.maps.fw_rules.insert((TAP, 0), wildcard_egress_rule4());
+    node.maps.add_fw_rule(TAP, wildcard_egress_rule4());
     node.maps.routes4.push(Route4 {
         vni: VNI,
         ipv4: [0u8; 4],

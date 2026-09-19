@@ -32,9 +32,7 @@
 //!    separately in Go; here we pin that whatever is in the map is what the datapath uses.)
 
 use etherparse::PacketBuilder;
-use flowplane_common::{
-    FwMeta, FwRule, Local, PortMeta, RouteValue, FW_ACTION_ACCEPT, FW_DIR_EGRESS,
-};
+use flowplane_common::{FwRule, Local, PortMeta, RouteValue, FW_ACTION_ACCEPT, FW_DIR_EGRESS};
 use flowplane_core::pkt::Action;
 
 use crate::SimNode;
@@ -77,15 +75,8 @@ fn guest_udp_frame(src_ip: [u8; 4]) -> Vec<u8> {
 
 /// Install a wildcard egress ALLOW rule on `ifindex` so the firewall is not the test variable.
 fn allow_egress(node: &mut SimNode, ifindex: u32) {
-    node.maps.fw_meta.insert(
+    node.maps.add_fw_rule(
         ifindex,
-        FwMeta {
-            ingress_count: 0,
-            egress_count: 1,
-        },
-    );
-    node.maps.fw_rules.insert(
-        (ifindex, 0),
         FwRule {
             src_ip: [0; 4],
             src_mask: [0; 4],

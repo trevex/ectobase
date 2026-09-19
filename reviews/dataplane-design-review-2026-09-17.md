@@ -147,7 +147,7 @@ redesign, or an explicit documented budget.
 
 | Ceiling | Where | Why it breaks |
 |---|---|---|
-| **16 firewall rules** per interface per family, shared across directions | `FW_MAX_RULES`, `fw.rs:11`; linear scan `firewall.rs:173-181` | Cloud policy sets are routinely 10–100× this. The sharpest expressiveness limit in the system. NOTE: this row originally said "per direction", copying `FW_MAX_RULES`' own doc comment, which is also wrong — the handler partitions by family and each family's 16 slots are shared between ingress and egress (doc comment fixed in `1dea63d`). **PARTLY ADDRESSED (firewall redesign increment A):** the cap still stands, but it is no longer silent — the compiler enforces it, drops shadowed rules before counting, keeps the last good rule set and reports `FirewallCompiled=False/RuleBudgetExceeded` on the NIC (`99d3880`); the dataplane answers an over-cap replace with `ResourceExhausted` and no longer half-commits v4 before refusing v6 (`1dea63d`). The cap itself goes with the LPM classifier (increment B). |
+| **16 firewall rules** per interface per family, shared across directions | `FW_MAX_RULES`, `fw.rs:11`; linear scan `firewall.rs:173-181` | Cloud policy sets are routinely 10–100× this. The sharpest expressiveness limit in the system. NOTE: this row originally said "per direction", copying `FW_MAX_RULES`' own doc comment, which is also wrong — the handler partitions by family and each family's 16 slots are shared between ingress and egress (doc comment fixed in `1dea63d`). **PARTLY ADDRESSED (firewall redesign increment A):** the cap still stands, but it is no longer silent — the compiler enforces it, drops shadowed rules before counting, keeps the last good rule set and reports `FirewallCompiled=False/RuleBudgetExceeded` on the NIC (`99d3880`); the dataplane answers an over-cap replace with `ResourceExhausted` and no longer half-commits v4 before refusing v6 (`1dea63d`). The cap itself goes with the LPM classifier (increment B). **RESOLVED (firewall redesign B + C2):** the datapath evaluates a two-stage LPM classifier whose cost is constant in the rule count; the slot table and its 16-per-family check are deleted (C2), and the compiler's budget is a 256-per-family quota under the dataplane's per-scope limits (4096 classes / 16384 policy entries). |
 | **64 neighbor-NAT entries fleet-wide**, linear scan per WAN-return packet | `maps.rs:96-113` | Caps the whole fleet at ~64 advertised NAT port-blocks per family. |
 | **NAT/public route-bus records broadcast to every node** | `mesh/reflector/nattable.go:23-93` | O(blocks × nodes) fanout; the dominant term at fleet scale. Route records are per-VNI-scoped — NAT/public should be too (edges + owning nodes only). |
 | 1024 interfaces / 1024 taps per node | `INTERFACES`, `PORT_META` | Dense container nodes exceed this. |
@@ -261,6 +261,21 @@ firewalls. v4 and v6, sim and eBPF. The refusal now removes the entries the flow
   per-interface or per-scope stamp cannot cover the same-node path (two interfaces'
   policies, one u8/u32 slot), and a node-wide epoch costs one array read per packet instead
   of a hash lookup — every forward flow on the node re-evaluates once per change.
+- **Upgrade caveat (B5 + C2):** `CONNTRACK{,6}` are pinned and survive a restart-upgrade.
+  Entries written by a pre-classifier dataplane carry no `CT_F_REPLY` and a zero epoch; the
+  first epoch bump after the upgrade (the agent's first re-push binds every interface) makes
+  their reverse entries look like stale FORWARD entries, so replies of pre-upgrade connections
+  are re-evaluated as new flows in the reply direction and dropped where policy does not allow
+  that direction. Pre-production, so not engineered around; an upgrade that must keep
+  connections would flush conntrack or mark pinned reverse entries first. The retired
+  `FW_RULES`/`FW_META{,6}` pins are removed at load (C2), covered by `make ha`.
+- **Found in C2, not by any gate:** the classifier (B4) refuses a rule that matches the
+  interface's own address, and the live lab LB tests (`test/lab/livetest/lb_test.go`) opened
+  their backends with exactly such a rule (`dst_cidr: <backend IP>` on an ingress rule), so
+  their firewall setup would have failed from B4 on. The lab can't run in the gates, so nothing
+  noticed. Fixed in C2 when the live tests moved from the removed `AddFwRule` to the declarative
+  `ReplaceInterfaceFirewall`: the LB rules now name the client peer (`::/0` / `0.0.0.0/0`,
+  TCP/80). Compiled under the `live` tag; **not run** — the next lab run is their check.
 - Peering: non-transitivity is enforced structurally (good — matches GCP); overlap
   non-rejection is a deliberate deviation (local-precedence). Fine, but surface a warning
   condition on the peering when exposed prefixes overlap the local VPC's subnets.
@@ -316,6 +331,11 @@ get mirrored, and each gap is individually "known" but the set is growing.
 - "Scaffold-only" markers on FirewallPolicy/LoadBalancer types that are fully compiled.
   (FirewallPolicy's fixed in `b19cbb3`; LoadBalancer's remains.)
 - `Subnet.status.V4Total/V6Total` include network/broadcast the allocator excludes.
+- `docs/features/loadbalancer.md` "Direct server return" says the inner destination stays the LB
+  address all the way to the backend; the edge's N/S DSR encode (`datapath::process_wan_rx`)
+  rewrites it to the backend's overlay IP. Verify per LB path and correct. (Its firewall section
+  was rewritten in firewall redesign C2 — the old "`LB address:port` rule" advice was wrong
+  for `FirewallPolicy`, whose rules name the peer, never the local address.)
 
 ## 7. Suggested sequencing
 

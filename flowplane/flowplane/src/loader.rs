@@ -7,6 +7,13 @@ use aya::programs::tc::TcAttachOptions;
 use aya::programs::{tc, ProgramFd, SchedClassifier, TcAttachType};
 use aya::Ebpf;
 
+/// Maps an older build pinned that this one no longer declares: the first-match firewall's rule
+/// slots and counts, replaced by the classifier (`FW_BIND` + `FW_CLASS{,6}`/`FW_POLICY{,6}`).
+/// Nothing re-binds them, so after an upgrade they would stay pinned — holding kernel memory — for
+/// good. Removing the pin is safe mid-restart: programs still attached keep their own references,
+/// and the kernel frees each map once the last one is replaced.
+const RETIRED_PINNED_MAPS: [&str; 4] = ["FW_RULES", "FW_META", "FW_RULES6", "FW_META6"];
+
 /// Load the eBPF object that aya-build compiled to bpfel and placed in OUT_DIR.
 ///
 /// BPF map sizes can be overridden at load time via environment variables, allowing operators to
@@ -31,9 +38,13 @@ use aya::Ebpf;
 /// created+pinned there and behaviour matches a non-pinned load; a restart passes the persistent
 /// bpffs dir so the reloaded programs re-bind to the surviving maps instead of creating fresh
 /// ones. The re-bind does NOT check the pinned map's shape: a pinned map whose key or value size
-/// changed must land under a new name (see the LB6 playbook), never as an in-place edit.
+/// changed must land under a new name, never as an in-place edit; a map the build no longer declares
+/// is retired ([`RETIRED_PINNED_MAPS`]).
 pub fn load_ebpf(pin_dir: &Path) -> anyhow::Result<Ebpf> {
     let bytes = aya::include_bytes_aligned!(concat!(env!("OUT_DIR"), "/flowplane-prog"));
+    for name in RETIRED_PINNED_MAPS {
+        let _ = std::fs::remove_file(pin_dir.join(name));
+    }
     let mut loader = aya::EbpfLoader::new();
     loader.default_map_pin_directory(pin_dir);
     // BTF map definitions have no pinning attribute in aya-ebpf 0.2, so the classifier's

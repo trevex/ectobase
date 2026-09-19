@@ -294,9 +294,7 @@ enum ParsedFwRule {
     V6(flowplane_common::FwRule6),
 }
 
-/// Parse the wire form of one firewall rule into a family-tagged `ParsedFwRule`. Shared by
-/// `add_fw_rule` (which lifts its request into a spec) and `replace_interface_firewall` so both
-/// encode rules identically.
+/// Parse the wire form of one firewall rule into a family-tagged `ParsedFwRule`.
 fn parse_fw_rule(spec: &pb::FwRuleSpec) -> Result<ParsedFwRule, ServiceError> {
     use crate::parse::FwCidr;
     use flowplane_common::{FW_ACTION_ACCEPT, FW_ACTION_DROP, FW_DIR_EGRESS, FW_DIR_INGRESS};
@@ -422,28 +420,6 @@ fn parse_icmp_selectors(spec: &pb::FwRuleSpec) -> Result<(u16, u16), ServiceErro
     }
 }
 
-pub fn add_fw_rule<W: MapWriter>(
-    core: &mut ControlCore<W>,
-    req: &pb::AddFwRuleRequest,
-) -> Result<pb::AddFwRuleResponse, ServiceError> {
-    let iface = req.interface_id.clone().into_bytes();
-    let rule_id = req.rule_id.clone().into_bytes();
-    match parse_fw_rule(&pb::FwRuleSpec {
-        src_cidr: req.src_cidr.clone(),
-        dst_cidr: req.dst_cidr.clone(),
-        proto: req.proto,
-        dst_port_min: req.dst_port_min,
-        dst_port_max: req.dst_port_max,
-        allow: req.allow,
-        egress: req.egress,
-        ..Default::default()
-    })? {
-        ParsedFwRule::V6(rule) => core.add_fw_rule6(&iface, rule_id, rule)?,
-        ParsedFwRule::V4(rule) => core.add_fw_rule(&iface, rule_id, rule)?,
-    };
-    Ok(pb::AddFwRuleResponse {})
-}
-
 /// Replace an interface's ENTIRE firewall rule set with `req.rules` (ingress + egress, v4 + v6),
 /// clearing any prior rules. Splits the flat list into per-family slot-ordered vecs and replaces both
 /// families (an absent family is cleared) — or neither, if the interface is unknown (`NotFound`) or
@@ -464,16 +440,6 @@ pub fn replace_interface_firewall<W: MapWriter>(
     }
     core.replace_interface_fw(&iface, v4, v6)?;
     Ok(pb::ReplaceInterfaceFirewallResponse {})
-}
-
-pub fn del_fw_rule<W: MapWriter>(
-    core: &mut ControlCore<W>,
-    req: &pb::DelFwRuleRequest,
-) -> Result<pb::DelFwRuleResponse, ServiceError> {
-    let iface = req.interface_id.clone().into_bytes();
-    let rule_id = req.rule_id.clone().into_bytes();
-    core.del_fw_rule(&iface, &rule_id)?;
-    Ok(pb::DelFwRuleResponse {})
 }
 
 pub fn configure_qos<W: MapWriter>(
@@ -498,7 +464,7 @@ mod tests {
     }
 
     /// Register a minimal interface in the ControlCore shadow so handlers that look up
-    /// `ifaces_meta` (add_fw_rule, configure_qos, add_nat_source) can find it.
+    /// `ifaces_meta` (replace_interface_firewall, configure_qos, add_nat_source) can find it.
     fn register_iface(c: &mut ControlCore<MemMapWriter>, id: &str, vni: u32, ipv4: [u8; 4]) {
         c.register_iface_meta(
             id.as_bytes().to_vec(),
@@ -604,123 +570,86 @@ mod tests {
         assert!(r.is_ok(), "withdraw non-existent: {r:?}");
     }
 
+    /// Both families compile into the interface's classifier scopes.
     #[test]
-    fn add_fw_rule_programs() {
+    fn replace_interface_firewall_programs_both_families() {
         let mut c = core();
-        // add_fw_rule requires the interface to exist in ifaces_meta (resolved via ifindex).
-        register_iface(&mut c, "if-1", 100, [10, 0, 0, 5]);
-        let r = add_fw_rule(
+        // register_iface programs ifindex 0.
+        register_iface(&mut c, "if0", 100, [10, 0, 0, 5]);
+        replace_interface_firewall(
             &mut c,
-            &pb::AddFwRuleRequest {
-                interface_id: "if-1".into(),
-                rule_id: "r-1".into(),
-                src_cidr: "10.0.0.0/24".into(),
-                dst_cidr: "".into(),
-                proto: 6,
-                dst_port_min: 443,
-                dst_port_max: 443,
-                allow: true,
-                egress: false,
+            &pb::ReplaceInterfaceFirewallRequest {
+                interface_id: "if0".into(),
+                rules: vec![
+                    pb::FwRuleSpec {
+                        proto: 6,
+                        dst_port_min: 443,
+                        dst_port_max: 443,
+                        ..fw_spec("r4", "10.0.0.0/24", true)
+                    },
+                    pb::FwRuleSpec {
+                        proto: 6,
+                        dst_port_min: 80,
+                        dst_port_max: 80,
+                        ..fw_spec("r6", "2001:db8::/32", true)
+                    },
+                ],
             },
-        );
-        assert!(r.is_ok(), "fw rule: {r:?}");
+        )
+        .unwrap();
+        let bind = c.writer().fw_bind[&0];
+        assert_eq!(bind.egress_scope, 0, "no egress rules");
+        let scope = &c.writer().fw_scopes[&bind.ingress_scope];
+        assert!(!scope.v4.policy.is_empty() && !scope.v6.policy.is_empty());
     }
 
     /// The classifier matches a rule's PEER (source on ingress, destination on egress); a rule
     /// that also restricts the interface's own address cannot be expressed and is refused as a
     /// client error rather than silently widened.
     #[test]
-    fn add_fw_rule_refuses_a_local_address_match() {
+    fn replace_interface_firewall_refuses_a_local_address_match() {
         let mut c = core();
-        register_iface(&mut c, "if-1", 100, [10, 0, 0, 5]);
-        let r = add_fw_rule(
+        register_iface(&mut c, "if0", 100, [10, 0, 0, 5]);
+        let err = replace_one(
             &mut c,
-            &pb::AddFwRuleRequest {
-                interface_id: "if-1".into(),
-                rule_id: "r-1".into(),
-                src_cidr: "0.0.0.0/0".into(),
+            pb::FwRuleSpec {
                 dst_cidr: "10.0.0.5/32".into(),
                 proto: 6,
                 dst_port_min: 443,
                 dst_port_max: 443,
-                allow: true,
-                egress: false,
-            },
-        );
-        assert_eq!(
-            tonic::Status::from(r.unwrap_err()).code(),
-            tonic::Code::InvalidArgument
-        );
-    }
-
-    #[test]
-    fn add_fw_rule_v6_programs_rules6() {
-        let mut c = core();
-        // register_iface programs ifindex 0; the v6 rule lands at (0, idx 0).
-        register_iface(&mut c, "if0", 100, [10, 0, 0, 5]);
-        add_fw_rule(
-            &mut c,
-            &pb::AddFwRuleRequest {
-                interface_id: "if0".into(),
-                rule_id: "r1".into(),
-                src_cidr: "2001:db8::/32".into(),
-                dst_cidr: "".into(),
-                proto: 6,
-                dst_port_min: 80,
-                dst_port_max: 80,
-                allow: true,
-                egress: false,
+                ..fw_spec("r1", "0.0.0.0/0", true)
             },
         )
-        .unwrap();
-        assert!(c
-            .writer()
-            .fw_rules6
-            .contains_key(&flowplane_common::FwRuleKey { ifindex: 0, idx: 0 }));
+        .unwrap_err();
+        assert_eq!(
+            tonic::Status::from(err).code(),
+            tonic::Code::InvalidArgument
+        );
     }
 
     #[test]
-    fn add_fw_rule_rejects_mixed_family() {
+    fn replace_interface_firewall_rejects_mixed_family() {
         let mut c = core();
         register_iface(&mut c, "if0", 100, [10, 0, 0, 5]);
-        // v4 src + v6 dst must be rejected rather than silently widened to ::/0.
-        let r = add_fw_rule(
-            &mut c,
-            &pb::AddFwRuleRequest {
-                interface_id: "if0".into(),
-                rule_id: "r1".into(),
-                src_cidr: "10.0.0.0/24".into(),
-                dst_cidr: "2001:db8::1/128".into(),
-                proto: 6,
-                dst_port_min: 80,
-                dst_port_max: 80,
-                allow: true,
-                egress: false,
-            },
-        );
-        assert_eq!(
-            tonic::Status::from(r.unwrap_err()).code(),
-            tonic::Code::InvalidArgument
-        );
-        // and the reverse (v6 src + v4 dst).
-        let r2 = add_fw_rule(
-            &mut c,
-            &pb::AddFwRuleRequest {
-                interface_id: "if0".into(),
-                rule_id: "r2".into(),
-                src_cidr: "2001:db8::/64".into(),
-                dst_cidr: "10.0.0.5/32".into(),
-                proto: 6,
-                dst_port_min: 80,
-                dst_port_max: 80,
-                allow: true,
-                egress: false,
-            },
-        );
-        assert_eq!(
-            tonic::Status::from(r2.unwrap_err()).code(),
-            tonic::Code::InvalidArgument
-        );
+        // v4 src + v6 dst must be rejected rather than silently widened to ::/0, and the reverse.
+        for (src, dst) in [
+            ("10.0.0.0/24", "2001:db8::1/128"),
+            ("2001:db8::/64", "10.0.0.5/32"),
+        ] {
+            let err = replace_one(
+                &mut c,
+                pb::FwRuleSpec {
+                    dst_cidr: dst.into(),
+                    ..fw_spec("r", src, true)
+                },
+            )
+            .unwrap_err();
+            assert_eq!(
+                tonic::Status::from(err).code(),
+                tonic::Code::InvalidArgument,
+                "{src} -> {dst}"
+            );
+        }
     }
 
     #[test]
@@ -838,16 +767,11 @@ mod tests {
             },
         )
         .unwrap();
-        // v4 slot 0 and v6 slot 0 are programmed.
-        assert!(c
-            .writer()
-            .fw_rules
-            .contains_key(&flowplane_common::FwRuleKey { ifindex: 0, idx: 0 }));
-        assert!(c
-            .writer()
-            .fw_rules6
-            .contains_key(&flowplane_common::FwRuleKey { ifindex: 0, idx: 0 }));
-        // Empty replace clears both families.
+        // Both families compile into the interface's ingress scope.
+        let bind = c.writer().fw_bind[&0];
+        let scope = &c.writer().fw_scopes[&bind.ingress_scope];
+        assert!(!scope.v4.policy.is_empty() && !scope.v6.policy.is_empty());
+        // Empty replace clears both families: no scope in either direction.
         replace_interface_firewall(
             &mut c,
             &pb::ReplaceInterfaceFirewallRequest {
@@ -856,14 +780,9 @@ mod tests {
             },
         )
         .unwrap();
-        assert!(!c
-            .writer()
-            .fw_rules
-            .contains_key(&flowplane_common::FwRuleKey { ifindex: 0, idx: 0 }));
-        assert!(!c
-            .writer()
-            .fw_rules6
-            .contains_key(&flowplane_common::FwRuleKey { ifindex: 0, idx: 0 }));
+        let bind = c.writer().fw_bind[&0];
+        assert_eq!((bind.ingress_scope, bind.egress_scope), (0, 0));
+        assert!(c.writer().fw_scopes.is_empty());
     }
 
     fn fw_spec(id: &str, src_cidr: &str, allow: bool) -> pb::FwRuleSpec {
@@ -889,11 +808,27 @@ mod tests {
         .map(|_| ())
     }
 
-    /// ICMP type/code reach the rule with presence intact: type 0 (echo reply) is a real
-    /// selector, unset is the 0xffff wildcard the datapath matches as "any".
+    /// The (proto, type, code) policy entries of `if0`'s ingress scope, one family: the ICMP
+    /// selectors ride in the policy key's port bytes, a wildcard code as a shorter prefix.
+    fn icmp_entries(c: &ControlCore<MemMapWriter>, v6: bool) -> Vec<(u8, [u8; 2], u32)> {
+        let bind = c.writer().fw_bind[&0];
+        let scope = &c.writer().fw_scopes[&bind.ingress_scope];
+        let policy = if v6 {
+            &scope.v6.policy
+        } else {
+            &scope.v4.policy
+        };
+        policy
+            .iter()
+            .map(|(plen, k, _)| (k.proto, k.port, *plen))
+            .collect()
+    }
+
+    /// ICMP type/code reach the classifier with presence intact: type 0 (echo reply) is a real
+    /// selector, and an unset code is a wildcard (the key's code byte left out of the prefix).
     #[test]
     fn replace_interface_firewall_carries_icmp_selectors() {
-        let slot0 = flowplane_common::FwRuleKey { ifindex: 0, idx: 0 };
+        use flowplane_common::FW_POL_PREFIX_FULL;
         let mut c = core();
         register_iface(&mut c, "if0", 5, [10, 0, 0, 2]);
         replace_one(
@@ -905,8 +840,11 @@ mod tests {
             },
         )
         .unwrap();
-        let r = c.writer().fw_rules[&slot0];
-        assert_eq!((r.icmp_type, r.icmp_code), (8, 0xffff));
+        assert_eq!(
+            icmp_entries(&c, false),
+            vec![(1, [8, 0], FW_POL_PREFIX_FULL - 8)],
+            "type 8, any code"
+        );
 
         replace_one(
             &mut c,
@@ -918,8 +856,11 @@ mod tests {
             },
         )
         .unwrap();
-        let r6 = c.writer().fw_rules6[&slot0];
-        assert_eq!((r6.icmp_type, r6.icmp_code), (0, 0));
+        assert_eq!(
+            icmp_entries(&c, true),
+            vec![(58, [0, 0], FW_POL_PREFIX_FULL)],
+            "type 0 code 0 is an exact selector, not a wildcard"
+        );
     }
 
     #[test]
@@ -986,12 +927,12 @@ mod tests {
         }
     }
 
-    /// A family over FW_MAX_RULES is a quota refusal, not a transient fault: it must surface as
-    /// ResourceExhausted (clients must not blind-retry it as Internal), and it must be refused
-    /// BEFORE either family is touched — the v4 set is within budget here, yet committing it while
-    /// refusing v6 would leave the interface on half of the new policy.
+    /// A rule list too large for a scope is a quota refusal, not a transient fault: it must surface
+    /// as ResourceExhausted (clients must not blind-retry it as Internal), and it must be refused
+    /// BEFORE anything is written — the v4 half is fine here, yet binding it while refusing v6 would
+    /// leave the interface on half of the new policy.
     #[test]
-    fn replace_interface_firewall_over_cap_is_resource_exhausted_and_commits_nothing() {
+    fn replace_interface_firewall_too_large_is_resource_exhausted_and_commits_nothing() {
         let mut c = core();
         register_iface(&mut c, "if0", 5, [10, 0, 0, 2]);
         replace_interface_firewall(
@@ -1002,12 +943,13 @@ mod tests {
             },
         )
         .unwrap();
+        let before = c.writer().fw_bind[&0];
 
         let mut rules = vec![fw_spec("new-v4", "10.0.0.0/8", true)];
-        for i in 0..=flowplane_common::FW_MAX_RULES {
+        for i in 0..=flowplane_common::FW_SCOPE_MAX_CLASSES {
             rules.push(fw_spec(
                 &format!("v6-{i}"),
-                &format!("2001:db8:{i:x}::/48"),
+                &format!("2001:db8:{:x}:{:x}::/64", i >> 8, i & 0xff),
                 true,
             ));
         }
@@ -1023,15 +965,8 @@ mod tests {
             tonic::Status::from(err).code(),
             tonic::Code::ResourceExhausted
         );
-
-        let slot0 = flowplane_common::FwRuleKey { ifindex: 0, idx: 0 };
-        let kept = c.writer().fw_rules.get(&slot0).expect("prior v4 rule kept");
-        assert_eq!(
-            kept.action,
-            flowplane_common::FW_ACTION_DROP,
-            "v4 was half-committed"
-        );
-        assert!(c.writer().fw_rules6.is_empty());
+        assert_eq!(c.writer().fw_bind[&0], before, "the old binding stays");
+        assert_eq!(c.writer().fw_scopes.len(), 1, "no new scope was created");
     }
 
     #[test]

@@ -701,10 +701,7 @@ mod tests {
             ..Default::default()
         };
         let eligible = |e: &CtEntry| offload_eligible(e, 0);
-        assert!(
-            eligible(&base),
-            "plain established E/W flow is eligible"
-        );
+        assert!(eligible(&base), "plain established E/W flow is eligible");
         assert!(
             !eligible(&CtEntry {
                 tcp_state: TCP_NEW_SYN,
@@ -759,12 +756,18 @@ mod tests {
             ..Default::default()
         };
         assert!(offload_eligible(&fwd, 4));
-        assert!(!offload_eligible(&fwd, 5), "stale forward entry stays on eBPF");
+        assert!(
+            !offload_eligible(&fwd, 5),
+            "stale forward entry stays on eBPF"
+        );
         let reply = CtEntry {
             flags: CT_F_DEFAULT | CT_F_REPLY,
             ..fwd
         };
-        assert!(offload_eligible(&reply, 5), "replies are never re-evaluated");
+        assert!(
+            offload_eligible(&reply, 5),
+            "replies are never re-evaluated"
+        );
     }
 
     #[test]

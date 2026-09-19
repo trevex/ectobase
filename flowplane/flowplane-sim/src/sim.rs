@@ -2,7 +2,7 @@
 //! No parallel reimplementation of PRODUCTION logic: encap arms call `flowplane_core::encap::{
 //! tunnel_encap, reforward}` and carry the resulting `TunnelEncap` decision on `SimOut` — they no
 //! longer write outer bytes (see `flowplane_core::encap` for why). `uplink` composes the REAL core
-//! fns — `lb_select_forward` + `reforward` + `fw_eval_dir` + `ct_create_default` +
+//! fns — `lb_select_forward` + `reforward` + `fw_classify` + `ct_create_default` +
 //! `decap_and_rewrite` — in the exact order + gates of the eBPF `try_uplink_rx` LB/base tail
 //! (`ingress.rs` 135-157 dispatch + 245-304 tail). The LB-dispatch glue is composed here (as it is
 //! in the eBPF wrapper); the `BPF_PROG_TEST_RUN` anchor guards native==bytecode on the LB path.

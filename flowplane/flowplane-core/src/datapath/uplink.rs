@@ -179,8 +179,8 @@ pub struct UplinkOut {
 /// any firewall lookup; [`uplink_track_flow`] stamps it), or `None` to drop it — a refused
 /// re-evaluation also forgets the flow, so the next packet is new again.
 ///
-/// `#[inline(never)]`, own subprogram: `firewall::fw_eval_dir` itself must stay `#[inline(always)]`
-/// (shared with the egress path — see its doc comment), so this ingress-only WRAPPER around the
+/// `#[inline(never)]`, own subprogram: `firewall::fw_classify` itself must stay `#[inline(always)]`
+/// (shared with the egress path), so this ingress-only WRAPPER around the
 /// ct_key-miss-gated call is the out-of-lining lever, splitting it from
 /// [`uplink_track_flow`] (step 3) and the rest of [`process_uplink`] so their locals don't combine
 /// on `uplink_rx`'s BPF stack (they run sequentially, never nested, so this is safe).

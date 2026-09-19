@@ -19,10 +19,13 @@ use std::process::Command;
 
 use aya::maps::{of_maps::HashOfMaps, Array, HashMap as AyaHashMap, MapData};
 use aya::programs::{SchedClassifier, TcAttachType};
-use flowplane_common::{FwBind, FwMeta, FwPolKey};
+use flowplane_common::{FwBind, FwPolKey};
 
 use super::{hex_encode, Control, IfaceParams};
 use crate::{handlers, pb};
+
+/// The old first-match evaluator's pinned maps, gone since the classifier replaced it.
+const RETIRED_MAPS: [&str; 4] = ["FW_RULES", "FW_META", "FW_RULES6", "FW_META6"];
 
 fn sh(args: &[&str]) {
     let st = Command::new(args[0])
@@ -74,13 +77,6 @@ fn replace_fw(ctl: &Control, rules: Vec<pb::FwRuleSpec>) {
         )
     })
     .expect("replace_interface_firewall");
-}
-
-fn fw_meta_pinned(pin: &Path, ifindex: u32) -> Option<FwMeta> {
-    let map = MapData::from_pin(pin.join("FW_META")).expect("reopen pinned FW_META");
-    let map: AyaHashMap<_, u32, FwMeta> =
-        AyaHashMap::try_from(aya::maps::Map::HashMap(map)).expect("FW_META is a hash map");
-    map.get(&ifindex, 0).ok()
 }
 
 /// Move the calling thread into private network + mount namespaces with a sysfs of the new netns
@@ -220,8 +216,6 @@ fn restart_adopts_pinned_state_and_relinks_guests() {
         1,
         "the pinned link keeps tc_guest_tx attached while no control plane runs"
     );
-    let meta = fw_meta_pinned(pin.path(), guest_ifindex).expect("FW_META survives the exit");
-    assert_eq!((meta.ingress_count, meta.egress_count), (1, 0), "v4 counts");
     assert_eq!(
         fw_bind_pinned(pin.path(), guest_ifindex),
         Some(bind),
@@ -234,8 +228,26 @@ fn restart_adopts_pinned_state_and_relinks_guests() {
     );
     assert_eq!(fw_epoch_pinned(pin.path()), 2, "the epoch survives");
 
+    // A node upgraded from before the classifier still has the old evaluator's maps pinned; nothing
+    // reads them any more, and adopt must not leave them holding kernel memory.
+    for name in RETIRED_MAPS {
+        let path = pin.path().join(name);
+        if !path.exists() {
+            Array::<MapData, u32>::create(1, 0)
+                .expect("stand-in map")
+                .pin(&path)
+                .expect("pin stand-in");
+        }
+    }
+
     // Incarnation 2: adopt.
     let ctl = bring_up(pin.path(), true);
+    for name in RETIRED_MAPS {
+        assert!(
+            !pin.path().join(name).exists(),
+            "retired map {name} still pinned after adopt"
+        );
+    }
     let recovered = ctl.recovered_interfaces();
     assert_eq!(
         recovered,
@@ -255,14 +267,6 @@ fn restart_adopts_pinned_state_and_relinks_guests() {
         ctl.iface_lookup_v4(vni, ip).is_some(),
         "INTERFACES was reused, not recreated empty"
     );
-    let meta = fw_meta_pinned(pin.path(), guest_ifindex).expect("FW_META after adopt");
-    assert_eq!(
-        (meta.ingress_count, meta.egress_count),
-        (1, 0),
-        "firewall state kept"
-    );
-    let meta6_path = pin.path().join("FW_META6");
-    assert!(meta6_path.exists(), "v6 firewall meta is pinned too");
 
     // The agent re-pushes the same rules after a restart: the adopted scopes are reused and the
     // binding is untouched (no epoch bump, so established flows are not re-evaluated). Without the
@@ -279,8 +283,6 @@ fn restart_adopts_pinned_state_and_relinks_guests() {
     // The adopted control plane is fully functional: a fresh replace lands in the same maps, and
     // the scopes nothing references any more are freed.
     replace_fw(&ctl, vec![]);
-    let meta = fw_meta_pinned(pin.path(), guest_ifindex).expect("FW_META after replace");
-    assert_eq!((meta.ingress_count, meta.egress_count), (0, 0));
     let emptied = fw_bind_pinned(pin.path(), guest_ifindex).expect("binding after replace");
     assert_eq!((emptied.ingress_scope, emptied.egress_scope), (0, 0));
     assert_eq!(fw_epoch_pinned(pin.path()), 3, "a rebind bumps the epoch");

@@ -15,10 +15,14 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 )
 
-// FirewallRuleBudget is the number of rules the datapath holds per interface PER ADDRESS FAMILY,
-// ingress and egress sharing it (flowplane-common FW_MAX_RULES). The compiler enforces it: the
-// dataplane refusing an oversized set is too late, since the agent can only log the refusal.
-const FirewallRuleBudget = 16
+// FirewallRuleBudget is the most rules a NIC's firewall may hold PER ADDRESS FAMILY after
+// shadowing, ingress and egress together. It is a quota, not a datapath constant: the dataplane
+// compiles each direction's rules into a classifier scope and refuses only a scope over its size
+// limits (4096 peer classes, 16384 policy entries — flowplane-common FW_SCOPE_MAX_*), which a rule
+// count cannot bound exactly, since port ranges and nested CIDRs expand. 256 keeps real policies
+// far below those limits. The compiler enforces it: the dataplane refusing an oversized set is too
+// late, since the agent can only log the refusal.
+const FirewallRuleBudget = 256
 
 // ConditionFirewallCompiled is the NetworkInterface condition reporting whether the policies
 // selecting it compiled into the rule set its datapath enforces.

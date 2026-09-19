@@ -129,7 +129,7 @@ func TestReconcileFirewall_OverBudgetKeepsLastGoodAndReports(t *testing.T) {
 	e.reconcile()
 	good := e.compiled().Spec.Firewall
 
-	e.apply(fwPolicy("big", nil, nRules(17, true, "Allow"), nil))
+	e.apply(fwPolicy("big", nil, nRules(FirewallRuleBudget+1, true, "Allow"), nil))
 	e.reconcile()
 	if got := e.compiled().Spec.Firewall; len(got.Ingress) != len(good.Ingress) || got.Ingress[0] != good.Ingress[0] {
 		t.Fatalf("over-budget compile must keep the last good firewall %+v, got %+v", good, got)
@@ -152,7 +152,7 @@ func TestReconcileFirewall_OverBudgetKeepsLastGoodAndReports(t *testing.T) {
 // With no last good set to keep (first compile), the interface fails CLOSED: an empty firewall is
 // deny-all in the datapath.
 func TestReconcileFirewall_OverBudgetOnFirstCompileFailsClosed(t *testing.T) {
-	e := newFwReconcileEnv(t, nil, fwPolicy("big", nil, nRules(17, false, "Allow"), nil))
+	e := newFwReconcileEnv(t, nil, fwPolicy("big", nil, nRules(FirewallRuleBudget+1, false, "Allow"), nil))
 	e.reconcile()
 	if fw := e.compiled().Spec.Firewall; len(fw.Ingress) != 0 || len(fw.Egress) != 0 {
 		t.Fatalf("first compile over budget must fail closed (empty = deny-all), got %+v", fw)

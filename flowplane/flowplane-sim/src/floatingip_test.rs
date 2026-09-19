@@ -4,7 +4,7 @@
 //! IP is DNAT'd + forwarded to the guest (the guest answers), never answered by the dataplane.
 
 use etherparse::PacketBuilder;
-use flowplane_common::{FwMeta, FwRule, IfaceValue, Local, FW_ACTION_ACCEPT, FW_DIR_INGRESS};
+use flowplane_common::{FwRule, IfaceValue, Local, FW_ACTION_ACCEPT, FW_DIR_INGRESS};
 use flowplane_core::pkt::Action;
 
 use crate::SimNode;
@@ -27,8 +27,8 @@ fn local() -> Local {
 
 /// A node that owns floating IP LB address->GUEST and has GUEST as a local interface.
 ///
-/// DEVIATION from the task's given verbatim `floating_ip_node()`: also seeds a permissive ingress `FW_META`/
-/// `FW_RULES` ALLOW-all entry for `TAP`. `process_uplink`'s step 2 (`uplink_ingress_firewall`)
+/// DEVIATION from the task's given verbatim `floating_ip_node()`: also seeds a permissive ingress
+/// ALLOW-all rule for `TAP`. `process_uplink`'s step 2 (`uplink_ingress_firewall`)
 /// evaluates the deny-by-default ingress firewall on every NEW flow's delivery tap unconditionally —
 /// including the F2 LB address-DNAT arm, which sets `is_lb = false` exactly like normal guest delivery — so
 /// without an explicit ALLOW rule for `TAP` every local-delivery sim test in this codebase (e.g.
@@ -50,15 +50,8 @@ fn floating_ip_node() -> SimNode {
             _pad: [0; 1],
         },
     );
-    n.maps.fw_meta.insert(
+    n.maps.add_fw_rule(
         TAP,
-        FwMeta {
-            ingress_count: 1,
-            egress_count: 0,
-        },
-    );
-    n.maps.fw_rules.insert(
-        (TAP, 0),
         FwRule {
             src_ip: [0; 4],
             src_mask: [0; 4],

@@ -6,7 +6,7 @@
 
 use etherparse::PacketBuilder;
 use flowplane_common::{
-    FwMeta, FwRule, PortMeta, RouteValue, FW_ACTION_ACCEPT, FW_DIR_EGRESS, FW_DIR_INGRESS,
+    FwRule, PortMeta, RouteValue, FW_ACTION_ACCEPT, FW_DIR_EGRESS, FW_DIR_INGRESS,
 };
 use flowplane_core::encap::TunnelEncap;
 use flowplane_core::pkt::Action;
@@ -59,19 +59,8 @@ fn frame() -> Vec<u8> {
 
 /// Install a wildcard ALLOW rule for `dir` on `ifindex`.
 fn allow(node: &mut SimNode, ifindex: u32, dir: u8) {
-    let meta = node.maps.fw_meta.entry(ifindex).or_insert(FwMeta {
-        ingress_count: 0,
-        egress_count: 0,
-    });
-    let idx = if dir == FW_DIR_EGRESS {
-        meta.egress_count += 1;
-        meta.egress_count - 1
-    } else {
-        meta.ingress_count += 1;
-        meta.ingress_count - 1
-    };
-    node.maps.fw_rules.insert(
-        (ifindex, idx),
+    node.maps.add_fw_rule(
+        ifindex,
         FwRule {
             src_ip: [0; 4],
             src_mask: [0; 4],

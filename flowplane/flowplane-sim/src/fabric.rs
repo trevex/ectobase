@@ -163,8 +163,7 @@ mod tests {
     use super::*;
     use etherparse::PacketBuilder;
     use flowplane_common::{
-        FwMeta, FwRule, IfaceValue, LbBackend, LbKey, LbValue, Local, FW_ACTION_ACCEPT,
-        FW_DIR_INGRESS,
+        FwRule, IfaceValue, LbBackend, LbKey, LbValue, Local, FW_ACTION_ACCEPT, FW_DIR_INGRESS,
     };
 
     const EDGE_UL: [u8; 16] = [0x20, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xed, 0xee];
@@ -285,15 +284,8 @@ mod tests {
             },
         );
         // Always-on deny-by-default: the backend needs an explicit allow rule to deliver.
-        backend.maps.fw_meta.insert(
+        backend.maps.add_fw_rule(
             TAP,
-            FwMeta {
-                ingress_count: 1,
-                egress_count: 0,
-            },
-        );
-        backend.maps.fw_rules.insert(
-            (TAP, 0),
             FwRule {
                 src_ip: [0; 4],
                 src_mask: [0; 4],

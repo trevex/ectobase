@@ -3,10 +3,10 @@
 //! the eBPF wrapper so the SAME code runs in eBPF and in the native `SimNode`.
 //!
 //! Design note (option A): the firewall + conntrack steps stay in the eBPF wrapper as-is (they
-//! already delegate to `flowplane_core::firewall::fw_eval_dir` / `conntrack::ct_create_default`, and
+//! already delegate to `flowplane_core::firewall::fw_classify` / `conntrack::ct_create_default`, and
 //! the hit path calls `ct_touch` which has no `Pkt`/`Maps` port yet). This seam covers ONLY the
 //! inner-Ethernet rewrite (the part the wrapper reimplemented inline). The sim composes the real
-//! core fns — `fw_eval_dir`, `ct_create_default`, `decap_and_rewrite` — in the wrapper's order.
+//! core fns — `fw_classify`, `ct_create_default`, `decap_and_rewrite` — in the wrapper's order.
 //!
 //! P2 Task 5: under Geneve `collect_md` the kernel decaps the outer Eth/IPv6/UDP/Geneve header
 //! BEFORE either tcx ingress program runs — what used to be an outer-strip here (`shrink_head`)

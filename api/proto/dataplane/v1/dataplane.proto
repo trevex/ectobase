@@ -43,16 +43,11 @@ service DataplaneNode {
   // DelLbBackend removes a single backend underlay /128 from a registered LB address and rebuilds its
   // Maglev table.
   rpc DelLbBackend(DelLbBackendRequest) returns (DelLbBackendResponse);
-  // AddFwRule programs a single per-interface firewall rule (ingress or egress). A LoadBalancer
-  // service opens its ports on the backend by adding INGRESS ALLOW rules here; LB/service traffic
-  // is NOT exempt from the firewall.
-  rpc AddFwRule(AddFwRuleRequest) returns (AddFwRuleResponse);
-  // DelFwRule removes a per-interface firewall rule by id.
-  rpc DelFwRule(DelFwRuleRequest) returns (DelFwRuleResponse);
   // ReplaceInterfaceFirewall atomically replaces an interface's ENTIRE firewall rule set
   // (ingress + egress, v4 + v6) with the supplied rules, clearing any prior rules. This is the
   // declarative, restart-safe primitive the node agent uses: it pushes the complete desired set
   // each reconcile, so a stale rule can never survive an agent restart or an in-place policy change.
+  // Load-balanced traffic is not exempt: a backend admits it through its ingress rules like any other.
   rpc ReplaceInterfaceFirewall(ReplaceInterfaceFirewallRequest) returns (ReplaceInterfaceFirewallResponse);
   // ConfigureQoS sets (or clears) the per-interface QoS lanes. egress_mbps is EDT-shaped; public and
   // ingress are token-bucket policed. All 0 = unlimited (clears the entry). Idempotent.
@@ -97,30 +92,12 @@ message DelLbBackendRequest {
 }
 message DelLbBackendResponse {}
 
-message AddFwRuleRequest {
-  string interface_id = 1;    // target interface (as in AttachInterface)
-  string rule_id = 2;         // stable rule id (used for DelFwRule)
-  string src_cidr = 3;        // source IPv4 CIDR, e.g. "0.0.0.0/0"; empty = any
-  string dst_cidr = 4;        // destination IPv4 CIDR; empty = any
-  uint32 proto = 5;           // IP protocol number (6=TCP, 17=UDP, 1=ICMP); 0 = any
-  uint32 dst_port_min = 6;    // inclusive destination-port range low; 0..=65535 (0/0 = any)
-  uint32 dst_port_max = 7;    // inclusive destination-port range high; 0 => treated as 65535
-  bool allow = 8;             // true = accept, false = drop
-  bool egress = 9;            // true = egress rule, false = ingress rule
-}
-message AddFwRuleResponse {}
-
-message DelFwRuleRequest {
-  string interface_id = 1;
-  string rule_id = 2;
-}
-message DelFwRuleResponse {}
-
-// FwRuleSpec is one firewall rule inside a ReplaceInterfaceFirewall set. Same fields as
-// AddFwRuleRequest minus interface_id (carried once on the parent). The rule's address family is
-// inferred from the CIDRs (a v6 CIDR on either side makes it a v6 rule), exactly like AddFwRule.
+// FwRuleSpec is one firewall rule inside a ReplaceInterfaceFirewall set. The rule's address family
+// is inferred from the CIDRs (a v6 CIDR on either side makes it a v6 rule). The dataplane matches a
+// rule's PEER — the source of an ingress rule, the destination of an egress rule — and refuses a
+// rule that also restricts the interface's own side.
 message FwRuleSpec {
-  string rule_id = 1;      // stable rule id (debug/telemetry; slot order = position in the list)
+  string rule_id = 1;      // stable rule id (debug/telemetry); first match wins in list order
   string src_cidr = 2;     // source CIDR ("0.0.0.0/0"/"::/0"/empty = any)
   string dst_cidr = 3;     // destination CIDR; empty = any
   uint32 proto = 4;        // IP protocol number (6=TCP, 17=UDP, 1=ICMP); 0 = any

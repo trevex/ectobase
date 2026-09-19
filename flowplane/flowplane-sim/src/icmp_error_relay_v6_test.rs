@@ -4,7 +4,7 @@
 //! (ICMPv6 Packet Too Big, type 2) / dest-unreachable errors reach the right backend. Fresh v6 mirror
 //! of the v4 F3 relay (no pre-P2 eBPF original existed for v6); now in flowplane_core + sim-tested.
 
-use flowplane_common::{FwMeta, FwRule6, IfaceValue, LbBackend, LbValue, Local, MaglevKey};
+use flowplane_common::{FwRule6, IfaceValue, LbBackend, LbValue, Local, MaglevKey};
 use flowplane_core::pkt::Action;
 
 use crate::SimNode;
@@ -193,15 +193,8 @@ fn icmpv6_error_to_lb_ip_relays_to_backend() {
 /// so the default-deny is armed). This does NOT match the relayed ICMPv6 error's OUTER tuple (nexthdr =
 /// 58), so before the PMTUD fix the relayed error was dropped here; after it, the relay arm is exempt.
 fn allow_ingress_tcp_service_port6(n: &mut SimNode, tap: u32) {
-    n.maps.fw_meta6.insert(
+    n.maps.add_fw_rule6(
         tap,
-        FwMeta {
-            ingress_count: 1,
-            egress_count: 0,
-        },
-    );
-    n.maps.fw_rules6.insert(
-        (tap, 0),
         FwRule6 {
             src_ip: [0; 16],
             src_mask: [0; 16],

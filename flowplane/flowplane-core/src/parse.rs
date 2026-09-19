@@ -1,6 +1,6 @@
 //! Pure IPv4 parse helpers rewritten over the `Pkt` trait (no raw pointers). Faithful ports of the
-//! eBPF `parse::l4_ports` / `firewall::icmp_type_code`. The `PacketSelectors` inputs and the
-//! `fw_rule_matches` predicate they feed live in `crate::firewall` (datapath logic), not here.
+//! eBPF `parse::l4_ports` / `firewall::icmp_type_code`; the firewall classifier
+//! (`crate::firewall`) keys its policy lookups off them.
 
 use crate::pkt::Pkt;
 

@@ -31,15 +31,15 @@ use crate::tunnel::get_tunnel_key;
 ///
 /// Uses [`RawPkt`] (scalar `data`/`data_end`), NOT `TcPkt` (the `&TcContext`-backed impl `ingress.rs`
 /// uses for the v4 orchestrator), as the `Pkt` impl handed to `process_uplink_v6`: empirically, the
-/// v6 firewall evaluator (`fw_eval_dir6`, which — unlike the v4 one — additionally calls
-/// `icmp_type_code_v6`) compiled through `TcPkt`'s `&TcContext`-recomputing accessors in THIS calling
+/// v6 firewall evaluator of the time (`fw_eval_dir6`, since replaced by `fw_classify6`; unlike the
+/// v4 one it additionally called `icmp_type_code_v6`) compiled through `TcPkt`'s `&TcContext`-recomputing accessors in THIS calling
 /// shape produced a kernel-verifier-rejected program (`R8 bitwise operator &= on pointer prohibited`
 /// — an LLVM block-merging artifact, not a stack-budget issue: two unrelated source-level operations
 /// landed at the same instruction address with conflicting register typing across their predecessors).
 /// `RawPkt` captures `data`/`data_end` as plain `usize`s ONCE up front (no live context reference,
 /// safe here since this path never resizes the frame) — the exact technique the pre-4c hand-inlined
 /// version of this file already used for the same `fw_eval_dir6` call, and it eliminates the
-/// miscompilation. `fw_eval_dir6` itself verifies fine through `TcPkt` on the EGRESS side
+/// miscompilation. `fw_eval_dir6` itself verified fine through `TcPkt` on the EGRESS side
 /// (`tc_guest_egress_v6`, `verify_tc_guest`), so this is scoped to `RawPkt` for the v6 INGRESS
 /// program specifically, not a claim that `TcPkt` is broken in general (`uplink_rx`/`wan_rx`, and the
 /// entire v4 orchestrator, use it without issue).

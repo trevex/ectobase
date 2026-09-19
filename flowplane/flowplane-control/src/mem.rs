@@ -1,10 +1,9 @@
 //! In-memory `MapWriter` for testing `ControlCore` without CAP_BPF or a live map.
 use crate::writer::{CtFlushScope, CtFlushScope6, MapWriter};
 use flowplane_common::{
-    DhcpConfig, FloatingIPKey, FwBind, FwMeta, FwRule, FwRule6, FwRuleKey, IfaceKey, IfaceKey6,
-    IfaceMetaKey, IfaceMetaVal, IfaceValue, LbBackend, LbKey, LbKey6, LbValue, MaglevKey,
-    MeterState, NatKey, NatKey6, NatValue, NatValue6, NeighborNat6Entry, NeighborNatEntry,
-    PortMeta, RouteValue, UnderlayValue,
+    DhcpConfig, FloatingIPKey, FwBind, IfaceKey, IfaceKey6, IfaceMetaKey, IfaceMetaVal, IfaceValue,
+    LbBackend, LbKey, LbKey6, LbValue, MaglevKey, MeterState, NatKey, NatKey6, NatValue, NatValue6,
+    NeighborNat6Entry, NeighborNatEntry, PortMeta, RouteValue, UnderlayValue,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -25,10 +24,6 @@ pub struct MemMapWriter {
     pub lb6: HashMap<LbKey6, LbValue>,
     pub maglev: HashMap<MaglevKey, LbBackend>,
     pub underlay: HashMap<[u8; 16], UnderlayValue>,
-    pub fw_rules: HashMap<FwRuleKey, FwRule>,
-    pub fw_meta: HashMap<u32, FwMeta>,
-    pub fw_rules6: HashMap<FwRuleKey, FwRule6>,
-    pub fw_meta6: HashMap<u32, FwMeta>,
     pub fw_bind: HashMap<u32, FwBind>,
     pub fw_scopes: HashMap<u64, crate::fwclass::Scope>,
     /// Call counters, so tests can assert an unchanged replace writes nothing.
@@ -48,20 +43,6 @@ pub struct MemMapWriter {
     pub ct_flushes: Vec<CtFlushScope>,
     pub ct6_flushes: Vec<CtFlushScope6>,
     pub ct_iface_flushes: Vec<(u32, [u8; 4], [u8; 16])>,
-}
-
-/// The real `FW_RULES{,6}` hash maps accept any slot index, but the datapath scans only
-/// `0..FW_MAX_RULES`, so a write past that window installs a rule that is never evaluated. Refuse it
-/// here so an overflowing caller fails its test instead of passing against an unbounded fake.
-fn fw_slot_in_scan_window(k: &FwRuleKey) -> anyhow::Result<()> {
-    if k.idx >= flowplane_common::FW_MAX_RULES {
-        anyhow::bail!(
-            "firewall slot {} is outside the datapath scan window (max {})",
-            k.idx,
-            flowplane_common::FW_MAX_RULES
-        );
-    }
-    Ok(())
 }
 
 impl MapWriter for MemMapWriter {
@@ -182,32 +163,6 @@ impl MapWriter for MemMapWriter {
     fn underlay_get(&self, k: &[u8; 16]) -> Option<UnderlayValue> {
         self.underlay.get(k).copied()
     }
-    fn fw_rules_upsert(&mut self, k: FwRuleKey, v: FwRule) -> anyhow::Result<()> {
-        fw_slot_in_scan_window(&k)?;
-        self.fw_rules.insert(k, v);
-        Ok(())
-    }
-    fn fw_rules_remove(&mut self, k: &FwRuleKey) -> anyhow::Result<()> {
-        self.fw_rules.remove(k);
-        Ok(())
-    }
-    fn fw_meta_upsert(&mut self, i: u32, v: FwMeta) -> anyhow::Result<()> {
-        self.fw_meta.insert(i, v);
-        Ok(())
-    }
-    fn fw_rules6_upsert(&mut self, k: FwRuleKey, v: FwRule6) -> anyhow::Result<()> {
-        fw_slot_in_scan_window(&k)?;
-        self.fw_rules6.insert(k, v);
-        Ok(())
-    }
-    fn fw_rules6_remove(&mut self, k: &FwRuleKey) -> anyhow::Result<()> {
-        self.fw_rules6.remove(k);
-        Ok(())
-    }
-    fn fw_meta6_upsert(&mut self, i: u32, v: FwMeta) -> anyhow::Result<()> {
-        self.fw_meta6.insert(i, v);
-        Ok(())
-    }
     fn fw_scope_create(&mut self, scope: &crate::fwclass::Scope) -> anyhow::Result<()> {
         self.fw_scope_creates += 1;
         self.fw_scopes.insert(scope.id, scope.clone());
@@ -317,33 +272,5 @@ impl MapWriter for MemMapWriter {
     ) -> anyhow::Result<()> {
         self.ct_iface_flushes.push((vni, guest_ip, guest_ip6));
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use flowplane_common::FW_MAX_RULES;
-
-    // The datapath scans only slots 0..FW_MAX_RULES, so a rule written past the window would be
-    // accepted by the real hash map yet never evaluated. The fake refuses it so a caller that
-    // overflows fails a test instead of silently installing an inert rule.
-    #[test]
-    fn fw_slot_past_scan_window_is_refused() {
-        let mut w = MemMapWriter::default();
-        let last = FwRuleKey {
-            ifindex: 1,
-            idx: FW_MAX_RULES - 1,
-        };
-        let past = FwRuleKey {
-            ifindex: 1,
-            idx: FW_MAX_RULES,
-        };
-        w.fw_rules_upsert(last, FwRule::default()).unwrap();
-        w.fw_rules6_upsert(last, FwRule6::default()).unwrap();
-        assert!(w.fw_rules_upsert(past, FwRule::default()).is_err());
-        assert!(w.fw_rules6_upsert(past, FwRule6::default()).is_err());
-        assert!(!w.fw_rules.contains_key(&past));
-        assert!(!w.fw_rules6.contains_key(&past));
     }
 }

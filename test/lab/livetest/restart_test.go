@@ -184,15 +184,7 @@ func TestRestartContinuity(t *testing.T) {
 // busting the deny-by-default firewall for a raw (non-compiled) gRPC endpoint.
 func allowAny(t *testing.T, ctx context.Context, container, id string) {
 	t.Helper()
-	for _, egress := range []bool{true, false} {
-		dir := "in"
-		if egress {
-			dir = "eg"
-		}
-		body := fmt.Sprintf(`{"interface_id":%q,"rule_id":%q,"proto":0,"allow":true,"egress":%t}`, id, dir, egress)
-		out, err := dataplaneGRPC(t, ctx, container, "AddFwRule", body)
-		require.NoError(t, err, "AddFwRule %s-allow on %s: %s", dir, id, out)
-	}
+	setFirewall(t, ctx, container, id, fwAllowAny("eg", true), fwAllowAny("in", false))
 }
 
 // linkProgID returns the prog-id bound to the pinned bpf link at `pin` on the node's bpffs, read with

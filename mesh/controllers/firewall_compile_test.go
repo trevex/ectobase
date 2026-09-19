@@ -304,7 +304,7 @@ func TestCompileFirewall_DefaultPolicy(t *testing.T) {
 func nRules(n int, v6 bool, action string) []netv1.FirewallPolicyRule {
 	out := make([]netv1.FirewallPolicyRule, 0, n)
 	for i := 0; i < n; i++ {
-		cidr := fmt.Sprintf("10.%d.0.0/16", i)
+		cidr := fmt.Sprintf("10.%d.%d.0/24", i/256, i%256)
 		if v6 {
 			cidr = fmt.Sprintf("2001:db8:%x::/48", i)
 		}
@@ -322,28 +322,30 @@ func budgetError(t *testing.T, err error) *FirewallCompileError {
 	return fe
 }
 
-// The old datapath holds 16 rules per interface PER FAMILY, ingress and egress sharing the budget.
-// The compiler enforces it (the dataplane refusing is too late: the agent can only log it).
+// A NIC's firewall holds at most FirewallRuleBudget rules PER FAMILY, ingress and egress sharing
+// it. The compiler enforces it (the dataplane refusing is too late: the agent can only log it).
 func TestCompileFirewall_RuleBudget(t *testing.T) {
+	const b = FirewallRuleBudget
 	closed := posture(netv1.VPCPolicyDeny)
 	t.Run("exactly at the cap in both families", func(t *testing.T) {
 		_, err := CompileFirewall(webLabels, []netv1.FirewallPolicy{
-			fwPolicy("p", nil, append(nRules(8, false, "Allow"), nRules(16, true, "Allow")...), nRules(8, false, "Deny")),
+			fwPolicy("p", nil, append(nRules(b/2, false, "Allow"), nRules(b, true, "Allow")...), nRules(b/2, false, "Deny")),
 		}, closed)
 		if err != nil {
-			t.Fatalf("16 v4 + 16 v6 must fit: %v", err)
+			t.Fatalf("%d v4 + %d v6 must fit: %v", b, b, err)
 		}
 	})
 	t.Run("one over, split across directions", func(t *testing.T) {
 		_, err := CompileFirewall(webLabels, []netv1.FirewallPolicy{
-			fwPolicy("p", nil, nRules(9, false, "Allow"), nRules(8, false, "Allow")),
+			fwPolicy("p", nil, nRules(b/2+1, false, "Allow"), nRules(b/2, false, "Allow")),
 		}, closed)
-		if fe := budgetError(t, err); !strings.Contains(fe.Message, "IPv4") || !strings.Contains(fe.Message, "17") {
+		if fe := budgetError(t, err); !strings.Contains(fe.Message, "IPv4") || !strings.Contains(fe.Message, fmt.Sprint(b+1)) {
 			t.Fatalf("message must name the family and count: %q", fe.Message)
 		}
 	})
 	t.Run("shadowed rules cost nothing", func(t *testing.T) {
-		rules := append([]netv1.FirewallPolicyRule{deny("10.0.0.0/8")}, nRules(20, false, "Allow")...) // all 20 inside 10/8
+		// More rules than the budget, all inside 10/8 and so all shadowed by the deny.
+		rules := append([]netv1.FirewallPolicyRule{deny("10.0.0.0/8")}, nRules(b+4, false, "Allow")...)
 		fw, err := CompileFirewall(webLabels, []netv1.FirewallPolicy{fwPolicy("p", nil, rules, nil)}, closed)
 		if err != nil {
 			t.Fatalf("covered rules must not count against the budget: %v", err)
@@ -351,9 +353,9 @@ func TestCompileFirewall_RuleBudget(t *testing.T) {
 		assertRules(t, "ingress", fw.Ingress, "Deny 10.0.0.0/8")
 	})
 	t.Run("implicit allow-all counts", func(t *testing.T) {
-		// 15 v4 user rules + Allow's implicit v4 allow-all in BOTH directions = 17.
+		// b-1 v4 user rules + Allow's implicit v4 allow-all in BOTH directions = b+1.
 		_, err := CompileFirewall(webLabels, []netv1.FirewallPolicy{
-			fwPolicy("p", nil, nRules(15, false, "Deny"), nil),
+			fwPolicy("p", nil, nRules(b-1, false, "Deny"), nil),
 		}, posture(netv1.VPCPolicyAllow))
 		budgetError(t, err)
 	})

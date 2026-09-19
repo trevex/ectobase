@@ -242,7 +242,7 @@ func isV6CIDR(s string) bool { return strings.Contains(s, ":") }
 func fwRules(n int, v6 bool) []compiledv1.CompiledFwRule {
 	out := make([]compiledv1.CompiledFwRule, 0, n)
 	for i := 0; i < n; i++ {
-		cidr := fmt.Sprintf("10.%d.0.0/16", i)
+		cidr := fmt.Sprintf("10.%d.%d.0/24", i/256, i%256)
 		if v6 {
 			cidr = fmt.Sprintf("2001:db8:%x::/48", i)
 		}
@@ -251,24 +251,25 @@ func fwRules(n int, v6 bool) []compiledv1.CompiledFwRule {
 	return out
 }
 
-// The dataplane caps an interface at FW_MAX_RULES (16) rules PER ADDRESS FAMILY, ingress and egress
-// sharing the budget; a replace over the cap is refused whole with ResourceExhausted and the prior set
-// stays. The agent must surface that (not swallow it) and still program every other interface.
+// The dataplane refuses a rule set that compiles to a scope over its size limits (modelled here:
+// more than FW_SCOPE_MAX_CLASSES distinct peers in one direction of one family) whole, with
+// ResourceExhausted, and the prior set stays. The agent must surface that (not swallow it) and still
+// program every other interface.
 func TestReconcileFirewall_OverflowSurfacesAndSparesOtherInterfaces(t *testing.T) {
 	over := &compiledv1.CompiledNIC{
 		ObjectMeta: metav1.ObjectMeta{Name: "over", Namespace: "default"},
 		Spec: compiledv1.CompiledNICSpec{
 			VNI: 120, OverlayIPs: []string{"10.0.20.11"},
-			// 9 ingress + 8 egress v4 = 17 in ONE family: over the shared per-family budget.
-			Firewall: compiledv1.CompiledFirewall{Ingress: fwRules(9, false), Egress: fwRules(8, false)},
+			// One peer too many for the v4 ingress scope.
+			Firewall: compiledv1.CompiledFirewall{Ingress: fwRules(fwScopeMaxClasses+1, false)},
 		},
 	}
 	full := &compiledv1.CompiledNIC{
 		ObjectMeta: metav1.ObjectMeta{Name: "full", Namespace: "default"},
 		Spec: compiledv1.CompiledNICSpec{
 			VNI: 120, OverlayIPs: []string{"10.0.20.12"},
-			// 16 v4 + 16 v6 = 32 rules, but each family is exactly at its cap: accepted.
-			Firewall: compiledv1.CompiledFirewall{Ingress: append(fwRules(16, false), fwRules(16, true)...)},
+			// Both families' ingress scopes exactly at the limit: accepted.
+			Firewall: compiledv1.CompiledFirewall{Ingress: append(fwRules(fwScopeMaxClasses, false), fwRules(fwScopeMaxClasses, true)...)},
 		},
 	}
 	cl := fake.NewClientBuilder().WithScheme(fwScheme(t)).WithObjects(over, full).Build()
@@ -281,7 +282,7 @@ func TestReconcileFirewall_OverflowSurfacesAndSparesOtherInterfaces(t *testing.T
 
 	err := r.ReconcileFirewall(context.Background())
 	if err == nil {
-		t.Fatal("17 rules in one family must be refused by the dataplane, got nil error")
+		t.Fatal("a scope over its class limit must be refused by the dataplane, got nil error")
 	}
 	if got := status.Code(err); got != codes.ResourceExhausted {
 		t.Fatalf("overflow must surface as ResourceExhausted, got %v (%v)", got, err)
@@ -292,8 +293,8 @@ func TestReconcileFirewall_OverflowSurfacesAndSparesOtherInterfaces(t *testing.T
 	if _, ok := dp.fwReplace["ifOver"]; ok {
 		t.Fatalf("refused replace must leave the prior (here: no) rule set, got %+v", dp.fwReplace["ifOver"])
 	}
-	if got := len(dp.fwReplace["ifFull"]); got != 32 {
-		t.Fatalf("interface at exactly the per-family cap must be programmed with all 32 rules, got %d", got)
+	if got := len(dp.fwReplace["ifFull"]); got != 2*fwScopeMaxClasses {
+		t.Fatalf("interface at exactly the limit must be programmed with all %d rules, got %d", 2*fwScopeMaxClasses, got)
 	}
 }
 

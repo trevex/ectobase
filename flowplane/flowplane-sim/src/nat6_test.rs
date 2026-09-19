@@ -11,8 +11,8 @@
 
 use etherparse::PacketBuilder;
 use flowplane_common::{
-    CtEntry6, CtKey6, FwMeta, FwRule6, IfaceValue, Local, NatKey6, NatValue6, NeighborNat6Entry,
-    PortMeta, RouteValue, CT_F_SRC_NAT, CT_REWRITE_DST, FW_ACTION_ACCEPT, FW_DIR_EGRESS,
+    CtEntry6, CtKey6, FwRule6, IfaceValue, Local, NatKey6, NatValue6, NeighborNat6Entry, PortMeta,
+    RouteValue, CT_F_SRC_NAT, CT_REWRITE_DST, FW_ACTION_ACCEPT, FW_DIR_EGRESS,
 };
 use flowplane_core::encap::{TunnelEncap, ETH_LEN};
 use flowplane_core::pkt::Action;
@@ -121,16 +121,7 @@ fn node() -> SimNode {
     node.maps.local = Some(local());
     node.src_ifindex = SRC_IFINDEX;
     node.maps.add_route6(VNI, EXT_V6, external_route6());
-    node.maps.fw_meta6.insert(
-        SRC_IFINDEX,
-        FwMeta {
-            ingress_count: 0,
-            egress_count: 1,
-        },
-    );
-    node.maps
-        .fw_rules6
-        .insert((SRC_IFINDEX, 0), egress_allow_rule());
+    node.maps.add_fw_rule6(SRC_IFINDEX, egress_allow_rule());
     node
 }
 

@@ -5,7 +5,7 @@
 
 use etherparse::PacketBuilder;
 use flowplane_common::{
-    FwMeta, FwRule, Local, PortMeta, UnderlayValue, FW_ACTION_ACCEPT, FW_DIR_INGRESS,
+    FwRule, Local, PortMeta, UnderlayValue, FW_ACTION_ACCEPT, FW_DIR_INGRESS,
     UNDERLAY_LOCAL_DELIVER,
 };
 use flowplane_core::conntrack::ct_key;
@@ -37,15 +37,8 @@ fn inner_eth_frame(dport: u16) -> Vec<u8> {
 
 /// Install an ingress ALLOW rule on `tap` for TCP -> GUEST_IP:port.
 fn allow_tcp(node: &mut SimNode, port: u16) {
-    node.maps.fw_meta.insert(
+    node.maps.add_fw_rule(
         TAP,
-        FwMeta {
-            ingress_count: 1,
-            egress_count: 0,
-        },
-    );
-    node.maps.fw_rules.insert(
-        (TAP, 0),
         FwRule {
             src_ip: [0; 4],
             src_mask: [0; 4],
