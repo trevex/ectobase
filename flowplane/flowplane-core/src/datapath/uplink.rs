@@ -12,7 +12,7 @@ use crate::conntrack::{
 };
 use crate::decap::{decap_and_rewrite, edge_local_deliver, ETH_P_IP, ETH_P_IPV6};
 use crate::encap::{reforward, TunnelEncap, ETH_LEN};
-use crate::firewall::{fw_eval_dir, fw_eval_dir6};
+use crate::firewall::{fw_classify, fw_classify6};
 use crate::lb::{
     lb_select_forward, lb_select_forward_icmp_error, lb_select_forward_icmp_error_v6,
     lb_select_forward_v6_outlined,
@@ -191,7 +191,7 @@ fn uplink_ingress_firewall_drop<P: Pkt, M: Maps>(
     match ct_key(pkt, inner_off, vni) {
         Some(key) => {
             maps.conntrack_get(&key).is_none()
-                && fw_eval_dir(pkt, maps, inner_off, tap, FW_DIR_INGRESS) == FW_ACTION_DROP
+                && fw_classify(pkt, maps, inner_off, tap, FW_DIR_INGRESS) == FW_ACTION_DROP
         }
         // Unreachable today (the caller already read the inner dst @ +16 to resolve the delivery
         // target, which needs strictly more bytes than `ct_key` does) but stated fail-closed so the
@@ -430,7 +430,7 @@ fn uplink_ingress_firewall_drop6<P: Pkt, M: Maps>(
     match ct_key6(pkt, inner_off, vni) {
         Some(key) => {
             maps.conntrack6_get(&key).is_none()
-                && fw_eval_dir6(pkt, maps, inner_off, tap, FW_DIR_INGRESS) == FW_ACTION_DROP
+                && fw_classify6(pkt, maps, inner_off, tap, FW_DIR_INGRESS) == FW_ACTION_DROP
         }
         // Fail closed — see [`uplink_ingress_firewall_drop`]'s None arm.
         None => true,

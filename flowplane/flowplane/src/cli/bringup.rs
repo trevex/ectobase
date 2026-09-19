@@ -601,6 +601,10 @@ pub async fn run(args: BringupArgs) -> anyhow::Result<()> {
     let mut fw_slots: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
     let mut fw_counts: std::collections::HashMap<u32, (u32, u32)> =
         std::collections::HashMap::new();
+    // ifindex -> its rules in order, compiled into classifier scopes below (the datapath evaluates
+    // the classifier; the FW_RULES/FW_META slots are the legacy mirror).
+    let mut fw_lists: std::collections::HashMap<u32, Vec<flowplane_common::FwRule>> =
+        std::collections::HashMap::new();
     let parse_cidr = |s: &str| -> anyhow::Result<([u8; 4], [u8; 4])> {
         let (ip_s, len_s) = s
             .split_once('/')
@@ -657,28 +661,30 @@ pub async fn run(args: BringupArgs) -> anyhow::Result<()> {
             flowplane_common::FW_MAX_RULES,
             f[0]
         );
+        let rule = flowplane_common::FwRule {
+            src_ip,
+            src_mask,
+            dst_ip,
+            dst_mask,
+            src_port_min: 0,
+            src_port_max: 65535,
+            dst_port_min,
+            dst_port_max,
+            icmp_type: 0xffff,
+            icmp_code: 0xffff,
+            proto,
+            action,
+            direction,
+            enabled: 1,
+        };
         fw_rules_map.upsert(
             flowplane_common::FwRuleKey {
                 ifindex,
                 idx: *slot,
             },
-            flowplane_common::FwRule {
-                src_ip,
-                src_mask,
-                dst_ip,
-                dst_mask,
-                src_port_min: 0,
-                src_port_max: 65535,
-                dst_port_min,
-                dst_port_max,
-                icmp_type: 0xffff,
-                icmp_code: 0xffff,
-                proto,
-                action,
-                direction,
-                enabled: 1,
-            },
+            rule,
         )?;
+        fw_lists.entry(ifindex).or_default().push(rule);
         *slot += 1;
         let c = fw_counts.entry(ifindex).or_insert((0, 0));
         if direction == flowplane_common::FW_DIR_EGRESS {
@@ -695,6 +701,32 @@ pub async fn run(args: BringupArgs) -> anyhow::Result<()> {
                 egress_count: *egress_count,
             },
         )?;
+    }
+    // The classifier the datapath evaluates: compile each interface's rules into its ingress and
+    // egress scopes and bind them, as the dataplane does for ReplaceInterfaceFirewall.
+    if !fw_lists.is_empty() {
+        let mut scopes = maps::FwScopes::open(&mut ebpf)?;
+        let mut binds = maps::FwBindMap::open(&mut ebpf)?;
+        for (ifindex, rules) in &fw_lists {
+            let mut bind = flowplane_common::FwBind::default();
+            for dir in [
+                flowplane_common::FW_DIR_INGRESS,
+                flowplane_common::FW_DIR_EGRESS,
+            ] {
+                let compiled =
+                    flowplane_control::fwclass::compile_scope(dir, rules.iter(), [].iter())
+                        .map_err(|e| anyhow::anyhow!("--fw-rule for ifindex {ifindex}: {e}"))?;
+                if let Some(scope) = compiled {
+                    scopes.create(&scope)?;
+                    if dir == flowplane_common::FW_DIR_EGRESS {
+                        bind.egress_scope = scope.id;
+                    } else {
+                        bind.ingress_scope = scope.id;
+                    }
+                }
+            }
+            binds.upsert(*ifindex, bind)?;
+        }
     }
 
     // --underlay-marker: "<ipv6>:<vni>" — program a VNI-only marker into UNDERLAY so that

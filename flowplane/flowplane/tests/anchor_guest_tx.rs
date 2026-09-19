@@ -42,8 +42,7 @@ use aya::maps::lpm_trie::{Key, LpmTrie};
 use aya::maps::{Array, HashMap as AyaHashMap};
 use aya::programs::SchedClassifier;
 use flowplane_common::{
-    FwMeta, FwRule, FwRuleKey, Local, PortMeta, RouteLpmData, RouteValue, FW_ACTION_ACCEPT,
-    FW_DIR_EGRESS,
+    FwMeta, FwRule, Local, PortMeta, RouteLpmData, RouteValue, FW_ACTION_ACCEPT, FW_DIR_EGRESS,
 };
 use flowplane_core::pkt::Action;
 use flowplane_sim::SimNode;
@@ -116,6 +115,55 @@ fn egress_allow_rule() -> FwRule {
         direction: FW_DIR_EGRESS,
         enabled: 1,
     }
+}
+
+/// Program the loaded object's firewall classifier for `ifindex` the way the dataplane does: compile
+/// the interface's rules into per-direction scopes, build each scope's tries, insert them into the
+/// outer maps, then bind the interface (`FW_BIND`).
+fn seed_classifier(ebpf: &mut aya::Ebpf, ifindex: u32, rules: &[FwRule]) {
+    use aya::maps::{lpm_trie::Key, of_maps::HashOfMaps, LpmTrie, MapData};
+    use flowplane_common::{FwBind, FwPolKey, FW_DIR_EGRESS, FW_DIR_INGRESS};
+    use flowplane_control::fwclass::compile_scope;
+
+    fn trie<K: aya::Pod>(
+        entries: impl ExactSizeIterator<Item = (u32, K, u32)>,
+    ) -> LpmTrie<MapData, K, u32> {
+        let mut t = LpmTrie::<MapData, K, u32>::create(entries.len().max(1) as u32, 1).unwrap();
+        for (plen, k, v) in entries {
+            t.insert(&Key::new(plen, k), v, 0).unwrap();
+        }
+        t
+    }
+    let mut bind = FwBind::default();
+    for dir in [FW_DIR_INGRESS, FW_DIR_EGRESS] {
+        let Some(scope) = compile_scope(dir, rules.iter(), [].iter()).unwrap() else {
+            continue;
+        };
+        let c4 = trie(scope.v4.classes.iter().map(|&(a, l, c)| (l as u32, a, c)));
+        let c6 = trie(scope.v6.classes.iter().map(|&(a, l, c)| (l as u32, a, c)));
+        let p4 = trie(scope.v4.policy.iter().copied());
+        let p6 = trie(scope.v6.policy.iter().copied());
+        let mut class4: HashOfMaps<_, u64, LpmTrie<MapData, [u8; 4], u32>> =
+            HashOfMaps::try_from(ebpf.map_mut("FW_CLASS").unwrap()).unwrap();
+        class4.insert(scope.id, &c4, 0).unwrap();
+        let mut class6: HashOfMaps<_, u64, LpmTrie<MapData, [u8; 16], u32>> =
+            HashOfMaps::try_from(ebpf.map_mut("FW_CLASS6").unwrap()).unwrap();
+        class6.insert(scope.id, &c6, 0).unwrap();
+        let mut pol4: HashOfMaps<_, u64, LpmTrie<MapData, FwPolKey, u32>> =
+            HashOfMaps::try_from(ebpf.map_mut("FW_POLICY").unwrap()).unwrap();
+        pol4.insert(scope.id, &p4, 0).unwrap();
+        let mut pol6: HashOfMaps<_, u64, LpmTrie<MapData, FwPolKey, u32>> =
+            HashOfMaps::try_from(ebpf.map_mut("FW_POLICY6").unwrap()).unwrap();
+        pol6.insert(scope.id, &p6, 0).unwrap();
+        if dir == FW_DIR_EGRESS {
+            bind.egress_scope = scope.id;
+        } else {
+            bind.ingress_scope = scope.id;
+        }
+    }
+    let mut fw_bind: AyaHashMap<_, u32, FwBind> =
+        AyaHashMap::try_from(ebpf.map_mut("FW_BIND").expect("FW_BIND map")).unwrap();
+    fw_bind.insert(ifindex, bind, 0).expect("insert FW_BIND");
 }
 
 /// A guest Ethernet frame `[Eth][IPv4][UDP]` from GUEST_IP:SPORT -> DEST_IP:DPORT.
@@ -291,34 +339,7 @@ fn guest_tx_encap_redirect_inner_unchanged_matches_native_sim() {
             Array::try_from(ebpf.map_mut("LOCAL").expect("LOCAL map")).unwrap();
         local_map.set(0, local(), 0).expect("write LOCAL[0]");
     }
-    {
-        let mut fw_meta: AyaHashMap<_, u32, FwMeta> =
-            AyaHashMap::try_from(ebpf.map_mut("FW_META").expect("FW_META map")).unwrap();
-        fw_meta
-            .insert(
-                IFINDEX,
-                FwMeta {
-                    ingress_count: 0,
-                    egress_count: 1,
-                },
-                0,
-            )
-            .expect("insert FW_META");
-    }
-    {
-        let mut fw_rules: AyaHashMap<_, FwRuleKey, FwRule> =
-            AyaHashMap::try_from(ebpf.map_mut("FW_RULES").expect("FW_RULES map")).unwrap();
-        fw_rules
-            .insert(
-                FwRuleKey {
-                    ifindex: IFINDEX,
-                    idx: 0,
-                },
-                egress_allow_rule(),
-                0,
-            )
-            .expect("insert FW_RULES");
-    }
+    seed_classifier(&mut ebpf, IFINDEX, &[egress_allow_rule()]);
 
     // 3. Load (verify) the tc_guest_tx classifier and get its kernel fd.
     let prog: &mut SchedClassifier = ebpf

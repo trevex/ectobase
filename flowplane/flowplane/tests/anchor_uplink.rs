@@ -76,13 +76,14 @@ fn inner_eth_frame() -> Vec<u8> {
     out
 }
 
-/// The single ingress ALLOW rule the host installs on `TAP` (TCP -> GUEST_IP:DPORT).
+/// The single ingress ALLOW rule the host installs on `TAP` (TCP to DPORT from any peer). Peer-only,
+/// like every rule the control plane programs: the destination is the interface itself.
 fn allow_rule() -> FwRule {
     FwRule {
         src_ip: [0; 4],
         src_mask: [0; 4],
-        dst_ip: GUEST_IP,
-        dst_mask: [255, 255, 255, 255],
+        dst_ip: [0; 4],
+        dst_mask: [0; 4],
         src_port_min: 0,
         src_port_max: 65535,
         dst_port_min: DPORT,

@@ -45,6 +45,34 @@ impl Maps for GlobalMaps {
         unsafe { crate::maps::FW_RULES6.get(key).copied() }
     }
     #[inline(always)]
+    fn fw_bind(&self, ifindex: u32) -> Option<flowplane_common::FwBind> {
+        unsafe { crate::maps::FW_BIND.get(&ifindex).copied() }
+    }
+    // The classifier lookups fuse the outer (scope) and inner (trie) lookups in one call
+    // (`HashOfMaps::get_value`): fewer instructions between the two helpers, less verifier state.
+    #[inline(always)]
+    fn fw_class4(&self, scope: u64, addr: &[u8; 4]) -> Option<u32> {
+        let key = aya_ebpf::btf_maps::lpm_trie::Key::new(32, *addr);
+        unsafe { crate::maps::FW_CLASS.get_value(&scope, &key).copied() }
+    }
+    #[inline(always)]
+    fn fw_class6(&self, scope: u64, addr: &[u8; 16]) -> Option<u32> {
+        let key = aya_ebpf::btf_maps::lpm_trie::Key::new(128, *addr);
+        unsafe { crate::maps::FW_CLASS6.get_value(&scope, &key).copied() }
+    }
+    #[inline(always)]
+    fn fw_policy4(&self, scope: u64, key: &flowplane_common::FwPolKey) -> Option<u32> {
+        let key =
+            aya_ebpf::btf_maps::lpm_trie::Key::new(flowplane_common::FW_POL_PREFIX_FULL, *key);
+        unsafe { crate::maps::FW_POLICY.get_value(&scope, &key).copied() }
+    }
+    #[inline(always)]
+    fn fw_policy6(&self, scope: u64, key: &flowplane_common::FwPolKey) -> Option<u32> {
+        let key =
+            aya_ebpf::btf_maps::lpm_trie::Key::new(flowplane_common::FW_POL_PREFIX_FULL, *key);
+        unsafe { crate::maps::FW_POLICY6.get_value(&scope, &key).copied() }
+    }
+    #[inline(always)]
     fn conntrack6_get(&self, key: &flowplane_common::CtKey6) -> Option<CtEntry> {
         unsafe { crate::maps::CONNTRACK6.get(key).copied() }
     }

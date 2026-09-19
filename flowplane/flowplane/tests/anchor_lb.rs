@@ -114,14 +114,15 @@ fn inner_eth_frame() -> Vec<u8> {
     out
 }
 
-/// The single ingress ALLOW rule the backend installs on `TAP`, covering the LB address dst (DSR: the
-/// inner dst stays the LB_IP_CONST, so the policy MUST cover `IP:443`, not the backend's own IP).
+/// The single ingress ALLOW rule the backend installs on `TAP`: TCP to DPORT from any peer. An ingress
+/// rule matches its peer (source) and port, so it admits the DSR-delivered packet although the inner
+/// destination stays the LB address rather than the backend's own IP.
 fn allow_floating_ip_rule() -> FwRule {
     FwRule {
         src_ip: [0; 4],
         src_mask: [0; 4],
-        dst_ip: OVERLAY_LB_IP,
-        dst_mask: [255, 255, 255, 255],
+        dst_ip: [0; 4],
+        dst_mask: [0; 4],
         src_port_min: 0,
         src_port_max: 65535,
         dst_port_min: DPORT,

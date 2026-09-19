@@ -34,7 +34,7 @@ pub fn forward_decision_v4(
     let p = data as *const u8;
     // Conntrack + egress firewall. Established flows: apply translation + refresh. New flows:
     // enforce the SOURCE interface's EGRESS firewall. The firewall is DENY-BY-DEFAULT: with no
-    // FW_META entry, or no egress rule that matches, `fw_eval_dir` returns DROP (see its impl).
+    // FW_META entry, or no egress rule that matches, `fw_classify` returns DROP (see its impl).
     // So an egress-INITIATED flow needs an explicit egress-allow FirewallPolicy; an ingress-
     // ESTABLISHED flow is exempt because its reverse conntrack entry (pre-seeded by ct_*_default)
     // makes this a CT hit, skipping the firewall entirely.
@@ -63,7 +63,7 @@ pub fn forward_decision_v4(
             }
             None => {
                 was_new = true;
-                if flowplane_core::firewall::fw_eval_dir(
+                if flowplane_core::firewall::fw_classify(
                     &crate::coreimpl::RawPkt::new(data, data_end),
                     &crate::coreimpl::GlobalMaps,
                     ETH_LEN,
@@ -153,7 +153,7 @@ pub fn forward_decision_v4(
             // Destination ingress firewall on NEW flows (the cross-node uplink_rx path is skipped
             // for same-node delivery, so enforce the dest's ingress policy here). Deny-by-default.
             if was_new
-                && flowplane_core::firewall::fw_eval_dir(
+                && flowplane_core::firewall::fw_classify(
                     &crate::coreimpl::RawPkt::new(data, data_end),
                     &crate::coreimpl::GlobalMaps,
                     ETH_LEN,
@@ -232,7 +232,7 @@ fn egress_ct_create_v6(data: usize, data_end: usize, vni: u32) {
 }
 
 /// The v6 firewall for one direction of one interface: `true` iff the packet must be DROPPED
-/// (deny-by-default: no matching rule → `fw_eval_dir6` returns DROP). Used for the SOURCE egress
+/// (deny-by-default: no matching rule → `fw_classify6` returns DROP). Used for the SOURCE egress
 /// check of a new flow (stage 1b of `forward_decision_v6`) and for the DESTINATION ingress check on
 /// the same-node local fast path, where the cross-node `uplink_rx` ingress path is skipped —
 /// mirroring the v4 `forward_decision_v4` Local arm. Out-of-line (`#[inline(never)]`) with SCALAR
@@ -241,7 +241,7 @@ fn egress_ct_create_v6(data: usize, data_end: usize, vni: u32) {
 /// frames on the combined 512B BPF stack.
 #[inline(never)]
 fn fw_drop_v6(data: usize, data_end: usize, ifindex: u32, dir: u8) -> bool {
-    flowplane_core::firewall::fw_eval_dir6(
+    flowplane_core::firewall::fw_classify6(
         &crate::coreimpl::RawPkt::new(data, data_end),
         &crate::coreimpl::GlobalMaps,
         ETH_LEN,

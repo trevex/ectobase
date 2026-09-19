@@ -57,8 +57,10 @@ fn allow_tcp6(node: &mut SimNode, tap: u32, port: u16) {
         FwRule6 {
             src_ip: [0; 16],
             src_mask: [0; 16],
-            dst_ip: GUEST_IP6,
-            dst_mask: [0xff; 16],
+            // Peer-only, like every rule the control plane programs: an ingress rule matches its
+            // source; the destination is the interface itself.
+            dst_ip: [0; 16],
+            dst_mask: [0; 16],
             src_port_min: 0,
             src_port_max: 65535,
             dst_port_min: port,
@@ -299,28 +301,9 @@ fn v6_lb_local_backend_delivered_no_conntrack6_created() {
         },
     );
     install_lb6(&mut node, HOSTB_UL);
+    // The ingress rule matches the peer (source) and port, so it admits the LB/DSR-delivered packet
+    // although its inner destination stays the LB address, not the guest's.
     allow_tcp6(&mut node, TAP, 443);
-    // The firewall matches on GUEST_IP6 above; for the LB/DSR path the inner dst stays the LB_IP_CONST, so
-    // widen the allow rule to the LB address instead.
-    node.maps.fw_rules6.insert(
-        (TAP, 0),
-        FwRule6 {
-            src_ip: [0; 16],
-            src_mask: [0; 16],
-            dst_ip: OVERLAY_LB_IP6,
-            dst_mask: [0xff; 16],
-            src_port_min: 0,
-            src_port_max: 65535,
-            dst_port_min: 443,
-            dst_port_max: 443,
-            icmp_type: 0xffff,
-            icmp_code: 0xffff,
-            proto: 6,
-            action: FW_ACTION_ACCEPT,
-            direction: FW_DIR_INGRESS,
-            enabled: 1,
-        },
-    );
 
     let inner = eth_ipv6_tcp(GUEST_A6, OVERLAY_LB_IP6, 443);
     let out = node.uplink_v6(&inner, VNI, &local_for(HOSTB_UL, 9));

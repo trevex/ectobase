@@ -11,7 +11,7 @@ use crate::conntrack::{ct_apply, ct_create_default, ct_key, ct_key6, ct_refresh,
 use crate::decap::GW_MAC;
 use crate::egress::{deliver, egress_fw_ct6, route4, route_decision6, Deliver, EgressFwCt6};
 use crate::encap::{tunnel_encap, TunnelEncap, ETH_LEN};
-use crate::firewall::fw_eval_dir;
+use crate::firewall::fw_classify;
 use crate::maps::Maps;
 use crate::nat::{snat_egress, snat_egress6, SnatOutcome};
 use crate::nat64::{nat64_egress_parse, nat64_egress_write};
@@ -81,7 +81,7 @@ pub fn process_guest_tx<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &GuestT
             was_new = true;
             // Egress firewall keyed on the SOURCE interface. The sim keys FW_META/FW_RULES on a
             // synthetic ifindex == meta.vni's port; the fixture installs it under `src_ifindex`.
-            if fw_eval_dir(&*pkt, &*maps, ip_off, in_.src_ifindex, FW_DIR_EGRESS) == FW_ACTION_DROP
+            if fw_classify(&*pkt, &*maps, ip_off, in_.src_ifindex, FW_DIR_EGRESS) == FW_ACTION_DROP
             {
                 return GuestTxOut {
                     action: Action::Drop,
@@ -229,7 +229,7 @@ pub fn process_guest_tx<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &GuestT
         } => {
             // Destination ingress firewall on NEW flows (same-node delivery).
             if was_new
-                && fw_eval_dir(&*pkt, &*maps, ip_off, tap_ifindex, FW_DIR_INGRESS) == FW_ACTION_DROP
+                && fw_classify(&*pkt, &*maps, ip_off, tap_ifindex, FW_DIR_INGRESS) == FW_ACTION_DROP
             {
                 return GuestTxOut {
                     action: Action::Drop,
@@ -375,7 +375,7 @@ pub fn process_guest_tx_v6<P: Pkt, M: Maps>(
             // Stage 3: destination ingress firewall on NEW flows (same-node delivery). Deny-by-default.
             // v6 evaluator (fw_eval_dir6 / FW_META6) — mirrors the eBPF fw_drop_v6 (ingress).
             if was_new
-                && crate::firewall::fw_eval_dir6(&*pkt, &*maps, ip_off, tap_ifindex, FW_DIR_INGRESS)
+                && crate::firewall::fw_classify6(&*pkt, &*maps, ip_off, tap_ifindex, FW_DIR_INGRESS)
                     == FW_ACTION_DROP
             {
                 return GuestTxOut {

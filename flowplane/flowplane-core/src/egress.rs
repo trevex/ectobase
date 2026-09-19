@@ -12,7 +12,7 @@ use flowplane_common::{Local, PortMeta, RouteValue, FW_ACTION_DROP, FW_DIR_EGRES
 
 use crate::conntrack::{ct_create_default6, ct_key6, ct_refresh6};
 use crate::encap::{tunnel_encap, TunnelEncap, ETH_LEN};
-use crate::firewall::fw_eval_dir6;
+use crate::firewall::fw_classify6;
 use crate::maps::Maps;
 use crate::pkt::Pkt;
 
@@ -172,7 +172,7 @@ pub fn egress_fw_ct6<P: Pkt, M: Maps>(
         EgressCt6::Established => EgressFwCt6::Pass { was_new: false },
         EgressCt6::Unkeyable => EgressFwCt6::Drop,
         EgressCt6::Miss => {
-            if fw_eval_dir6(pkt, &*maps, ip_off, ifindex, FW_DIR_EGRESS) == FW_ACTION_DROP {
+            if fw_classify6(pkt, &*maps, ip_off, ifindex, FW_DIR_EGRESS) == FW_ACTION_DROP {
                 return EgressFwCt6::Drop;
             }
             ct_create_default6(pkt, maps, ip_off, vni, now);
