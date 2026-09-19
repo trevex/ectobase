@@ -164,6 +164,13 @@ thousands, and (b) make NAT/public route-bus records subscription-scoped with a 
 keyed map (`(nat_ip, port_block)` hashmap, not a 64-slot scanned array) — both are
 self-contained increments.
 
+**Found later (2026-09-19, firewall redesign increment B): same-node conntrack bypass — FIXED**
+(`fix(datapath): a flow the destination refuses must not ride conntrack`). Same-node delivery
+enforced the destination's ingress firewall only on a NEW flow, after the flow's conntrack entries
+(forward + pre-seeded reverse) had already been created; a refused flow's later packets were CT hits
+and were delivered, and the destination could reach the source along the reverse entry past both
+firewalls. v4 and v6, sim and eBPF. The refusal now removes the entries the flow created.
+
 ## 3. Control-plane resilience gaps (P1)
 
 1. ~~**NAT/public channel has no snapshot-prune.**~~ **FIXED** (`a334ef8`). The reflector
