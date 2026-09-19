@@ -78,6 +78,8 @@ mod peering_test;
 #[cfg(test)]
 mod reforward_test;
 #[cfg(test)]
+mod rng;
+#[cfg(test)]
 mod same_node_dest_fw_test;
 #[cfg(test)]
 mod vni_test;

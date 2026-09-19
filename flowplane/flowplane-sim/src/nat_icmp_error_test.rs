@@ -4,7 +4,7 @@
 //! identifies the flow is NOT in the outer header — it is the SOURCE port of the quoted packet the
 //! error carries. The plain NAT return demuxes on `(nat_ip, dport)` read from the OUTER header, and
 //! for an ICMP error those bytes are the "unused"/next-hop-MTU field, not a port. So the edge's
-//! `Maps::nat_owner` and the owner's reverse conntrack both computed a garbage port and the
+//! owner lookup and the owner's reverse conntrack would both key on a garbage port and the
 //! error was dropped — breaking PMTUD and every unreachable for all SNATed traffic.
 //!
 //! Relaying it correctly is RFC 5508 §3.2 ICMP translation: the flow is identified from the quoted

@@ -26,8 +26,8 @@ pub struct WanRxOut {
     pub dsr: Option<flowplane_common::DsrOpt>,
 }
 
-/// Edge WAN-LB address ingress, in place on `pkt`. Mirrors `ingress.rs::try_wan_rx`: dispatch on ethertype
-/// (offset 12) — 0x86DD → v6 core select; else v4 core select, falling back to mechanism #3
+/// Edge WAN-LB address ingress, in place on `pkt` — the eBPF `try_wan_rx` is thin glue calling this.
+/// Dispatch on ethertype (offset 12) — 0x86DD → v6 core select; else v4 core select, falling back to mechanism #3
 /// (neighbor-NAT relay, both families — [`Maps::nat_owner`]/[`Maps::nat_owner6`]) on an LB miss. On a
 /// LB address hit or a neighbor-NAT relay hit, emit the tunnel-key decision (no byte write — see
 /// [`TunnelEncap`]) → `Redirect(uplink_ifindex)`; else `Pass`. The WAN LB service space is `vni = 0`

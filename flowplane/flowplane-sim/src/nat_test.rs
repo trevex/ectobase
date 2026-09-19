@@ -969,10 +969,9 @@ fn neigh_encapped(dport: u16) -> Vec<u8> {
     frame
 }
 
-/// Mechanism #3 (uplink-internal neighbor-NAT relay, `ingress.rs`'s "Neighbor NAT" block 245-261):
-/// an inbound frame whose inner dst is a nat_ip this node does NOT own, but which IS registered in
-/// `NAT_OWNERS` pointing at another node, must be re-forwarded byte-unchanged toward the real
-/// owner — same vni, new remote.
+/// Mechanism #3 (uplink-internal neighbor-NAT relay): an inbound frame whose inner dst is a nat_ip
+/// this node does NOT own, but which IS registered in `NAT_OWNERS` pointing at another node, must
+/// be re-forwarded byte-unchanged toward the real owner — same vni, new remote.
 #[test]
 fn uplink_relays_to_neighbor_nat_owner_when_not_locally_claimed() {
     let dport = NEIGH_PORT_MIN + 5;
@@ -1004,10 +1003,9 @@ fn uplink_relays_to_neighbor_nat_owner_when_not_locally_claimed() {
 
 /// Mechanism #3 (WAN-edge neighbor-NAT relay, `try_wan_rx`): a plain WAN-arriving IPv4 return (no
 /// VNI on the wire) whose dst+port matches a `NAT_OWNERS` block must relay toward the owner WITH
-/// THE OWNER'S REAL VNI. Regression: an older `ingress.rs`'s `try_wan_rx` discarded the VNI
-/// `Maps::nat_owner` returns (`let (owner_ul, _vni) = ..`) — this core code carries it through;
-/// using the wrong vni would mean the owner's peer-independent reverse conntrack key
-/// `(vni,0,nat_ip,0,nat_port)` never matches on the owner's uplink.
+/// THE OWNER'S REAL VNI. The edge has no VNI of its own to relay with, and any VNI but the owner's
+/// would miss the owner's peer-independent reverse conntrack key `(vni,0,nat_ip,0,nat_port)` on the
+/// owner's uplink.
 #[test]
 fn wan_rx_relays_to_neighbor_nat_owner_with_the_real_owner_vni() {
     let dport = NEIGH_PORT_MIN + 5;

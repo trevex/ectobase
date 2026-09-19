@@ -272,8 +272,9 @@ impl SimNode {
     /// [`flowplane_core::datapath::process_uplink_v6`] (P2 Task 4c) — the same shared-core
     /// orchestrator `v6.rs::v6_uplink_rx` now delegates to. Mirrors `process_uplink_v6`:
     ///   1. `lb_select_forward_v6` → local backend (deliver to its tap) | remote (reforward, no
-    ///      decap) | None → mechanism #3 (NAT66 neighbor-NAT relay, `Maps::nat_owner6`) then
-    ///      mechanisms #1/#4 (`resolve_uplink_target6`);
+    ///      decap) | None → mechanism #3 (NAT66 neighbor-NAT relay,
+    ///      `flowplane_core::nat::neighbor_nat_owner6`) then mechanisms #1/#4
+    ///      (`resolve_uplink_target6`);
     ///   2. ingress firewall on the inner v6 5-tuple against the deliver tap (new-flow gate,
     ///      `CONNTRACK6`-backed);
     ///   3. conntrack6 create-on-miss, **skipped for LB** (DSR, no ct);

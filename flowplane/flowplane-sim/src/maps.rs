@@ -112,6 +112,27 @@ fn pol_key_bytes(k: &FwPolKey) -> [u8; 7] {
     [c[0], c[1], c[2], c[3], k.proto, k.port[0], k.port[1]]
 }
 
+/// The bytes a `NAT_OWNERS` trie compares for a key: `nat_ip` then big-endian port, in the same
+/// memory order as the kernel's `NatOwnerKey` (Task 5's eBPF lookup builds the identical key).
+fn owner_key_bytes4(k: &NatOwnerKey) -> [u8; 6] {
+    [
+        k.nat_ip[0],
+        k.nat_ip[1],
+        k.nat_ip[2],
+        k.nat_ip[3],
+        k.port[0],
+        k.port[1],
+    ]
+}
+
+/// IPv6 sibling of [`owner_key_bytes4`] (`NatOwnerKey6`).
+fn owner_key_bytes6(k: &NatOwnerKey6) -> [u8; 18] {
+    let mut b = [0u8; 18];
+    b[..16].copy_from_slice(&k.nat_ip6);
+    b[16..].copy_from_slice(&k.port);
+    b
+}
+
 /// Longest-prefix match over a sim policy trie for a full-length key → the entry's precedence.
 fn policy_lpm(entries: Option<&Vec<(u32, FwPolKey, u32)>>, key: &FwPolKey) -> Option<u32> {
     let want = pol_key_bytes(key);
@@ -210,13 +231,30 @@ impl MemMaps {
         self.maglev.insert(MaglevKey { table_id, slot }, backend);
     }
     /// Seed a neighbor-NAT block the way the dataplane stores it: its trie prefixes, from the
-    /// dataplane's own decomposition.
+    /// dataplane's own decomposition. Asserts the block does not overlap an already-seeded one on
+    /// the same nat_ip (any VNI) — the control plane refuses that, so a seed that needs it is testing
+    /// a state the dataplane can never reach.
     pub fn add_neighbor_nat(&mut self, b: NeighborNatEntry) {
+        assert!(
+            !self.nat_owners4.iter().any(|(_, k, o)| k.nat_ip == b.nat_ip
+                && o.port_min < b.port_max
+                && b.port_min < o.port_max),
+            "sim seed: overlapping neighbor-NAT blocks on one nat_ip (the dataplane refuses them)"
+        );
         self.nat_owners4
             .extend(flowplane_control::natowner::owner_prefixes4(&b));
     }
     /// IPv6 sibling of [`Self::add_neighbor_nat`].
     pub fn add_neighbor_nat6(&mut self, b: NeighborNat6Entry) {
+        assert!(
+            !self
+                .nat_owners6
+                .iter()
+                .any(|(_, k, o)| k.nat_ip6 == b.nat_ip6
+                    && o.port_min < b.port_max
+                    && b.port_min < o.port_max),
+            "sim seed: overlapping neighbor-NAT blocks on one nat_ip (the dataplane refuses them)"
+        );
         self.nat_owners6
             .extend(flowplane_control::natowner::owner_prefixes6(&b));
     }
@@ -326,11 +364,13 @@ impl Maps for MemMaps {
         self.maglev.get(key).copied()
     }
     fn nat_owner(&self, nat_ip: &[u8; 4], port: u16) -> Option<NatOwner> {
-        let key_bytes = |ip: &[u8; 4], p: [u8; 2]| [ip[0], ip[1], ip[2], ip[3], p[0], p[1]];
-        let want = key_bytes(nat_ip, port.to_be_bytes());
+        let want = owner_key_bytes4(&NatOwnerKey {
+            nat_ip: *nat_ip,
+            port: port.to_be_bytes(),
+        });
         self.nat_owners4
             .iter()
-            .filter(|(plen, k, _)| prefix_match(&key_bytes(&k.nat_ip, k.port), &want, *plen as u8))
+            .filter(|(plen, k, _)| prefix_match(&owner_key_bytes4(k), &want, *plen as u8))
             .max_by_key(|(plen, _, _)| *plen)
             .map(|(_, _, o)| *o)
     }
@@ -348,16 +388,13 @@ impl Maps for MemMaps {
         self.nat_ips6.contains(&(vni, *ip))
     }
     fn nat_owner6(&self, nat_ip: &[u8; 16], port: u16) -> Option<NatOwner> {
-        let key_bytes = |ip: &[u8; 16], p: [u8; 2]| {
-            let mut b = [0u8; 18];
-            b[..16].copy_from_slice(ip);
-            b[16..].copy_from_slice(&p);
-            b
-        };
-        let want = key_bytes(nat_ip, port.to_be_bytes());
+        let want = owner_key_bytes6(&NatOwnerKey6 {
+            nat_ip6: *nat_ip,
+            port: port.to_be_bytes(),
+        });
         self.nat_owners6
             .iter()
-            .filter(|(plen, k, _)| prefix_match(&key_bytes(&k.nat_ip6, k.port), &want, *plen as u8))
+            .filter(|(plen, k, _)| prefix_match(&owner_key_bytes6(k), &want, *plen as u8))
             .max_by_key(|(plen, _, _)| *plen)
             .map(|(_, _, o)| *o)
     }
