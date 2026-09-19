@@ -21,6 +21,12 @@ type recordingDP struct {
 	withdrew map[string]bool
 	nbrNat   map[string]string // "natIp min max" -> ownerUnderlay
 	nbrNatWd map[string]bool
+	// nbrNatWdN counts WithdrawNeighborNat calls per block: a block withdrawn on a live delta must
+	// not be withdrawn a second time by a later fallback diff.
+	nbrNatWdN      map[string]int
+	nbrNatAdds     int                  // AddNeighborNat calls
+	nbrNatReplaces [][]NeighborNatBlock // every ReplaceNeighborNats call, in order
+	replaceErr     error                // returned by ReplaceNeighborNats when set (e.g. Unimplemented)
 	// fwReplace records the LAST ReplaceInterfaceFirewall call per interface (the full desired set),
 	// modelling the real dataplane where a replace overwrites the interface's entire rule set.
 	fwReplace map[string][]FwRuleWithID
@@ -91,7 +97,7 @@ type natSrcCall struct {
 func newRecordingDP() *recordingDP {
 	return &recordingDP{
 		added: map[string]string{}, external: map[string]bool{}, withdrew: map[string]bool{},
-		nbrNat: map[string]string{}, nbrNatWd: map[string]bool{},
+		nbrNat: map[string]string{}, nbrNatWd: map[string]bool{}, nbrNatWdN: map[string]int{},
 		fwReplace:     map[string][]FwRuleWithID{},
 		lbRegistered:  map[string]lbCall{},
 		lbBackends:    map[string][]string{},
@@ -110,12 +116,28 @@ func (f *recordingDP) AddNeighborNat(_ context.Context, natIp string, min, max u
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.nbrNat[natKeyStr(natIp, min, max)] = ownerUnderlay
+	f.nbrNatAdds++
+	return nil
+}
+
+func (f *recordingDP) ReplaceNeighborNats(_ context.Context, blocks []NeighborNatBlock) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.nbrNatReplaces = append(f.nbrNatReplaces, append([]NeighborNatBlock(nil), blocks...))
+	if f.replaceErr != nil {
+		return f.replaceErr
+	}
+	f.nbrNat = map[string]string{}
+	for _, b := range blocks {
+		f.nbrNat[natKeyStr(b.NatIP, b.PortMin, b.PortMax)] = b.OwnerUnderlay
+	}
 	return nil
 }
 func (f *recordingDP) WithdrawNeighborNat(_ context.Context, natIp string, min, max uint32, _ uint32) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.nbrNatWd[natKeyStr(natIp, min, max)] = true
+	f.nbrNatWdN[natKeyStr(natIp, min, max)]++
 	return nil
 }
 func (f *recordingDP) getNbrNat(natIp string, min, max uint32) (string, bool) {

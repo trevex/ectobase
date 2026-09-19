@@ -32,9 +32,15 @@ func (s *Server) Session(stream pb.RouteBus_SessionServer) error {
 	guard := newUnderlayGuard(stream.Context())
 
 	sink := newSessionQueue(h.NodeId)
-	// Register globally on Hello: NAT + public records broadcast to every session (not just
-	// VNI subscribers), and this replays the current global snapshot to the new peer.
-	s.rib.RegisterSink(sink)
+	if h.GetGlobalFeed() == pb.GlobalFeed_GLOBAL_FEED_NONE {
+		// Opted out of the global channel (a compute node): never registered for NAT + public
+		// fanout, but still sent the marker — its consumer waits for it to converge.
+		sink.SendSnapshot([]*pb.ServerMsg{{Msg: &pb.ServerMsg_EndOfGlobal{EndOfGlobal: &pb.EndOfGlobal{}}}})
+	} else {
+		// Register globally on Hello: NAT + public records broadcast to every such session, and
+		// this replays the current snapshot to the new peer.
+		s.rib.RegisterSink(sink)
+	}
 
 	var wg sync.WaitGroup
 	wg.Add(1)

@@ -15,6 +15,7 @@ pub mod writer;
 
 pub use firewall::FwError;
 pub use interface::{meter_state, IfaceParams};
+pub use nat::ReplaceCounts;
 pub use natowner::NeighborNatError;
 pub use writer::{CtFlushScope, CtFlushScope6, MapWriter};
 

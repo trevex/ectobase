@@ -2,9 +2,14 @@ package agent
 
 import (
 	"context"
+	"fmt"
+	"slices"
+	"sort"
 	"testing"
 
 	rbv1 "github.com/trevex/ectobase/mesh/gen/routebusv1"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // The global (NAT + public) channel is replayed in full when a session registers, exactly like a
@@ -14,6 +19,10 @@ import (
 // and neighbor-NAT kept a return route to a block that had moved. These tests pin the EndOfGlobal
 // prune that closes it, and — just as importantly — the guard that stops it from pruning LIVE state
 // when the replay was lossy.
+//
+// The NAT half is no longer a prune at all: only a WAN EDGE holds neighbor-NAT blocks, and it makes
+// its set exactly the snapshot's in one declarative ReplaceNeighborNats at the marker — which also
+// removes a block the dataplane adopted from its pinned maps that no agent remembers installing.
 
 func natAdd(natIP string, min, max uint32, owner string, vni uint32) *rbv1.ServerMsg {
 	return &rbv1.ServerMsg{Msg: &rbv1.ServerMsg_NatUpdate{NatUpdate: &rbv1.NatUpdate{
@@ -26,72 +35,243 @@ func endOfGlobal(n uint32) *rbv1.ServerMsg {
 	return &rbv1.ServerMsg{Msg: &rbv1.ServerMsg_EndOfGlobal{EndOfGlobal: &rbv1.EndOfGlobal{RecordCount: n}}}
 }
 
-// A neighbor-NAT block learned in a previous session and NOT replayed in the new one is a block
-// that moved to another node (or was released) while we were disconnected. Keeping it sends that
-// public IP's return traffic to a node that no longer owns it.
-func TestEndOfGlobalPrunesUnreplayedNatBlock(t *testing.T) {
+func natWithdraw(natIP string, min, max uint32, owner string, vni uint32) *rbv1.ServerMsg {
+	m := natAdd(natIP, min, max, owner, vni)
+	m.GetNatUpdate().Op = rbv1.RouteOp_ROUTE_OP_WITHDRAW
+	return m
+}
+
+// blocksOf renders a replace call as sorted "ip min max owner" strings, to compare as a set.
+func blocksOf(bs []NeighborNatBlock) []string {
+	out := make([]string, 0, len(bs))
+	for _, b := range bs {
+		out = append(out, fmt.Sprintf("%s %d %d %s", b.NatIP, b.PortMin, b.PortMax, b.OwnerUnderlay))
+	}
+	sort.Strings(out)
+	return out
+}
+
+func wantReplaces(t *testing.T, dp *recordingDP, want ...[]string) {
+	t.Helper()
+	if len(dp.nbrNatReplaces) != len(want) {
+		t.Fatalf("want %d ReplaceNeighborNats calls, got %d: %v", len(want), len(dp.nbrNatReplaces), dp.nbrNatReplaces)
+	}
+	for i, w := range want {
+		if got := blocksOf(dp.nbrNatReplaces[i]); !slices.Equal(got, w) {
+			t.Fatalf("replace %d: got %v, want %v", i, got, w)
+		}
+	}
+}
+
+// A compute node opts out of the global feed; an edge takes it.
+func TestOnlyAnEdgeTakesTheGlobalFeed(t *testing.T) {
+	if f := NewBus("nodeB", "fd00::b", newRecordingDP(), false).hello().GlobalFeed; f != rbv1.GlobalFeed_GLOBAL_FEED_NONE {
+		t.Fatalf("compute node Hello: global_feed = %v, want NONE", f)
+	}
+	if f := NewBus("edge", "fd00::e", newRecordingDP(), true).hello().GlobalFeed; f != rbv1.GlobalFeed_GLOBAL_FEED_ALL {
+		t.Fatalf("edge Hello: global_feed = %v, want ALL", f)
+	}
+}
+
+// A compute node holds no neighbor-NAT blocks (only an edge relays NAT returns). An older reflector
+// may still send it NAT records: it ignores them, and its complete snapshot replaces the set with
+// the empty one, clearing whatever an older agent installed.
+func TestComputeNodeHoldsNoNeighborNat(t *testing.T) {
 	ctx := context.Background()
 	dp := newRecordingDP()
 	b := NewBus("nodeB", "fd00::b", dp, false)
+	b.resetGlobalSnapshot()
+	b.handleServerMsg(ctx, natAdd("192.0.2.7", 1024, 2048, "fd00::a", 100))
+	b.handleServerMsg(ctx, endOfGlobal(1))
+	b.handleServerMsg(ctx, natAdd("192.0.2.8", 1024, 2048, "fd00::a", 100)) // a live delta
+	if dp.nbrNatAdds != 0 {
+		t.Fatalf("a compute node must not program neighbor-NAT, got %d adds", dp.nbrNatAdds)
+	}
+	wantReplaces(t, dp, []string{})
+}
 
-	// Session 1: two blocks owned by other nodes.
+// An edge applies a complete snapshot as ONE replace — no per-block add during the replay, so an
+// unchanged block is never unprogrammed — and leaves out a block this node owns.
+func TestEdgeReplacesNeighborNatsAtACompleteSnapshot(t *testing.T) {
+	ctx := context.Background()
+	dp := newRecordingDP()
+	b := NewBus("edge", "fd00::e", dp, true)
+	b.resetGlobalSnapshot()
 	b.handleServerMsg(ctx, natAdd("192.0.2.7", 1024, 2048, "fd00::a", 100))
 	b.handleServerMsg(ctx, natAdd("192.0.2.8", 2048, 3072, "fd00::c", 100))
+	b.handleServerMsg(ctx, natAdd("192.0.2.9", 1024, 2048, "fd00::e", 100)) // owned by this node
+	if dp.nbrNatAdds != 0 {
+		t.Fatalf("replayed blocks must wait for the marker, got %d adds", dp.nbrNatAdds)
+	}
+	b.handleServerMsg(ctx, endOfGlobal(3))
+	wantReplaces(t, dp, []string{"192.0.2.7 1024 2048 fd00::a", "192.0.2.8 2048 3072 fd00::c"})
+}
 
-	// Reconnect: only the second block is replayed.
+// A block that left while the edge was disconnected is absent from the next complete snapshot, and
+// its replace removes it.
+func TestEdgeReplaceDropsABlockThatLeftWhileDisconnected(t *testing.T) {
+	ctx := context.Background()
+	dp := newRecordingDP()
+	b := NewBus("edge", "fd00::e", dp, true)
+	b.resetGlobalSnapshot()
+	b.handleServerMsg(ctx, natAdd("192.0.2.7", 1024, 2048, "fd00::a", 100))
+	b.handleServerMsg(ctx, natAdd("192.0.2.8", 2048, 3072, "fd00::c", 100))
+	b.handleServerMsg(ctx, endOfGlobal(2))
 	b.resetGlobalSnapshot()
 	b.handleServerMsg(ctx, natAdd("192.0.2.8", 2048, 3072, "fd00::c", 100))
 	b.handleServerMsg(ctx, endOfGlobal(1))
-
-	if !dp.nbrNatWd[natKeyStr("192.0.2.7", 1024, 2048)] {
-		t.Fatalf("a NAT block absent from the replayed snapshot must be pruned")
-	}
-	if dp.nbrNatWd[natKeyStr("192.0.2.8", 2048, 3072)] {
-		t.Fatalf("a replayed NAT block must NOT be pruned")
+	wantReplaces(t, dp,
+		[]string{"192.0.2.7 1024 2048 fd00::a", "192.0.2.8 2048 3072 fd00::c"},
+		[]string{"192.0.2.8 2048 3072 fd00::c"})
+	if _, ok := dp.getNbrNat("192.0.2.7", 1024, 2048); ok {
+		t.Fatal("the block that left must be gone")
 	}
 }
 
-// The guard. An older reflector dropped snapshot records on overflow, so "fewer records than the
-// reflector says it sent" means the snapshot was incomplete — and pruning against it would
-// withdraw live state, which is strictly worse than the staleness. The prune must be skipped
-// entirely.
-func TestEndOfGlobalSkipsPruneWhenSnapshotWasLossy(t *testing.T) {
+// The guard: a lossy snapshot (fewer records than the marker says) must not replace — that would
+// withdraw live blocks — but must still program what did arrive.
+func TestEdgeLossySnapshotProgramsWhatArrivedAndPrunesNothing(t *testing.T) {
 	ctx := context.Background()
 	dp := newRecordingDP()
-	b := NewBus("nodeB", "fd00::b", dp, false)
-
+	b := NewBus("edge", "fd00::e", dp, true)
+	b.resetGlobalSnapshot()
 	b.handleServerMsg(ctx, natAdd("192.0.2.7", 1024, 2048, "fd00::a", 100))
 	b.handleServerMsg(ctx, natAdd("192.0.2.8", 2048, 3072, "fd00::c", 100))
-
-	// Reconnect where the replay of 192.0.2.7 was DROPPED: the reflector says it sent 2 records,
-	// the agent only got 1.
-	b.resetGlobalSnapshot()
-	b.handleServerMsg(ctx, natAdd("192.0.2.8", 2048, 3072, "fd00::c", 100))
 	b.handleServerMsg(ctx, endOfGlobal(2))
-
-	if dp.nbrNatWd[natKeyStr("192.0.2.7", 1024, 2048)] {
-		t.Fatalf("a lossy snapshot must NOT prune: the record may still be live")
+	b.resetGlobalSnapshot()
+	b.handleServerMsg(ctx, natAdd("192.0.2.9", 4096, 5120, "fd00::d", 100))
+	b.handleServerMsg(ctx, endOfGlobal(3)) // the reflector sent 3, we got 1
+	if len(dp.nbrNatReplaces) != 1 {
+		t.Fatalf("a lossy snapshot must not replace; got %d replaces", len(dp.nbrNatReplaces))
 	}
-	if dp.nbrNatWd[natKeyStr("192.0.2.8", 2048, 3072)] {
-		t.Fatalf("replayed block pruned on a lossy snapshot")
+	if _, ok := dp.getNbrNat("192.0.2.9", 4096, 5120); !ok {
+		t.Fatal("the block the lossy snapshot did carry must be programmed")
+	}
+	if _, ok := dp.getNbrNat("192.0.2.7", 1024, 2048); !ok {
+		t.Fatal("a lossy snapshot must not remove a block it merely failed to carry")
 	}
 }
 
-// A block this node OWNS is never installed as a neighbor-NAT entry in the first place
-// (applyNat skips it), so it must not be pruned either — there is nothing to withdraw, and a
-// spurious withdraw would be a call against state we never programmed.
-func TestEndOfGlobalIgnoresLocallyOwnedNatBlocks(t *testing.T) {
+// After the marker, deltas are incremental: an add programs one block, a withdraw removes it.
+func TestEdgeLiveNatDeltasAreIncremental(t *testing.T) {
 	ctx := context.Background()
 	dp := newRecordingDP()
-	b := NewBus("nodeB", "fd00::b", dp, false)
-
-	// Owned by THIS node.
-	b.handleServerMsg(ctx, natAdd("192.0.2.7", 1024, 2048, "fd00::b", 100))
+	b := NewBus("edge", "fd00::e", dp, true)
 	b.resetGlobalSnapshot()
 	b.handleServerMsg(ctx, endOfGlobal(0))
+	b.handleServerMsg(ctx, natAdd("192.0.2.7", 1024, 2048, "fd00::a", 100))
+	if owner, ok := dp.getNbrNat("192.0.2.7", 1024, 2048); !ok || owner != "fd00::a" {
+		t.Fatalf("a live add must program the block, got %q ok=%v", owner, ok)
+	}
+	b.handleServerMsg(ctx, natWithdraw("192.0.2.7", 1024, 2048, "fd00::a", 100))
+	if !dp.nbrNatWd[natKeyStr("192.0.2.7", 1024, 2048)] {
+		t.Fatal("a live withdraw must remove the block")
+	}
+}
 
-	if dp.nbrNatWd[natKeyStr("192.0.2.7", 1024, 2048)] {
-		t.Fatalf("a locally-owned block was never installed; it must not be withdrawn")
+// An older dataplane has no ReplaceNeighborNats: fall back to per-block programming and the diff
+// against what this agent installed — the pre-replace behavior.
+func TestEdgeFallsBackWhenTheDataplaneCannotReplace(t *testing.T) {
+	ctx := context.Background()
+	dp := newRecordingDP()
+	dp.replaceErr = status.Error(codes.Unimplemented, "unknown method ReplaceNeighborNats")
+	b := NewBus("edge", "fd00::e", dp, true)
+	b.resetGlobalSnapshot()
+	b.handleServerMsg(ctx, natAdd("192.0.2.7", 1024, 2048, "fd00::a", 100))
+	b.handleServerMsg(ctx, natAdd("192.0.2.8", 2048, 3072, "fd00::c", 100))
+	b.handleServerMsg(ctx, endOfGlobal(2))
+	if dp.nbrNatAdds != 2 {
+		t.Fatalf("fallback must add each block, got %d adds", dp.nbrNatAdds)
+	}
+	b.resetGlobalSnapshot()
+	b.handleServerMsg(ctx, natAdd("192.0.2.8", 2048, 3072, "fd00::c", 100))
+	b.handleServerMsg(ctx, endOfGlobal(1))
+	if !dp.nbrNatWd[natKeyStr("192.0.2.7", 1024, 2048)] {
+		t.Fatal("fallback must withdraw the block that left")
+	}
+	if dp.nbrNatWd[natKeyStr("192.0.2.8", 2048, 3072)] {
+		t.Fatal("fallback must not withdraw a replayed block")
+	}
+}
+
+// A Bus that has not closed a snapshot is replaying one — the state every session starts in and
+// the only state a fresh Bus can honestly be in. Programming a record now would be programming
+// against a set that is still arriving.
+func TestAFreshBusIsReplayingItsSnapshot(t *testing.T) {
+	dp := newRecordingDP()
+	b := NewBus("edge", "fd00::e", dp, true)
+	b.handleServerMsg(context.Background(), natAdd("192.0.2.7", 1024, 2048, "fd00::a", 100))
+	if dp.nbrNatAdds != 0 {
+		t.Fatalf("a Bus with no closed snapshot must collect, not program; got %d adds", dp.nbrNatAdds)
+	}
+}
+
+// The fallback's diff basis is what a SUCCESSFUL replace installed, kept current by the live
+// deltas since — the new-agent/old-dataplane skew the fallback exists for. It must withdraw exactly
+// the blocks that replace still holds and the snapshot dropped: not one the agent already withdrew
+// on a live delta (a second withdraw is a call against state nothing holds), and not a replayed one.
+func TestFallbackDiffWithdrawsExactlyWhatTheReplaceStillHolds(t *testing.T) {
+	ctx := context.Background()
+	dp := newRecordingDP()
+	b := NewBus("edge", "fd00::e", dp, true)
+
+	// Session 1 against a dataplane that CAN replace: three blocks land in one call.
+	b.resetGlobalSnapshot()
+	b.handleServerMsg(ctx, natAdd("192.0.2.7", 1024, 2048, "fd00::a", 100))
+	b.handleServerMsg(ctx, natAdd("192.0.2.8", 2048, 3072, "fd00::c", 100))
+	b.handleServerMsg(ctx, natAdd("192.0.2.9", 3072, 4096, "fd00::d", 100))
+	b.handleServerMsg(ctx, endOfGlobal(3))
+
+	// .9's owner releases it while the session is up: a live withdraw, already applied.
+	b.handleServerMsg(ctx, natWithdraw("192.0.2.9", 3072, 4096, "fd00::d", 100))
+
+	// Reconnect onto a dataplane without the call, with a snapshot carrying only .7.
+	dp.replaceErr = status.Error(codes.Unimplemented, "unknown method ReplaceNeighborNats")
+	b.resetGlobalSnapshot()
+	b.handleServerMsg(ctx, natAdd("192.0.2.7", 1024, 2048, "fd00::a", 100))
+	b.handleServerMsg(ctx, endOfGlobal(1))
+
+	if got := dp.nbrNatWdN[natKeyStr("192.0.2.8", 2048, 3072)]; got != 1 {
+		t.Fatalf("the block the snapshot dropped must be withdrawn exactly once, got %d calls", got)
+	}
+	if got := dp.nbrNatWdN[natKeyStr("192.0.2.9", 3072, 4096)]; got != 1 {
+		t.Fatalf("the live-withdrawn block must not be withdrawn again by the diff, got %d calls", got)
+	}
+	if got := dp.nbrNatWdN[natKeyStr("192.0.2.7", 1024, 2048)]; got != 0 {
+		t.Fatalf("the replayed block must not be withdrawn, got %d calls", got)
+	}
+}
+
+// A replace that never reached the dataplane changed nothing, so there is nothing to repair: one
+// AddNeighborNat per block would only meet the same dead socket. Any other error may have applied
+// part of the set, and those blocks ARE reprogrammed. Neither prunes.
+func TestEdgeReplaceFailureRepairsOnlyWhatMayHaveLanded(t *testing.T) {
+	cases := []struct {
+		code     codes.Code
+		wantAdds int
+	}{
+		{codes.Unavailable, 0},
+		{codes.DeadlineExceeded, 0},
+		{codes.Canceled, 0}, // shutting down: N doomed per-block RPCs would be pure waste
+		{codes.Internal, 2}, // the dataplane answered: the set may be part-way applied
+	}
+	for _, tc := range cases {
+		t.Run(tc.code.String(), func(t *testing.T) {
+			ctx := context.Background()
+			dp := newRecordingDP()
+			dp.replaceErr = status.Error(tc.code, "replace failed")
+			b := NewBus("edge", "fd00::e", dp, true)
+			b.resetGlobalSnapshot()
+			b.handleServerMsg(ctx, natAdd("192.0.2.7", 1024, 2048, "fd00::a", 100))
+			b.handleServerMsg(ctx, natAdd("192.0.2.8", 2048, 3072, "fd00::c", 100))
+			b.handleServerMsg(ctx, endOfGlobal(2))
+			if dp.nbrNatAdds != tc.wantAdds {
+				t.Fatalf("want %d per-block adds after a %v replace, got %d", tc.wantAdds, tc.code, dp.nbrNatAdds)
+			}
+			if len(dp.nbrNatWd) != 0 {
+				t.Fatalf("a failed replace must prune nothing, got %v", dp.nbrNatWd)
+			}
+		})
 	}
 }
 

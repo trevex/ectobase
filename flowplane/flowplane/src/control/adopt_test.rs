@@ -464,6 +464,69 @@ fn restart_adopts_pinned_state_and_relinks_guests() {
         "the withdraw removes the adopted v6 block"
     );
 
+    // Increment 1's gap, closed. Adopt cannot tell whether a block it found in the trie is still
+    // wanted: if the agent restarted too it withdraws only what it installed itself, so a block
+    // withdrawn (or handed to another node) while BOTH were down stays listed forever — still
+    // relaying that public IP's return traffic to the old owner, and still refusing any overlapping
+    // successor. The cure is declarative: the whole block set of a complete route-bus snapshot,
+    // applied as one replace. Both tries are empty here, so whatever they hold after the replace is
+    // exactly what the replace put there.
+    let stale = pb::AddNeighborNatRequest {
+        vni: 7,
+        nat_ip: "198.51.100.9".into(),
+        owner_underlay: "fd00::99".into(),
+        port_min: 20000,
+        port_max: 30000,
+    };
+    ctl.with_core(|c| handlers::add_neighbor_nat(c, &stale))
+        .expect("add the block that will go stale");
+    let stranded = nat_owners_pinned(pin.path());
+    assert!(!stranded.is_empty(), "the block to strand is programmed");
+
+    // Incarnation 3: the stranded block comes back through adopt, with no agent left that remembers
+    // installing it.
+    drop(ctl);
+    let ctl = bring_up(pin.path(), true);
+    assert_eq!(
+        nat_owners_pinned(pin.path()),
+        stranded,
+        "the stranded block survives the restart"
+    );
+    // The first complete snapshot omits it and carries the successor that took over its ports — the
+    // exact overlap `add_neighbor_nat` refuses above with AlreadyExists. One replace does both,
+    // because it deletes every block outside the set before it stores any of the set's.
+    let resp = ctl
+        .with_core(|c| {
+            handlers::replace_neighbor_nats(
+                c,
+                &pb::ReplaceNeighborNatsRequest {
+                    blocks: vec![pb::NeighborNatBlock {
+                        nat_ip: "198.51.100.9".into(),
+                        port_min: 25000,
+                        port_max: 35000,
+                        owner_underlay: "fd00::aa".into(),
+                        vni: 8,
+                    }],
+                },
+            )
+        })
+        .expect("replace the adopted set with the snapshot's");
+    assert_eq!(
+        (resp.added, resp.kept, resp.removed),
+        (1, 0, 1),
+        "the adopted block is removed and its successor admitted"
+    );
+    let successor = nat_owners_pinned(pin.path());
+    assert!(!successor.is_empty(), "the successor is stored");
+    // Counting the removal is not enough: a surviving prefix of the stranded block (its ports
+    // 20000..25000 are outside the successor's) would keep misrouting returns for that public IP.
+    assert!(
+        successor
+            .iter()
+            .all(|(_, k, o)| k.nat_ip == [198, 51, 100, 9] && o.port_min == 25000 && o.vni == 8),
+        "only the successor's prefixes remain: {successor:?}"
+    );
+
     // Unpinning detaches; the netns (and its devices) goes away with this thread.
     drop(ctl);
     let _ = std::fs::remove_dir_all(pin.path());

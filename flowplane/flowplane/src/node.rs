@@ -275,6 +275,34 @@ impl DataplaneNode for NodeService {
         Ok(Response::new(resp))
     }
 
+    async fn replace_neighbor_nats(
+        &self,
+        req: Request<pb::ReplaceNeighborNatsRequest>,
+    ) -> Result<Response<pb::ReplaceNeighborNatsResponse>, Status> {
+        let attach = self
+            .attach
+            .as_ref()
+            .ok_or_else(|| Status::failed_precondition("datapath not initialized"))?
+            .clone();
+        let r = req.into_inner();
+        let blocks = r.blocks.len();
+        let resp = tokio::task::spawn_blocking(move || {
+            attach
+                .control
+                .with_core(|c| handlers::replace_neighbor_nats(c, &r))
+        })
+        .await
+        .map_err(|e| Status::internal(format!("replace_neighbor_nats task panicked: {e}")))?
+        // A refused set changed nothing, but a map failure part way leaves it partly applied:
+        // log the failure so that partial apply is not silent while the agent retries.
+        .inspect_err(|e| println!("NEIGHBOR_NAT replace {blocks} blocks failed: {e}"))?;
+        println!(
+            "NEIGHBOR_NAT replace {blocks} blocks: +{} ={} -{}",
+            resp.added, resp.kept, resp.removed
+        );
+        Ok(Response::new(resp))
+    }
+
     async fn add_load_balancer(
         &self,
         req: Request<pb::AddLoadBalancerRequest>,

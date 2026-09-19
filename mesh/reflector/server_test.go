@@ -246,3 +246,64 @@ func TestSessionDeliversAWholeVNISnapshot(t *testing.T) {
 		return
 	}
 }
+
+// A session that opts out of the global feed gets the marker — its consumer waits for it — and no
+// NAT or public record, neither replayed nor live.
+func TestSessionWithoutTheGlobalFeedGetsOnlyTheMarker(t *testing.T) {
+	cl, rib := startServerWithRIB(t)
+	rib.AnnounceNat("seed", NatBlock{Vni: 100, SourceIP: "10.0.0.1", NatIP: "198.51.100.1", PortMin: 1024, PortMax: 2048, OwnerUnderlay: "fd00::a"})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	compute, err := cl.Session(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := compute.Send(&pb.ClientMsg{Msg: &pb.ClientMsg_Hello{Hello: &pb.Hello{
+		NodeId: "compute", GlobalFeed: pb.GlobalFeed_GLOBAL_FEED_NONE,
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := compute.Send(&pb.ClientMsg{Msg: &pb.ClientMsg_Subscribe{Subscribe: &pb.Subscribe{Vni: 100}}}); err != nil {
+		t.Fatal(err)
+	}
+	next := func() *pb.ServerMsg {
+		t.Helper()
+		m, err := compute.Recv()
+		if err != nil {
+			t.Fatalf("recv: %v", err)
+		}
+		return m
+	}
+	if eog := next().GetEndOfGlobal(); eog == nil || eog.RecordCount != 0 {
+		t.Fatal("want EndOfGlobal{0} first: the replayed NAT block must not reach an opted-out session")
+	}
+	if next().GetEndOfRib() == nil {
+		t.Fatal("want the VNI's EndOfRIB next")
+	}
+
+	// A live NAT block and a live public record, then a route in the subscribed VNI, all from
+	// another session: the route arrives, neither global record ever does. The route is sent LAST
+	// and asserted first, so anything the global channel leaked would be received ahead of it.
+	edge, err := cl.Session(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hello(t, edge, "announcer")
+	for _, m := range []*pb.ClientMsg{
+		{Msg: &pb.ClientMsg_AnnounceNat{AnnounceNat: &pb.AnnounceNat{
+			Vni: 100, SourceIp: "10.0.0.2", NatIp: "198.51.100.2", PortMin: 1024, PortMax: 2048, OwnerUnderlay: "fd00::b",
+		}}},
+		{Msg: &pb.ClientMsg_AnnouncePublic{AnnouncePublic: &pb.PublicPrefix{
+			Kind: pb.PublicKind_PUBLIC_KIND_EDGE_UNDERLAY, Prefix: "fd00::b/128", OwnerUnderlay: "fd00::b",
+		}}},
+		{Msg: &pb.ClientMsg_Announce{Announce: &pb.Announce{Vni: 100, Prefix: "10.0.0.2/32", NexthopUnderlay: "fd00::b"}}},
+	} {
+		if err := edge.Send(m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if m := next(); m.GetRouteUpdate() == nil {
+		t.Fatalf("want the route, and no NAT or public record before it; got %+v", m.Msg)
+	}
+}

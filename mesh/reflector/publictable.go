@@ -11,8 +11,9 @@ type LbPort = routebus.LbPort
 
 // PublicRecord is a globally-relevant "public" prefix advertised on the typed
 // PublicPrefix channel: an edge anycast /128, a distributed-SNAT nat_ip block,
-// an LB address, or a floating IP. Like NAT blocks, public records are GLOBAL (not
-// per-VNI): every node learns every record so it can steer traffic to the owner.
+// an LB address, or a floating IP. Like NAT blocks, public records are GLOBAL rather than per-VNI:
+// every session that takes the global feed learns every record and can steer traffic to the owner.
+// Only WAN edges take it; every node still announces its own records.
 type PublicRecord struct {
 	Kind          pb.PublicKind
 	Prefix        string

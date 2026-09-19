@@ -67,7 +67,8 @@ func equalStrs(a, b []string) bool {
 
 // RIB is the reflector's global route table. Safe for concurrent use. It also
 // holds the GLOBAL NAT table (nattable.go): per-VNI routes are fanned out to
-// VNI subscribers, whereas NAT blocks broadcast to every session (r.sinks).
+// VNI subscribers, whereas NAT blocks broadcast to every session registered for the global feed
+// (r.sinks) — the WAN edges, which are the only consumers.
 type RIB struct {
 	mu          sync.Mutex
 	routes      map[routeKey]routeEntry
@@ -82,7 +83,10 @@ type RIB struct {
 	public         map[publicKey]PublicRecord
 	publicByOrigin map[string]map[publicKey]struct{}
 
-	sinks map[string]Sink // every connected session, keyed by node id
+	// sinks is the global fanout set, keyed by node id: the connected sessions that ASKED for the
+	// global feed on Hello, which is only the WAN edges — nothing else consumes NAT or public
+	// records. A session that opted out is never added, so it costs the fanout nothing.
+	sinks map[string]Sink
 
 	// fenced blocks nexthops inside a node /64 (Tier-2 failover): announces whose
 	// nexthop falls inside a fenced prefix are rejected, and stored matching routes

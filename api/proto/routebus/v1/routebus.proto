@@ -77,6 +77,18 @@ message ServerMsg {
 message Hello {
   string node_id = 1;       // stable per-agent identity (== the reflector's origin key)
   string underlay_ipv6 = 2; // this node's underlay /128 (informational for v1)
+  // Whether this session receives the GLOBAL channel — NAT blocks and public records: the
+  // snapshot on Hello and every later delta. Only a WAN edge consumes it (it relays NAT returns to
+  // their owners and runs Maglev for LB addresses), so a compute node opts out, which removes the
+  // O(records × nodes) fanout. The default, ALL, keeps an older agent working unchanged.
+  GlobalFeed global_feed = 3;
+}
+
+enum GlobalFeed {
+  GLOBAL_FEED_ALL = 0;
+  // No global records. The session still receives EndOfGlobal{record_count: 0}, so a consumer that
+  // waits for the global snapshot (convergence) completes, and prunes against an empty set.
+  GLOBAL_FEED_NONE = 1;
 }
 message Subscribe { uint32 vni = 1; }
 message Unsubscribe { uint32 vni = 1; }
@@ -134,8 +146,9 @@ message KeepAlive {}
 
 // AnnounceNat announces this node's ownership of a deterministic egress SNAT
 // block: overlay source_ip (in vni) is SNATed onto nat_ip:[port_min,port_max)
-// and the owning node's underlay is owner_underlay. NAT blocks are GLOBAL: every
-// node learns every block so a return that lands on the wrong node re-routes.
+// and the owning node's underlay is owner_underlay. Every node announces its own blocks; they are
+// fanned out on the GLOBAL channel (not per-VNI), so every session that TAKES that feed — only WAN
+// edges do (see Hello.global_feed) — learns every block and re-routes a return that lands on it.
 message AnnounceNat {
   uint32 vni = 1;
   string source_ip = 2;

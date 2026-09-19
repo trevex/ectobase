@@ -189,6 +189,51 @@ pub fn withdraw_neighbor_nat<W: MapWriter>(
     Ok(pb::WithdrawNeighborNatResponse {})
 }
 
+/// The whole neighbor-NAT set a complete route-bus snapshot carries; see
+/// `ControlCore::replace_neighbor_nats`. A malformed block refuses the set before anything is
+/// changed.
+pub fn replace_neighbor_nats<W: MapWriter>(
+    core: &mut ControlCore<W>,
+    req: &pb::ReplaceNeighborNatsRequest,
+) -> Result<pb::ReplaceNeighborNatsResponse, ServiceError> {
+    use flowplane_common::{NeighborNat6Entry, NeighborNatEntry};
+    use std::net::IpAddr;
+    let (mut v4, mut v6) = (Vec::new(), Vec::new());
+    for b in &req.blocks {
+        let nat: IpAddr = b.nat_ip.parse().map_err(invalid)?;
+        // The owner underlay is a v6 VTEP in BOTH families (the underlay is IPv6-only).
+        let underlay = parse_nexthop6(&b.owner_underlay).map_err(invalid)?;
+        let port_min = port_u16(b.port_min).map_err(invalid)?;
+        let port_max = port_u16(b.port_max).map_err(invalid)?;
+        match nat {
+            IpAddr::V4(n) => v4.push(NeighborNatEntry {
+                underlay,
+                nat_ip: n.octets(),
+                vni: b.vni,
+                port_min,
+                port_max,
+                enabled: 1,
+                _pad: [0; 3],
+            }),
+            IpAddr::V6(n) => v6.push(NeighborNat6Entry {
+                underlay,
+                nat_ip6: n.octets(),
+                vni: b.vni,
+                port_min,
+                port_max,
+                enabled: 1,
+                _pad: [0; 3],
+            }),
+        }
+    }
+    let n = core.replace_neighbor_nats(&v4, &v6)?;
+    Ok(pb::ReplaceNeighborNatsResponse {
+        added: n.added,
+        kept: n.kept,
+        removed: n.removed,
+    })
+}
+
 pub fn add_load_balancer<W: MapWriter>(
     core: &mut ControlCore<W>,
     req: &pb::AddLoadBalancerRequest,
@@ -862,6 +907,85 @@ mod tests {
                 owner_underlay: "2001:db8::bb".into(),
                 port_min: 3000,
                 port_max: 3000,
+            },
+        )
+        .unwrap_err();
+        assert_eq!(
+            tonic::Status::from(err).code(),
+            tonic::Code::InvalidArgument
+        );
+    }
+
+    /// A block of the set, owned by 2001:db8::cc in VNI 100.
+    fn blk(nat_ip: &str, port_min: u32, port_max: u32) -> pb::NeighborNatBlock {
+        pb::NeighborNatBlock {
+            nat_ip: nat_ip.into(),
+            port_min,
+            port_max,
+            owner_underlay: "2001:db8::cc".into(),
+            vni: 100,
+        }
+    }
+
+    // The set is the whole truth: the block that is not in it goes, both families' new ones land.
+    #[test]
+    fn replace_neighbor_nats_syncs_both_families() {
+        let mut c = core();
+        add_neighbor_nat(
+            &mut c,
+            &pb::AddNeighborNatRequest {
+                vni: 100,
+                nat_ip: "198.51.100.7".into(),
+                owner_underlay: "2001:db8::bb".into(),
+                port_min: 1024,
+                port_max: 2048,
+            },
+        )
+        .unwrap();
+        let resp = replace_neighbor_nats(
+            &mut c,
+            &pb::ReplaceNeighborNatsRequest {
+                blocks: vec![
+                    blk("198.51.100.8", 20000, 30000),
+                    blk("2001:db8:2b::7", 20000, 30000),
+                ],
+            },
+        )
+        .unwrap();
+        assert_eq!((resp.added, resp.kept, resp.removed), (2, 0, 1));
+        assert_trie(
+            &c.writer().nat_owners,
+            &owners4([198, 51, 100, 8], 20000, 30000, "2001:db8::cc"),
+        );
+        assert_trie(
+            &c.writer().nat_owners6,
+            &owners6("2001:db8:2b::7", 20000, 30000, "2001:db8::cc"),
+        );
+    }
+
+    #[test]
+    fn replace_neighbor_nats_refuses_an_overlapping_set() {
+        let mut c = core();
+        let err = replace_neighbor_nats(
+            &mut c,
+            &pb::ReplaceNeighborNatsRequest {
+                blocks: vec![
+                    blk("198.51.100.7", 20000, 30000),
+                    blk("198.51.100.7", 25000, 35000),
+                ],
+            },
+        )
+        .unwrap_err();
+        assert_eq!(tonic::Status::from(err).code(), tonic::Code::AlreadyExists);
+    }
+
+    #[test]
+    fn replace_neighbor_nats_rejects_a_bad_block() {
+        let mut c = core();
+        let err = replace_neighbor_nats(
+            &mut c,
+            &pb::ReplaceNeighborNatsRequest {
+                blocks: vec![blk("not-an-ip", 1, 2)],
             },
         )
         .unwrap_err();
