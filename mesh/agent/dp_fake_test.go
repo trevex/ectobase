@@ -141,27 +141,44 @@ func (f *recordingDP) AddNatSource(_ context.Context, vni uint32, src, nat strin
 	return nil
 }
 
-// fwMaxRulesPerFamily mirrors flowplane-common's FW_MAX_RULES: the dataplane holds at most this many
-// rules per interface PER ADDRESS FAMILY, ingress and egress sharing the budget.
-const fwMaxRulesPerFamily = 16
+// fwScopeMaxClasses mirrors flowplane-common's FW_SCOPE_MAX_CLASSES: the dataplane compiles each
+// direction's rules of one family into a classifier scope and refuses a scope that needs more peer
+// classes (distinct peer CIDRs other than the any-peer /0) than this. Its other limit, policy
+// entries after port-range expansion, is not modelled.
+const fwScopeMaxClasses = 4096
 
 // ReplaceInterfaceFirewall mirrors flowplane's replace_interface_firewall: the rule list is split by
-// family (v6 iff either CIDR is v6; an all-empty rule is an untyped v4 wildcard), a family over the
-// cap refuses the WHOLE replace with ResourceExhausted, and a refused replace leaves the prior set.
+// family (v6 iff either CIDR is v6; an all-empty rule is an untyped v4 wildcard) and direction, a
+// scope over its class limit refuses the WHOLE replace with ResourceExhausted, and a refused replace
+// leaves the prior set.
 func (f *recordingDP) ReplaceInterfaceFirewall(_ context.Context, iface string, rules []FwRuleWithID) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	var v4, v6 int
+	type scope struct{ v6, egress bool }
+	classes := map[scope]map[string]bool{}
 	for _, rr := range rules {
-		if strings.Contains(rr.Rule.SrcCIDR, ":") || strings.Contains(rr.Rule.DstCIDR, ":") {
-			v6++
-		} else {
-			v4++
+		s := scope{
+			v6:     strings.Contains(rr.Rule.SrcCIDR, ":") || strings.Contains(rr.Rule.DstCIDR, ":"),
+			egress: rr.Rule.Egress,
 		}
+		peer := rr.Rule.SrcCIDR
+		if s.egress {
+			peer = rr.Rule.DstCIDR
+		}
+		if peer == "" || strings.HasSuffix(peer, "/0") {
+			continue
+		}
+		if classes[s] == nil {
+			classes[s] = map[string]bool{}
+		}
+		classes[s][peer] = true
 	}
-	if v4 > fwMaxRulesPerFamily || v6 > fwMaxRulesPerFamily {
-		return status.Errorf(codes.ResourceExhausted,
-			"too many firewall rules for interface (max %d per family): v4=%d v6=%d", fwMaxRulesPerFamily, v4, v6)
+	for s, peers := range classes {
+		if len(peers) > fwScopeMaxClasses {
+			return status.Errorf(codes.ResourceExhausted,
+				"firewall rules compile to %d peer classes (v6=%t egress=%t), over the per-direction limit %d",
+				len(peers), s.v6, s.egress, fwScopeMaxClasses)
+		}
 	}
 	// Overwrite: the whole set for this interface becomes exactly `rules` (clears prior on empty).
 	f.fwReplace[iface] = append([]FwRuleWithID(nil), rules...)

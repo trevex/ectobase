@@ -155,7 +155,7 @@ func TestCompiledNICControllerEnvtest(t *testing.T) {
 			if c == nil || c.Status != metav1.ConditionTrue || c.Reason != FirewallReasonCompiled {
 				return fmt.Errorf("FirewallCompiled condition = %+v, want True/%s", c, FirewallReasonCompiled)
 			}
-			if want := "IPv4 2/16, IPv6 1/16"; !strings.Contains(c.Message, want) {
+			if want := fmt.Sprintf("IPv4 2/%d, IPv6 1/%d", FirewallRuleBudget, FirewallRuleBudget); !strings.Contains(c.Message, want) {
 				return fmt.Errorf("condition message %q does not report budget use %q", c.Message, want)
 			}
 			return nil
