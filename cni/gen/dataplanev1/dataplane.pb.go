@@ -1816,6 +1816,186 @@ func (*WithdrawNeighborNatResponse) Descriptor() ([]byte, []int) {
 	return file_dataplane_proto_rawDescGZIP(), []int{32}
 }
 
+type NeighborNatBlock struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	NatIp         string                 `protobuf:"bytes,1,opt,name=nat_ip,json=natIp,proto3" json:"nat_ip,omitempty"`                         // public IPv4 or IPv6 of the block
+	PortMin       uint32                 `protobuf:"varint,2,opt,name=port_min,json=portMin,proto3" json:"port_min,omitempty"`                  // inclusive
+	PortMax       uint32                 `protobuf:"varint,3,opt,name=port_max,json=portMax,proto3" json:"port_max,omitempty"`                  // exclusive
+	OwnerUnderlay string                 `protobuf:"bytes,4,opt,name=owner_underlay,json=ownerUnderlay,proto3" json:"owner_underlay,omitempty"` // owner node underlay IPv6
+	Vni           uint32                 `protobuf:"varint,5,opt,name=vni,proto3" json:"vni,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *NeighborNatBlock) Reset() {
+	*x = NeighborNatBlock{}
+	mi := &file_dataplane_proto_msgTypes[33]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *NeighborNatBlock) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*NeighborNatBlock) ProtoMessage() {}
+
+func (x *NeighborNatBlock) ProtoReflect() protoreflect.Message {
+	mi := &file_dataplane_proto_msgTypes[33]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use NeighborNatBlock.ProtoReflect.Descriptor instead.
+func (*NeighborNatBlock) Descriptor() ([]byte, []int) {
+	return file_dataplane_proto_rawDescGZIP(), []int{33}
+}
+
+func (x *NeighborNatBlock) GetNatIp() string {
+	if x != nil {
+		return x.NatIp
+	}
+	return ""
+}
+
+func (x *NeighborNatBlock) GetPortMin() uint32 {
+	if x != nil {
+		return x.PortMin
+	}
+	return 0
+}
+
+func (x *NeighborNatBlock) GetPortMax() uint32 {
+	if x != nil {
+		return x.PortMax
+	}
+	return 0
+}
+
+func (x *NeighborNatBlock) GetOwnerUnderlay() string {
+	if x != nil {
+		return x.OwnerUnderlay
+	}
+	return ""
+}
+
+func (x *NeighborNatBlock) GetVni() uint32 {
+	if x != nil {
+		return x.Vni
+	}
+	return 0
+}
+
+type ReplaceNeighborNatsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Blocks        []*NeighborNatBlock    `protobuf:"bytes,1,rep,name=blocks,proto3" json:"blocks,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReplaceNeighborNatsRequest) Reset() {
+	*x = ReplaceNeighborNatsRequest{}
+	mi := &file_dataplane_proto_msgTypes[34]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReplaceNeighborNatsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReplaceNeighborNatsRequest) ProtoMessage() {}
+
+func (x *ReplaceNeighborNatsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_dataplane_proto_msgTypes[34]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReplaceNeighborNatsRequest.ProtoReflect.Descriptor instead.
+func (*ReplaceNeighborNatsRequest) Descriptor() ([]byte, []int) {
+	return file_dataplane_proto_rawDescGZIP(), []int{34}
+}
+
+func (x *ReplaceNeighborNatsRequest) GetBlocks() []*NeighborNatBlock {
+	if x != nil {
+		return x.Blocks
+	}
+	return nil
+}
+
+type ReplaceNeighborNatsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Added         uint32                 `protobuf:"varint,1,opt,name=added,proto3" json:"added,omitempty"`
+	Kept          uint32                 `protobuf:"varint,2,opt,name=kept,proto3" json:"kept,omitempty"`
+	Removed       uint32                 `protobuf:"varint,3,opt,name=removed,proto3" json:"removed,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReplaceNeighborNatsResponse) Reset() {
+	*x = ReplaceNeighborNatsResponse{}
+	mi := &file_dataplane_proto_msgTypes[35]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReplaceNeighborNatsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReplaceNeighborNatsResponse) ProtoMessage() {}
+
+func (x *ReplaceNeighborNatsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_dataplane_proto_msgTypes[35]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReplaceNeighborNatsResponse.ProtoReflect.Descriptor instead.
+func (*ReplaceNeighborNatsResponse) Descriptor() ([]byte, []int) {
+	return file_dataplane_proto_rawDescGZIP(), []int{35}
+}
+
+func (x *ReplaceNeighborNatsResponse) GetAdded() uint32 {
+	if x != nil {
+		return x.Added
+	}
+	return 0
+}
+
+func (x *ReplaceNeighborNatsResponse) GetKept() uint32 {
+	if x != nil {
+		return x.Kept
+	}
+	return 0
+}
+
+func (x *ReplaceNeighborNatsResponse) GetRemoved() uint32 {
+	if x != nil {
+		return x.Removed
+	}
+	return 0
+}
+
 type ConfigureQoSRequest struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	InterfaceId    string                 `protobuf:"bytes,1,opt,name=interface_id,json=interfaceId,proto3" json:"interface_id,omitempty"`             // target interface (as in AttachInterface)
@@ -1830,7 +2010,7 @@ type ConfigureQoSRequest struct {
 
 func (x *ConfigureQoSRequest) Reset() {
 	*x = ConfigureQoSRequest{}
-	mi := &file_dataplane_proto_msgTypes[33]
+	mi := &file_dataplane_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1842,7 +2022,7 @@ func (x *ConfigureQoSRequest) String() string {
 func (*ConfigureQoSRequest) ProtoMessage() {}
 
 func (x *ConfigureQoSRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_dataplane_proto_msgTypes[33]
+	mi := &file_dataplane_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1855,7 +2035,7 @@ func (x *ConfigureQoSRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConfigureQoSRequest.ProtoReflect.Descriptor instead.
 func (*ConfigureQoSRequest) Descriptor() ([]byte, []int) {
-	return file_dataplane_proto_rawDescGZIP(), []int{33}
+	return file_dataplane_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *ConfigureQoSRequest) GetInterfaceId() string {
@@ -1908,7 +2088,7 @@ type ConfigureQoSResponse struct {
 
 func (x *ConfigureQoSResponse) Reset() {
 	*x = ConfigureQoSResponse{}
-	mi := &file_dataplane_proto_msgTypes[34]
+	mi := &file_dataplane_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1920,7 +2100,7 @@ func (x *ConfigureQoSResponse) String() string {
 func (*ConfigureQoSResponse) ProtoMessage() {}
 
 func (x *ConfigureQoSResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_dataplane_proto_msgTypes[34]
+	mi := &file_dataplane_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1933,7 +2113,7 @@ func (x *ConfigureQoSResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConfigureQoSResponse.ProtoReflect.Descriptor instead.
 func (*ConfigureQoSResponse) Descriptor() ([]byte, []int) {
-	return file_dataplane_proto_rawDescGZIP(), []int{34}
+	return file_dataplane_proto_rawDescGZIP(), []int{37}
 }
 
 var File_dataplane_proto protoreflect.FileDescriptor
@@ -2062,7 +2242,19 @@ const file_dataplane_proto_rawDesc = "" +
 	"\bport_min\x18\x02 \x01(\rR\aportMin\x12\x19\n" +
 	"\bport_max\x18\x03 \x01(\rR\aportMax\x12\x10\n" +
 	"\x03vni\x18\x04 \x01(\rR\x03vni\"\x1d\n" +
-	"\x1bWithdrawNeighborNatResponse\"\xef\x01\n" +
+	"\x1bWithdrawNeighborNatResponse\"\x98\x01\n" +
+	"\x10NeighborNatBlock\x12\x15\n" +
+	"\x06nat_ip\x18\x01 \x01(\tR\x05natIp\x12\x19\n" +
+	"\bport_min\x18\x02 \x01(\rR\aportMin\x12\x19\n" +
+	"\bport_max\x18\x03 \x01(\rR\aportMax\x12%\n" +
+	"\x0eowner_underlay\x18\x04 \x01(\tR\rownerUnderlay\x12\x10\n" +
+	"\x03vni\x18\x05 \x01(\rR\x03vni\"T\n" +
+	"\x1aReplaceNeighborNatsRequest\x126\n" +
+	"\x06blocks\x18\x01 \x03(\v2\x1e.dataplane.v1.NeighborNatBlockR\x06blocks\"a\n" +
+	"\x1bReplaceNeighborNatsResponse\x12\x14\n" +
+	"\x05added\x18\x01 \x01(\rR\x05added\x12\x12\n" +
+	"\x04kept\x18\x02 \x01(\rR\x04kept\x12\x18\n" +
+	"\aremoved\x18\x03 \x01(\rR\aremoved\"\xef\x01\n" +
 	"\x13ConfigureQoSRequest\x12!\n" +
 	"\finterface_id\x18\x01 \x01(\tR\vinterfaceId\x12\x1f\n" +
 	"\vegress_mbps\x18\x02 \x01(\rR\n" +
@@ -2072,7 +2264,7 @@ const file_dataplane_proto_rawDesc = "" +
 	"\fingress_mbps\x18\x04 \x01(\rR\vingressMbps\x12&\n" +
 	"\x0fegress_burst_kb\x18\x05 \x01(\rR\regressBurstKb\x12(\n" +
 	"\x10ingress_burst_kb\x18\x06 \x01(\rR\x0eingressBurstKb\"\x16\n" +
-	"\x14ConfigureQoSResponse2\xfa\v\n" +
+	"\x14ConfigureQoSResponse2\xe6\f\n" +
 	"\rDataplaneNode\x12^\n" +
 	"\x0fAttachInterface\x12$.dataplane.v1.AttachInterfaceRequest\x1a%.dataplane.v1.AttachInterfaceResponse\x12^\n" +
 	"\x0fDetachInterface\x12$.dataplane.v1.DetachInterfaceRequest\x1a%.dataplane.v1.DetachInterfaceResponse\x12[\n" +
@@ -2083,7 +2275,8 @@ const file_dataplane_proto_rawDesc = "" +
 	"\fAddNatSource\x12!.dataplane.v1.AddNatSourceRequest\x1a\".dataplane.v1.AddNatSourceResponse\x12d\n" +
 	"\x11WithdrawNatSource\x12&.dataplane.v1.WithdrawNatSourceRequest\x1a'.dataplane.v1.WithdrawNatSourceResponse\x12[\n" +
 	"\x0eAddNeighborNat\x12#.dataplane.v1.AddNeighborNatRequest\x1a$.dataplane.v1.AddNeighborNatResponse\x12j\n" +
-	"\x13WithdrawNeighborNat\x12(.dataplane.v1.WithdrawNeighborNatRequest\x1a).dataplane.v1.WithdrawNeighborNatResponse\x12^\n" +
+	"\x13WithdrawNeighborNat\x12(.dataplane.v1.WithdrawNeighborNatRequest\x1a).dataplane.v1.WithdrawNeighborNatResponse\x12j\n" +
+	"\x13ReplaceNeighborNats\x12(.dataplane.v1.ReplaceNeighborNatsRequest\x1a).dataplane.v1.ReplaceNeighborNatsResponse\x12^\n" +
 	"\x0fAddLoadBalancer\x12$.dataplane.v1.AddLoadBalancerRequest\x1a%.dataplane.v1.AddLoadBalancerResponse\x12U\n" +
 	"\fAddLbBackend\x12!.dataplane.v1.AddLbBackendRequest\x1a\".dataplane.v1.AddLbBackendResponse\x12^\n" +
 	"\x0fDelLoadBalancer\x12$.dataplane.v1.DelLoadBalancerRequest\x1a%.dataplane.v1.DelLoadBalancerResponse\x12U\n" +
@@ -2103,7 +2296,7 @@ func file_dataplane_proto_rawDescGZIP() []byte {
 	return file_dataplane_proto_rawDescData
 }
 
-var file_dataplane_proto_msgTypes = make([]protoimpl.MessageInfo, 35)
+var file_dataplane_proto_msgTypes = make([]protoimpl.MessageInfo, 38)
 var file_dataplane_proto_goTypes = []any{
 	(*PortProto)(nil),                        // 0: dataplane.v1.PortProto
 	(*AddLoadBalancerRequest)(nil),           // 1: dataplane.v1.AddLoadBalancerRequest
@@ -2138,50 +2331,56 @@ var file_dataplane_proto_goTypes = []any{
 	(*AddNeighborNatResponse)(nil),           // 30: dataplane.v1.AddNeighborNatResponse
 	(*WithdrawNeighborNatRequest)(nil),       // 31: dataplane.v1.WithdrawNeighborNatRequest
 	(*WithdrawNeighborNatResponse)(nil),      // 32: dataplane.v1.WithdrawNeighborNatResponse
-	(*ConfigureQoSRequest)(nil),              // 33: dataplane.v1.ConfigureQoSRequest
-	(*ConfigureQoSResponse)(nil),             // 34: dataplane.v1.ConfigureQoSResponse
+	(*NeighborNatBlock)(nil),                 // 33: dataplane.v1.NeighborNatBlock
+	(*ReplaceNeighborNatsRequest)(nil),       // 34: dataplane.v1.ReplaceNeighborNatsRequest
+	(*ReplaceNeighborNatsResponse)(nil),      // 35: dataplane.v1.ReplaceNeighborNatsResponse
+	(*ConfigureQoSRequest)(nil),              // 36: dataplane.v1.ConfigureQoSRequest
+	(*ConfigureQoSResponse)(nil),             // 37: dataplane.v1.ConfigureQoSResponse
 }
 var file_dataplane_proto_depIdxs = []int32{
 	0,  // 0: dataplane.v1.AddLoadBalancerRequest.ports:type_name -> dataplane.v1.PortProto
 	9,  // 1: dataplane.v1.ReplaceInterfaceFirewallRequest.rules:type_name -> dataplane.v1.FwRuleSpec
 	16, // 2: dataplane.v1.ListInterfacesResponse.interfaces:type_name -> dataplane.v1.InterfaceInfo
-	12, // 3: dataplane.v1.DataplaneNode.AttachInterface:input_type -> dataplane.v1.AttachInterfaceRequest
-	17, // 4: dataplane.v1.DataplaneNode.DetachInterface:input_type -> dataplane.v1.DetachInterfaceRequest
-	14, // 5: dataplane.v1.DataplaneNode.ListInterfaces:input_type -> dataplane.v1.ListInterfacesRequest
-	19, // 6: dataplane.v1.DataplaneNode.ConfigureNetwork:input_type -> dataplane.v1.ConfigureNetworkRequest
-	21, // 7: dataplane.v1.DataplaneNode.AddRoute:input_type -> dataplane.v1.AddRouteRequest
-	23, // 8: dataplane.v1.DataplaneNode.WithdrawRoute:input_type -> dataplane.v1.WithdrawRouteRequest
-	25, // 9: dataplane.v1.DataplaneNode.AddNatSource:input_type -> dataplane.v1.AddNatSourceRequest
-	27, // 10: dataplane.v1.DataplaneNode.WithdrawNatSource:input_type -> dataplane.v1.WithdrawNatSourceRequest
-	29, // 11: dataplane.v1.DataplaneNode.AddNeighborNat:input_type -> dataplane.v1.AddNeighborNatRequest
-	31, // 12: dataplane.v1.DataplaneNode.WithdrawNeighborNat:input_type -> dataplane.v1.WithdrawNeighborNatRequest
-	1,  // 13: dataplane.v1.DataplaneNode.AddLoadBalancer:input_type -> dataplane.v1.AddLoadBalancerRequest
-	3,  // 14: dataplane.v1.DataplaneNode.AddLbBackend:input_type -> dataplane.v1.AddLbBackendRequest
-	5,  // 15: dataplane.v1.DataplaneNode.DelLoadBalancer:input_type -> dataplane.v1.DelLoadBalancerRequest
-	7,  // 16: dataplane.v1.DataplaneNode.DelLbBackend:input_type -> dataplane.v1.DelLbBackendRequest
-	10, // 17: dataplane.v1.DataplaneNode.ReplaceInterfaceFirewall:input_type -> dataplane.v1.ReplaceInterfaceFirewallRequest
-	33, // 18: dataplane.v1.DataplaneNode.ConfigureQoS:input_type -> dataplane.v1.ConfigureQoSRequest
-	13, // 19: dataplane.v1.DataplaneNode.AttachInterface:output_type -> dataplane.v1.AttachInterfaceResponse
-	18, // 20: dataplane.v1.DataplaneNode.DetachInterface:output_type -> dataplane.v1.DetachInterfaceResponse
-	15, // 21: dataplane.v1.DataplaneNode.ListInterfaces:output_type -> dataplane.v1.ListInterfacesResponse
-	20, // 22: dataplane.v1.DataplaneNode.ConfigureNetwork:output_type -> dataplane.v1.ConfigureNetworkResponse
-	22, // 23: dataplane.v1.DataplaneNode.AddRoute:output_type -> dataplane.v1.AddRouteResponse
-	24, // 24: dataplane.v1.DataplaneNode.WithdrawRoute:output_type -> dataplane.v1.WithdrawRouteResponse
-	26, // 25: dataplane.v1.DataplaneNode.AddNatSource:output_type -> dataplane.v1.AddNatSourceResponse
-	28, // 26: dataplane.v1.DataplaneNode.WithdrawNatSource:output_type -> dataplane.v1.WithdrawNatSourceResponse
-	30, // 27: dataplane.v1.DataplaneNode.AddNeighborNat:output_type -> dataplane.v1.AddNeighborNatResponse
-	32, // 28: dataplane.v1.DataplaneNode.WithdrawNeighborNat:output_type -> dataplane.v1.WithdrawNeighborNatResponse
-	2,  // 29: dataplane.v1.DataplaneNode.AddLoadBalancer:output_type -> dataplane.v1.AddLoadBalancerResponse
-	4,  // 30: dataplane.v1.DataplaneNode.AddLbBackend:output_type -> dataplane.v1.AddLbBackendResponse
-	6,  // 31: dataplane.v1.DataplaneNode.DelLoadBalancer:output_type -> dataplane.v1.DelLoadBalancerResponse
-	8,  // 32: dataplane.v1.DataplaneNode.DelLbBackend:output_type -> dataplane.v1.DelLbBackendResponse
-	11, // 33: dataplane.v1.DataplaneNode.ReplaceInterfaceFirewall:output_type -> dataplane.v1.ReplaceInterfaceFirewallResponse
-	34, // 34: dataplane.v1.DataplaneNode.ConfigureQoS:output_type -> dataplane.v1.ConfigureQoSResponse
-	19, // [19:35] is the sub-list for method output_type
-	3,  // [3:19] is the sub-list for method input_type
-	3,  // [3:3] is the sub-list for extension type_name
-	3,  // [3:3] is the sub-list for extension extendee
-	0,  // [0:3] is the sub-list for field type_name
+	33, // 3: dataplane.v1.ReplaceNeighborNatsRequest.blocks:type_name -> dataplane.v1.NeighborNatBlock
+	12, // 4: dataplane.v1.DataplaneNode.AttachInterface:input_type -> dataplane.v1.AttachInterfaceRequest
+	17, // 5: dataplane.v1.DataplaneNode.DetachInterface:input_type -> dataplane.v1.DetachInterfaceRequest
+	14, // 6: dataplane.v1.DataplaneNode.ListInterfaces:input_type -> dataplane.v1.ListInterfacesRequest
+	19, // 7: dataplane.v1.DataplaneNode.ConfigureNetwork:input_type -> dataplane.v1.ConfigureNetworkRequest
+	21, // 8: dataplane.v1.DataplaneNode.AddRoute:input_type -> dataplane.v1.AddRouteRequest
+	23, // 9: dataplane.v1.DataplaneNode.WithdrawRoute:input_type -> dataplane.v1.WithdrawRouteRequest
+	25, // 10: dataplane.v1.DataplaneNode.AddNatSource:input_type -> dataplane.v1.AddNatSourceRequest
+	27, // 11: dataplane.v1.DataplaneNode.WithdrawNatSource:input_type -> dataplane.v1.WithdrawNatSourceRequest
+	29, // 12: dataplane.v1.DataplaneNode.AddNeighborNat:input_type -> dataplane.v1.AddNeighborNatRequest
+	31, // 13: dataplane.v1.DataplaneNode.WithdrawNeighborNat:input_type -> dataplane.v1.WithdrawNeighborNatRequest
+	34, // 14: dataplane.v1.DataplaneNode.ReplaceNeighborNats:input_type -> dataplane.v1.ReplaceNeighborNatsRequest
+	1,  // 15: dataplane.v1.DataplaneNode.AddLoadBalancer:input_type -> dataplane.v1.AddLoadBalancerRequest
+	3,  // 16: dataplane.v1.DataplaneNode.AddLbBackend:input_type -> dataplane.v1.AddLbBackendRequest
+	5,  // 17: dataplane.v1.DataplaneNode.DelLoadBalancer:input_type -> dataplane.v1.DelLoadBalancerRequest
+	7,  // 18: dataplane.v1.DataplaneNode.DelLbBackend:input_type -> dataplane.v1.DelLbBackendRequest
+	10, // 19: dataplane.v1.DataplaneNode.ReplaceInterfaceFirewall:input_type -> dataplane.v1.ReplaceInterfaceFirewallRequest
+	36, // 20: dataplane.v1.DataplaneNode.ConfigureQoS:input_type -> dataplane.v1.ConfigureQoSRequest
+	13, // 21: dataplane.v1.DataplaneNode.AttachInterface:output_type -> dataplane.v1.AttachInterfaceResponse
+	18, // 22: dataplane.v1.DataplaneNode.DetachInterface:output_type -> dataplane.v1.DetachInterfaceResponse
+	15, // 23: dataplane.v1.DataplaneNode.ListInterfaces:output_type -> dataplane.v1.ListInterfacesResponse
+	20, // 24: dataplane.v1.DataplaneNode.ConfigureNetwork:output_type -> dataplane.v1.ConfigureNetworkResponse
+	22, // 25: dataplane.v1.DataplaneNode.AddRoute:output_type -> dataplane.v1.AddRouteResponse
+	24, // 26: dataplane.v1.DataplaneNode.WithdrawRoute:output_type -> dataplane.v1.WithdrawRouteResponse
+	26, // 27: dataplane.v1.DataplaneNode.AddNatSource:output_type -> dataplane.v1.AddNatSourceResponse
+	28, // 28: dataplane.v1.DataplaneNode.WithdrawNatSource:output_type -> dataplane.v1.WithdrawNatSourceResponse
+	30, // 29: dataplane.v1.DataplaneNode.AddNeighborNat:output_type -> dataplane.v1.AddNeighborNatResponse
+	32, // 30: dataplane.v1.DataplaneNode.WithdrawNeighborNat:output_type -> dataplane.v1.WithdrawNeighborNatResponse
+	35, // 31: dataplane.v1.DataplaneNode.ReplaceNeighborNats:output_type -> dataplane.v1.ReplaceNeighborNatsResponse
+	2,  // 32: dataplane.v1.DataplaneNode.AddLoadBalancer:output_type -> dataplane.v1.AddLoadBalancerResponse
+	4,  // 33: dataplane.v1.DataplaneNode.AddLbBackend:output_type -> dataplane.v1.AddLbBackendResponse
+	6,  // 34: dataplane.v1.DataplaneNode.DelLoadBalancer:output_type -> dataplane.v1.DelLoadBalancerResponse
+	8,  // 35: dataplane.v1.DataplaneNode.DelLbBackend:output_type -> dataplane.v1.DelLbBackendResponse
+	11, // 36: dataplane.v1.DataplaneNode.ReplaceInterfaceFirewall:output_type -> dataplane.v1.ReplaceInterfaceFirewallResponse
+	37, // 37: dataplane.v1.DataplaneNode.ConfigureQoS:output_type -> dataplane.v1.ConfigureQoSResponse
+	21, // [21:38] is the sub-list for method output_type
+	4,  // [4:21] is the sub-list for method input_type
+	4,  // [4:4] is the sub-list for extension type_name
+	4,  // [4:4] is the sub-list for extension extendee
+	0,  // [0:4] is the sub-list for field type_name
 }
 
 func init() { file_dataplane_proto_init() }
@@ -2196,7 +2395,7 @@ func file_dataplane_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_dataplane_proto_rawDesc), len(file_dataplane_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   35,
+			NumMessages:   38,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

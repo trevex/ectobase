@@ -29,6 +29,7 @@ const (
 	DataplaneNode_WithdrawNatSource_FullMethodName        = "/dataplane.v1.DataplaneNode/WithdrawNatSource"
 	DataplaneNode_AddNeighborNat_FullMethodName           = "/dataplane.v1.DataplaneNode/AddNeighborNat"
 	DataplaneNode_WithdrawNeighborNat_FullMethodName      = "/dataplane.v1.DataplaneNode/WithdrawNeighborNat"
+	DataplaneNode_ReplaceNeighborNats_FullMethodName      = "/dataplane.v1.DataplaneNode/ReplaceNeighborNats"
 	DataplaneNode_AddLoadBalancer_FullMethodName          = "/dataplane.v1.DataplaneNode/AddLoadBalancer"
 	DataplaneNode_AddLbBackend_FullMethodName             = "/dataplane.v1.DataplaneNode/AddLbBackend"
 	DataplaneNode_DelLoadBalancer_FullMethodName          = "/dataplane.v1.DataplaneNode/DelLoadBalancer"
@@ -68,6 +69,12 @@ type DataplaneNodeClient interface {
 	AddNeighborNat(ctx context.Context, in *AddNeighborNatRequest, opts ...grpc.CallOption) (*AddNeighborNatResponse, error)
 	// WithdrawNeighborNat removes a return-to-owner entry. Removing an absent one is not an error.
 	WithdrawNeighborNat(ctx context.Context, in *WithdrawNeighborNatRequest, opts ...grpc.CallOption) (*WithdrawNeighborNatResponse, error)
+	// ReplaceNeighborNats makes this node's neighbor-NAT blocks exactly `blocks` — the whole set a
+	// complete route-bus snapshot carries. Unchanged blocks are left alone (their return traffic
+	// sees no gap), blocks not in the set are removed, new ones added. Refused whole, with nothing
+	// changed, if the set has an empty range (INVALID_ARGUMENT), two blocks overlapping on one
+	// nat_ip (ALREADY_EXISTS) or more prefixes than the table holds (RESOURCE_EXHAUSTED).
+	ReplaceNeighborNats(ctx context.Context, in *ReplaceNeighborNatsRequest, opts ...grpc.CallOption) (*ReplaceNeighborNatsResponse, error)
 	// AddLoadBalancer registers an external load balancer LB address: an IPv4 (vni=0 for the WAN edge) with a set
 	// of (port, proto) services, programming the LB map + allocating a Maglev table. Backends are
 	// added via AddLbBackend. On the WAN edge, wan_rx Maglev-selects a backend and encaps to it.
@@ -199,6 +206,16 @@ func (c *dataplaneNodeClient) WithdrawNeighborNat(ctx context.Context, in *Withd
 	return out, nil
 }
 
+func (c *dataplaneNodeClient) ReplaceNeighborNats(ctx context.Context, in *ReplaceNeighborNatsRequest, opts ...grpc.CallOption) (*ReplaceNeighborNatsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReplaceNeighborNatsResponse)
+	err := c.cc.Invoke(ctx, DataplaneNode_ReplaceNeighborNats_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *dataplaneNodeClient) AddLoadBalancer(ctx context.Context, in *AddLoadBalancerRequest, opts ...grpc.CallOption) (*AddLoadBalancerResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(AddLoadBalancerResponse)
@@ -290,6 +307,12 @@ type DataplaneNodeServer interface {
 	AddNeighborNat(context.Context, *AddNeighborNatRequest) (*AddNeighborNatResponse, error)
 	// WithdrawNeighborNat removes a return-to-owner entry. Removing an absent one is not an error.
 	WithdrawNeighborNat(context.Context, *WithdrawNeighborNatRequest) (*WithdrawNeighborNatResponse, error)
+	// ReplaceNeighborNats makes this node's neighbor-NAT blocks exactly `blocks` — the whole set a
+	// complete route-bus snapshot carries. Unchanged blocks are left alone (their return traffic
+	// sees no gap), blocks not in the set are removed, new ones added. Refused whole, with nothing
+	// changed, if the set has an empty range (INVALID_ARGUMENT), two blocks overlapping on one
+	// nat_ip (ALREADY_EXISTS) or more prefixes than the table holds (RESOURCE_EXHAUSTED).
+	ReplaceNeighborNats(context.Context, *ReplaceNeighborNatsRequest) (*ReplaceNeighborNatsResponse, error)
 	// AddLoadBalancer registers an external load balancer LB address: an IPv4 (vni=0 for the WAN edge) with a set
 	// of (port, proto) services, programming the LB map + allocating a Maglev table. Backends are
 	// added via AddLbBackend. On the WAN edge, wan_rx Maglev-selects a backend and encaps to it.
@@ -350,6 +373,9 @@ func (UnimplementedDataplaneNodeServer) AddNeighborNat(context.Context, *AddNeig
 }
 func (UnimplementedDataplaneNodeServer) WithdrawNeighborNat(context.Context, *WithdrawNeighborNatRequest) (*WithdrawNeighborNatResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method WithdrawNeighborNat not implemented")
+}
+func (UnimplementedDataplaneNodeServer) ReplaceNeighborNats(context.Context, *ReplaceNeighborNatsRequest) (*ReplaceNeighborNatsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReplaceNeighborNats not implemented")
 }
 func (UnimplementedDataplaneNodeServer) AddLoadBalancer(context.Context, *AddLoadBalancerRequest) (*AddLoadBalancerResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method AddLoadBalancer not implemented")
@@ -570,6 +596,24 @@ func _DataplaneNode_WithdrawNeighborNat_Handler(srv interface{}, ctx context.Con
 	return interceptor(ctx, in, info, handler)
 }
 
+func _DataplaneNode_ReplaceNeighborNats_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReplaceNeighborNatsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DataplaneNodeServer).ReplaceNeighborNats(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DataplaneNode_ReplaceNeighborNats_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DataplaneNodeServer).ReplaceNeighborNats(ctx, req.(*ReplaceNeighborNatsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _DataplaneNode_AddLoadBalancer_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(AddLoadBalancerRequest)
 	if err := dec(in); err != nil {
@@ -724,6 +768,10 @@ var DataplaneNode_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "WithdrawNeighborNat",
 			Handler:    _DataplaneNode_WithdrawNeighborNat_Handler,
+		},
+		{
+			MethodName: "ReplaceNeighborNats",
+			Handler:    _DataplaneNode_ReplaceNeighborNats_Handler,
 		},
 		{
 			MethodName: "AddLoadBalancer",

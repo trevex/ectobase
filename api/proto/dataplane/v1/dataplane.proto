@@ -31,6 +31,12 @@ service DataplaneNode {
   rpc AddNeighborNat(AddNeighborNatRequest) returns (AddNeighborNatResponse);
   // WithdrawNeighborNat removes a return-to-owner entry. Removing an absent one is not an error.
   rpc WithdrawNeighborNat(WithdrawNeighborNatRequest) returns (WithdrawNeighborNatResponse);
+  // ReplaceNeighborNats makes this node's neighbor-NAT blocks exactly `blocks` — the whole set a
+  // complete route-bus snapshot carries. Unchanged blocks are left alone (their return traffic
+  // sees no gap), blocks not in the set are removed, new ones added. Refused whole, with nothing
+  // changed, if the set has an empty range (INVALID_ARGUMENT), two blocks overlapping on one
+  // nat_ip (ALREADY_EXISTS) or more prefixes than the table holds (RESOURCE_EXHAUSTED).
+  rpc ReplaceNeighborNats(ReplaceNeighborNatsRequest) returns (ReplaceNeighborNatsResponse);
   // AddLoadBalancer registers an external load balancer LB address: an IPv4 (vni=0 for the WAN edge) with a set
   // of (port, proto) services, programming the LB map + allocating a Maglev table. Backends are
   // added via AddLbBackend. On the WAN edge, wan_rx Maglev-selects a backend and encaps to it.
@@ -214,6 +220,20 @@ message WithdrawNeighborNatRequest {
   uint32 vni = 4;
 }
 message WithdrawNeighborNatResponse {}
+
+message NeighborNatBlock {
+  string nat_ip = 1;         // public IPv4 or IPv6 of the block
+  uint32 port_min = 2;       // inclusive
+  uint32 port_max = 3;       // exclusive
+  string owner_underlay = 4; // owner node underlay IPv6
+  uint32 vni = 5;
+}
+message ReplaceNeighborNatsRequest { repeated NeighborNatBlock blocks = 1; }
+message ReplaceNeighborNatsResponse {
+  uint32 added = 1;
+  uint32 kept = 2;
+  uint32 removed = 3;
+}
 
 message ConfigureQoSRequest {
   string interface_id = 1;      // target interface (as in AttachInterface)
