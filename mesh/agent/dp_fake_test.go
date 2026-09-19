@@ -15,12 +15,15 @@ import (
 // the programmed state. All access is guarded by mu; the interface methods are
 // safe to call from the bus's reconcile goroutines.
 type recordingDP struct {
-	mu             sync.Mutex
-	added          map[string]string // "vni prefix" -> nexthop
-	external       map[string]bool   // "vni prefix" -> external flag as programmed
-	withdrew       map[string]bool
-	nbrNat         map[string]string // "natIp min max" -> ownerUnderlay
-	nbrNatWd       map[string]bool
+	mu       sync.Mutex
+	added    map[string]string // "vni prefix" -> nexthop
+	external map[string]bool   // "vni prefix" -> external flag as programmed
+	withdrew map[string]bool
+	nbrNat   map[string]string // "natIp min max" -> ownerUnderlay
+	nbrNatWd map[string]bool
+	// nbrNatWdN counts WithdrawNeighborNat calls per block: a block withdrawn on a live delta must
+	// not be withdrawn a second time by a later fallback diff.
+	nbrNatWdN      map[string]int
 	nbrNatAdds     int                  // AddNeighborNat calls
 	nbrNatReplaces [][]NeighborNatBlock // every ReplaceNeighborNats call, in order
 	replaceErr     error                // returned by ReplaceNeighborNats when set (e.g. Unimplemented)
@@ -94,7 +97,7 @@ type natSrcCall struct {
 func newRecordingDP() *recordingDP {
 	return &recordingDP{
 		added: map[string]string{}, external: map[string]bool{}, withdrew: map[string]bool{},
-		nbrNat: map[string]string{}, nbrNatWd: map[string]bool{},
+		nbrNat: map[string]string{}, nbrNatWd: map[string]bool{}, nbrNatWdN: map[string]int{},
 		fwReplace:     map[string][]FwRuleWithID{},
 		lbRegistered:  map[string]lbCall{},
 		lbBackends:    map[string][]string{},
@@ -134,6 +137,7 @@ func (f *recordingDP) WithdrawNeighborNat(_ context.Context, natIp string, min, 
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.nbrNatWd[natKeyStr(natIp, min, max)] = true
+	f.nbrNatWdN[natKeyStr(natIp, min, max)]++
 	return nil
 }
 func (f *recordingDP) getNbrNat(natIp string, min, max uint32) (string, bool) {

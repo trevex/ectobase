@@ -156,7 +156,9 @@ type Bus struct {
 	seenNat      map[natEntry]string
 	seenPublic   map[publicEntry]bool
 	// replayingGlobal is true between a session's Hello and its EndOfGlobal: replayed NAT ADDs are
-	// collected in seenNat and applied as one replace at the marker, not one by one.
+	// collected in seenNat and applied as one replace at the marker, not one by one. It starts true
+	// so a Bus is never in a state a live session cannot be in — the first thing any session does is
+	// open a snapshot, and a record arriving before one has been closed belongs to that snapshot.
 	replayingGlobal bool
 	// globalRecords counts the NAT + public records received in this session BEFORE EndOfGlobal.
 	// It must equal the marker's count for the prune to be safe — see EndOfGlobal in the proto.
@@ -220,10 +222,12 @@ type publicEntry struct {
 	overlay string
 }
 
-// resetGlobalSnapshot starts a new global-snapshot epoch: the reflector is about to replay every
-// NAT block and public record, so forget what THIS session has seen and re-count. installedNat and
-// edgeLbs deliberately survive — they mirror dataplane state, which outlives the session, and are
-// what the prune diffs the incoming snapshot against.
+// resetGlobalSnapshot starts a new global-snapshot epoch: the reflector is about to replay this
+// session's global records — every NAT block and public record for a session that takes the feed,
+// nothing at all for one that opted out (a compute node, which gets only the marker) — so forget
+// what THIS session has seen and re-count. installedNat and edgeLbs deliberately survive: they
+// mirror dataplane state, which outlives the session. edgeLbs is what the LB prune diffs against,
+// and installedNat is the fallback path's diff basis (see syncNeighborNats).
 func (b *Bus) resetGlobalSnapshot() {
 	b.seenNat = map[natEntry]string{}
 	b.seenPublic = map[publicEntry]bool{}
@@ -327,8 +331,9 @@ func (b *Bus) pruneGlobal(ctx context.Context, want uint32) {
 // this agent was disconnected is removed — and so is one the dataplane adopted after a restart
 // that no agent remembers installing. A compute node's set is empty, which clears anything an
 // older agent installed there. An older dataplane without the call gets per-block programming and
-// the diff against what this agent installed; any other failure programs what arrived and prunes
-// nothing, retrying on the next resync.
+// the diff against what this agent installed. A transport failure changed nothing and is simply
+// retried on the next resync; any other failure may have applied part of the set, so the blocks are
+// programmed one by one to repair it, and nothing is pruned.
 func (b *Bus) syncNeighborNats(ctx context.Context) {
 	blocks := make([]NeighborNatBlock, 0, len(b.seenNat))
 	for e, owner := range b.seenNat {
@@ -340,6 +345,12 @@ func (b *Bus) syncNeighborNats(ctx context.Context) {
 		for e := range b.seenNat {
 			b.installedNat[e] = true
 		}
+		return
+	}
+	if transientDataplaneError(err) {
+		// The call never landed, so there is nothing to repair — and a per-block retry would meet
+		// the same dead connection, one failed RPC per block in the whole snapshot.
+		log.Printf("ReplaceNeighborNats (%d blocks): %v — dataplane unreachable, changed nothing; will retry on the next resync", len(blocks), err)
 		return
 	}
 	for e, owner := range b.seenNat {
@@ -362,6 +373,17 @@ func (b *Bus) syncNeighborNats(ctx context.Context) {
 	}
 }
 
+// transientDataplaneError reports whether err means the RPC never reached the dataplane's state —
+// the socket was down, the deadline passed, or we are shutting down. Nothing was applied, so the
+// caller has nothing to repair and retrying the same call per block would only fail N times.
+func transientDataplaneError(err error) bool {
+	switch status.Code(err) {
+	case codes.Unavailable, codes.DeadlineExceeded, codes.Canceled:
+		return true
+	}
+	return false
+}
+
 // defaultReconcileEvery bounds how stale this node's fabric-wide announcements can get after a CRD
 // change while the bus session stays up (the K8s watch would make this event-driven; the ticker is
 // the simple, robust floor).
@@ -371,19 +393,20 @@ func NewBus(nodeID, underlay string, dp Dataplane, isEdge bool) *Bus {
 	return &Bus{
 		nodeID: nodeID, underlay: underlay, dp: dp, isEdge: isEdge,
 		learnedEdge: map[string]string{}, learnedPublic: map[string]string{},
-		edgeLbs:        map[string]*edgeLb{},
-		installedNat:   map[natEntry]bool{},
-		seenNat:        map[natEntry]string{},
-		seenPublic:     map[publicEntry]bool{},
-		subscribedVNIs: map[uint32]bool{},
-		eorSeen:        map[uint32]bool{},
-		installed:      map[uint32]map[string]bool{},
-		seen:           map[uint32]map[string]bool{},
-		rxRoutes:       map[uint32]uint32{},
-		peerImports:    map[uint32][]PeerImport{},
-		origin:         map[uint32]map[string]string{},
-		learnedPeer:    map[uint32]map[string]string{},
-		reconcileEvery: defaultReconcileEvery,
+		edgeLbs:         map[string]*edgeLb{},
+		installedNat:    map[natEntry]bool{},
+		seenNat:         map[natEntry]string{},
+		replayingGlobal: true,
+		seenPublic:      map[publicEntry]bool{},
+		subscribedVNIs:  map[uint32]bool{},
+		eorSeen:         map[uint32]bool{},
+		installed:       map[uint32]map[string]bool{},
+		seen:            map[uint32]map[string]bool{},
+		rxRoutes:        map[uint32]uint32{},
+		peerImports:     map[uint32][]PeerImport{},
+		origin:          map[uint32]map[string]string{},
+		learnedPeer:     map[uint32]map[string]string{},
+		reconcileEvery:  defaultReconcileEvery,
 	}
 }
 
@@ -421,8 +444,9 @@ func (b *Bus) Run(ctx context.Context, cc rbv1.RouteBusClient, reconcile func(co
 	// disconnected (installed[] persists across sessions; the dataplane still holds those routes).
 	b.seen = map[uint32]map[string]bool{}
 	b.rxRoutes = map[uint32]uint32{}
-	// Same for the GLOBAL channel: registering replays every NAT block and public record, then
-	// EndOfGlobal. (installedNat/edgeLbs persist for the same reason installed[] does.)
+	// Same for the GLOBAL channel: an edge's Hello registers it for the feed, which replays every
+	// NAT block and public record and then EndOfGlobal; a compute node opted out and gets the bare
+	// marker. (installedNat/edgeLbs persist for the same reason installed[] does.)
 	b.resetGlobalSnapshot()
 
 	recvCh := make(chan *rbv1.ServerMsg, 64)
@@ -752,8 +776,9 @@ func (b *Bus) applyNat(ctx context.Context, nu *rbv1.NatUpdate) {
 	e := natEntry{natIP: nu.NatIp, portMin: nu.PortMin, portMax: nu.PortMax, vni: nu.Vni}
 	switch nu.Op {
 	case rbv1.RouteOp_ROUTE_OP_ADD:
-		// Mark seen BEFORE the call: a replayed record the dataplane rejects as a duplicate is
-		// still part of this snapshot, and must not then be pruned as absent from it.
+		// seenNat IS the desired set the marker hands to ReplaceNeighborNats, so record the block
+		// whether or not anything is programmed now: during the replay nothing is, and on a live
+		// delta the entry must survive a dataplane error rather than vanish from the next replace.
 		b.seenNat[e] = nu.OwnerUnderlay
 		if b.replayingGlobal {
 			return

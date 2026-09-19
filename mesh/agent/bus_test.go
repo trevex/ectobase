@@ -185,6 +185,7 @@ func TestApplyNatInstallsNeighborNatOnlyForRemoteOwners(t *testing.T) {
 	// An EDGE whose own underlay is fd00::b — only an edge holds neighbor-NAT blocks.
 	b := NewBus("edge", "fd00::b", dp, true)
 	ctx := context.Background()
+	openSession(ctx, b) // past the marker: NAT deltas program per block
 
 	// A block owned by a PEER (fd00::a) -> installs a neighbor-nat return route.
 	b.applyNat(ctx, &rbv1.NatUpdate{
@@ -212,6 +213,7 @@ func TestApplyNatInstallsNeighborNatForV6Block(t *testing.T) {
 	dp := newRecordingDP()
 	b := NewBus("edge", "fd00::b", dp, true)
 	ctx := context.Background()
+	openSession(ctx, b)
 
 	// Peer-owned (fd00::a) v6 block -> installs a neighbor-nat return route keyed by the v6 nat_ip.
 	b.applyNat(ctx, &rbv1.NatUpdate{
@@ -230,6 +232,13 @@ func TestApplyNatInstallsNeighborNatForV6Block(t *testing.T) {
 	if _, ok := dp.getNbrNat("2001:db8:2b::9", 4096, 5120); ok {
 		t.Fatalf("locally-owned v6 block must NOT install a neighbor-nat")
 	}
+}
+
+// openSession drives a Bus to where a live one spends nearly all its time: a session whose global
+// snapshot has been replayed and closed, so a later record is a delta and is programmed on arrival.
+func openSession(ctx context.Context, b *Bus) {
+	b.resetGlobalSnapshot()
+	b.handleServerMsg(ctx, endOfGlobal(0))
 }
 
 // A compute node holds no neighbor-NAT blocks: a NAT record, even a live one, programs nothing.

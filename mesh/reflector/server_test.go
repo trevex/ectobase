@@ -282,8 +282,9 @@ func TestSessionWithoutTheGlobalFeedGetsOnlyTheMarker(t *testing.T) {
 		t.Fatal("want the VNI's EndOfRIB next")
 	}
 
-	// A live NAT block, then a route in the subscribed VNI, from another session: the route arrives,
-	// the NAT block never does.
+	// A live NAT block and a live public record, then a route in the subscribed VNI, all from
+	// another session: the route arrives, neither global record ever does. The route is sent LAST
+	// and asserted first, so anything the global channel leaked would be received ahead of it.
 	edge, err := cl.Session(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -293,6 +294,9 @@ func TestSessionWithoutTheGlobalFeedGetsOnlyTheMarker(t *testing.T) {
 		{Msg: &pb.ClientMsg_AnnounceNat{AnnounceNat: &pb.AnnounceNat{
 			Vni: 100, SourceIp: "10.0.0.2", NatIp: "198.51.100.2", PortMin: 1024, PortMax: 2048, OwnerUnderlay: "fd00::b",
 		}}},
+		{Msg: &pb.ClientMsg_AnnouncePublic{AnnouncePublic: &pb.PublicPrefix{
+			Kind: pb.PublicKind_PUBLIC_KIND_EDGE_UNDERLAY, Prefix: "fd00::b/128", OwnerUnderlay: "fd00::b",
+		}}},
 		{Msg: &pb.ClientMsg_Announce{Announce: &pb.Announce{Vni: 100, Prefix: "10.0.0.2/32", NexthopUnderlay: "fd00::b"}}},
 	} {
 		if err := edge.Send(m); err != nil {
@@ -300,6 +304,6 @@ func TestSessionWithoutTheGlobalFeedGetsOnlyTheMarker(t *testing.T) {
 		}
 	}
 	if m := next(); m.GetRouteUpdate() == nil {
-		t.Fatalf("want the route, and no NAT record before it; got %+v", m.Msg)
+		t.Fatalf("want the route, and no NAT or public record before it; got %+v", m.Msg)
 	}
 }

@@ -194,6 +194,86 @@ func TestEdgeFallsBackWhenTheDataplaneCannotReplace(t *testing.T) {
 	}
 }
 
+// A Bus that has not closed a snapshot is replaying one — the state every session starts in and
+// the only state a fresh Bus can honestly be in. Programming a record now would be programming
+// against a set that is still arriving.
+func TestAFreshBusIsReplayingItsSnapshot(t *testing.T) {
+	dp := newRecordingDP()
+	b := NewBus("edge", "fd00::e", dp, true)
+	b.handleServerMsg(context.Background(), natAdd("192.0.2.7", 1024, 2048, "fd00::a", 100))
+	if dp.nbrNatAdds != 0 {
+		t.Fatalf("a Bus with no closed snapshot must collect, not program; got %d adds", dp.nbrNatAdds)
+	}
+}
+
+// The fallback's diff basis is what a SUCCESSFUL replace installed, kept current by the live
+// deltas since — the new-agent/old-dataplane skew the fallback exists for. It must withdraw exactly
+// the blocks that replace still holds and the snapshot dropped: not one the agent already withdrew
+// on a live delta (a second withdraw is a call against state nothing holds), and not a replayed one.
+func TestFallbackDiffWithdrawsExactlyWhatTheReplaceStillHolds(t *testing.T) {
+	ctx := context.Background()
+	dp := newRecordingDP()
+	b := NewBus("edge", "fd00::e", dp, true)
+
+	// Session 1 against a dataplane that CAN replace: three blocks land in one call.
+	b.resetGlobalSnapshot()
+	b.handleServerMsg(ctx, natAdd("192.0.2.7", 1024, 2048, "fd00::a", 100))
+	b.handleServerMsg(ctx, natAdd("192.0.2.8", 2048, 3072, "fd00::c", 100))
+	b.handleServerMsg(ctx, natAdd("192.0.2.9", 3072, 4096, "fd00::d", 100))
+	b.handleServerMsg(ctx, endOfGlobal(3))
+
+	// .9's owner releases it while the session is up: a live withdraw, already applied.
+	b.handleServerMsg(ctx, natWithdraw("192.0.2.9", 3072, 4096, "fd00::d", 100))
+
+	// Reconnect onto a dataplane without the call, with a snapshot carrying only .7.
+	dp.replaceErr = status.Error(codes.Unimplemented, "unknown method ReplaceNeighborNats")
+	b.resetGlobalSnapshot()
+	b.handleServerMsg(ctx, natAdd("192.0.2.7", 1024, 2048, "fd00::a", 100))
+	b.handleServerMsg(ctx, endOfGlobal(1))
+
+	if got := dp.nbrNatWdN[natKeyStr("192.0.2.8", 2048, 3072)]; got != 1 {
+		t.Fatalf("the block the snapshot dropped must be withdrawn exactly once, got %d calls", got)
+	}
+	if got := dp.nbrNatWdN[natKeyStr("192.0.2.9", 3072, 4096)]; got != 1 {
+		t.Fatalf("the live-withdrawn block must not be withdrawn again by the diff, got %d calls", got)
+	}
+	if got := dp.nbrNatWdN[natKeyStr("192.0.2.7", 1024, 2048)]; got != 0 {
+		t.Fatalf("the replayed block must not be withdrawn, got %d calls", got)
+	}
+}
+
+// A replace that never reached the dataplane changed nothing, so there is nothing to repair: one
+// AddNeighborNat per block would only meet the same dead socket. Any other error may have applied
+// part of the set, and those blocks ARE reprogrammed. Neither prunes.
+func TestEdgeReplaceFailureRepairsOnlyWhatMayHaveLanded(t *testing.T) {
+	cases := []struct {
+		code     codes.Code
+		wantAdds int
+	}{
+		{codes.Unavailable, 0},
+		{codes.DeadlineExceeded, 0},
+		{codes.Internal, 2}, // the dataplane answered: the set may be part-way applied
+	}
+	for _, tc := range cases {
+		t.Run(tc.code.String(), func(t *testing.T) {
+			ctx := context.Background()
+			dp := newRecordingDP()
+			dp.replaceErr = status.Error(tc.code, "replace failed")
+			b := NewBus("edge", "fd00::e", dp, true)
+			b.resetGlobalSnapshot()
+			b.handleServerMsg(ctx, natAdd("192.0.2.7", 1024, 2048, "fd00::a", 100))
+			b.handleServerMsg(ctx, natAdd("192.0.2.8", 2048, 3072, "fd00::c", 100))
+			b.handleServerMsg(ctx, endOfGlobal(2))
+			if dp.nbrNatAdds != tc.wantAdds {
+				t.Fatalf("want %d per-block adds after a %v replace, got %d", tc.wantAdds, tc.code, dp.nbrNatAdds)
+			}
+			if len(dp.nbrNatWd) != 0 {
+				t.Fatalf("a failed replace must prune nothing, got %v", dp.nbrNatWd)
+			}
+		})
+	}
+}
+
 // The traffic-affecting half at the edge: a backend that stopped announcing while the edge agent
 // was disconnected keeps receiving its Maglev share until something removes it.
 func TestEndOfGlobalPrunesUnreplayedLbBackend(t *testing.T) {
