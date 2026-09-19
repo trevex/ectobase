@@ -257,7 +257,7 @@ sim-anchor: verifier ## Privileged BPF_PROG_TEST_RUN byte-parity anchors (native
 	sudo -E $$(command -v cargo) test -p flowplane --test anchor_uplink -- --ignored    # uplink_rx fails safe (base N-S)
 	sudo -E $$(command -v cargo) test -p flowplane --test anchor_lb -- --ignored         # uplink_rx fails safe (LB local-deliver)
 	sudo -E $$(command -v cargo) test -p flowplane --test anchor_dnat -- --ignored       # uplink_rx fails safe (DNAT return)
-	sudo -E $$(command -v cargo) test -p flowplane --test anchor_guest_tx -- --ignored   # tc_guest_tx encap: redirect + inner-unchanged
+	sudo -E $$(command -v cargo) test -p flowplane --test anchor_guest_tx -- --ignored   # tc_guest_tx encap + fw classifier v4/v6 + CT epoch
 	sudo -E $$(command -v cargo) test -p flowplane --test anchor_dhcp -- --ignored       # tc_guest_dhcp DHCPv4 OFFER (native + golden)
 	# NOT YET ANCHORED (coverage gaps, tracked separately — do not assume these are covered):
 	#   - tc_guest_dhcp DHCPv6 ADVERTISE/REPLY (only the DHCPv4 OFFER is byte-anchored above).

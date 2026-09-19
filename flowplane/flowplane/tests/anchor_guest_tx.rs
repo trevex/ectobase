@@ -34,6 +34,15 @@
 //! `test_run`, so we issue the raw `bpf(BPF_PROG_TEST_RUN, ...)` syscall on the fd of aya's loaded
 //! `SchedClassifier`.
 //!
+//! ## The firewall classifier and the conntrack epoch
+//!
+//! The sim models the kernel's LPM tries and runs the core evaluator natively. The classifier
+//! anchors below run the SAME compiled scopes through the real bytecode and the kernel's own tries
+//! (`tc_guest_tx` for v4, `tc_guest_egress_v6` for v6): a divergence in the key layout (class byte
+//! order, big-endian port prefixes, prefix lengths), in the two-probe arbitration or in the epoch
+//! recheck shows up as a verdict mismatch. Every case asserts its expected verdict AND parity with
+//! the native sim; the epoch anchor also reads the conntrack entries the bytecode wrote.
+//!
 //! Privileged: needs CAP_BPF + a kernel with tc test-run. Run via `make sim-anchor`.
 
 use std::os::fd::{AsFd, AsRawFd, RawFd};
@@ -42,7 +51,8 @@ use aya::maps::lpm_trie::{Key, LpmTrie};
 use aya::maps::{Array, HashMap as AyaHashMap};
 use aya::programs::SchedClassifier;
 use flowplane_common::{
-    FwMeta, FwRule, Local, PortMeta, RouteLpmData, RouteValue, FW_ACTION_ACCEPT, FW_DIR_EGRESS,
+    CtEntry, CtKey, FwBind, FwMeta, FwRule, FwRule6, Local, PortMeta, RouteLpmData, RouteLpmData6,
+    RouteValue, CT_F_DEFAULT, CT_F_REPLY, FW_ACTION_ACCEPT, FW_ACTION_DROP, FW_DIR_EGRESS,
 };
 use flowplane_core::pkt::Action;
 use flowplane_sim::SimNode;
@@ -120,7 +130,7 @@ fn egress_allow_rule() -> FwRule {
 /// Program the loaded object's firewall classifier for `ifindex` the way the dataplane does: compile
 /// the interface's rules into per-direction scopes, build each scope's tries, insert them into the
 /// outer maps, then bind the interface (`FW_BIND`).
-fn seed_classifier(ebpf: &mut aya::Ebpf, ifindex: u32, rules: &[FwRule]) {
+fn seed_classifier(ebpf: &mut aya::Ebpf, ifindex: u32, rules: &[FwRule], rules6: &[FwRule6]) {
     use aya::maps::{lpm_trie::Key, of_maps::HashOfMaps, LpmTrie, MapData};
     use flowplane_common::{FwBind, FwPolKey, FW_DIR_EGRESS, FW_DIR_INGRESS};
     use flowplane_control::fwclass::compile_scope;
@@ -136,7 +146,7 @@ fn seed_classifier(ebpf: &mut aya::Ebpf, ifindex: u32, rules: &[FwRule]) {
     }
     let mut bind = FwBind::default();
     for dir in [FW_DIR_INGRESS, FW_DIR_EGRESS] {
-        let Some(scope) = compile_scope(dir, rules.iter(), [].iter()).unwrap() else {
+        let Some(scope) = compile_scope(dir, rules.iter(), rules6.iter()).unwrap() else {
             continue;
         };
         let c4 = trie(scope.v4.classes.iter().map(|&(a, l, c)| (l as u32, a, c)));
@@ -339,7 +349,7 @@ fn guest_tx_encap_redirect_inner_unchanged_matches_native_sim() {
             Array::try_from(ebpf.map_mut("LOCAL").expect("LOCAL map")).unwrap();
         local_map.set(0, local(), 0).expect("write LOCAL[0]");
     }
-    seed_classifier(&mut ebpf, IFINDEX, &[egress_allow_rule()]);
+    seed_classifier(&mut ebpf, IFINDEX, &[egress_allow_rule()], &[]);
 
     // 3. Load (verify) the tc_guest_tx classifier and get its kernel fd.
     let prog: &mut SchedClassifier = ebpf
@@ -380,3 +390,405 @@ fn guest_tx_encap_redirect_inner_unchanged_matches_native_sim() {
         "tc_guest_tx must not mutate the inner frame on the encap arm"
     );
 }
+
+// --- The firewall classifier and the conntrack epoch in real bytecode --------------------------
+
+const TC_ACT_SHOT: u32 = 2;
+const TCP: u8 = 6;
+const UDP: u8 = 17;
+const ICMP: u8 = 1;
+const ICMP6: u8 = 58;
+const ANY_PORT: (u16, u16) = (0, 65535);
+const NO_ICMP: u16 = 0xffff;
+const GUEST_IP6: [u8; 16] = [0x20, 1, 0xd, 0xb8, 0xff, 0xff, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x20];
+
+fn prefix_mask<const N: usize>(len: u8) -> [u8; N] {
+    let mut m = [0u8; N];
+    for i in 0..len as usize {
+        m[i / 8] |= 0x80 >> (i % 8);
+    }
+    m
+}
+
+/// An egress rule toward the peer `dst/len`. `proto` 0 is any protocol; `ports` is the destination
+/// port range (TCP/UDP); `icmp` is the ICMP type (ICMP only).
+fn rule4(dst: [u8; 4], len: u8, proto: u8, ports: (u16, u16), icmp: u16, allow: bool) -> FwRule {
+    FwRule {
+        dst_ip: dst,
+        dst_mask: prefix_mask(len),
+        src_port_max: 65535,
+        dst_port_min: ports.0,
+        dst_port_max: ports.1,
+        icmp_type: icmp,
+        icmp_code: NO_ICMP,
+        proto,
+        action: if allow { FW_ACTION_ACCEPT } else { FW_ACTION_DROP },
+        direction: FW_DIR_EGRESS,
+        enabled: 1,
+        ..Default::default()
+    }
+}
+
+fn rule6(dst: [u8; 16], len: u8, proto: u8, ports: (u16, u16), icmp: u16, allow: bool) -> FwRule6 {
+    FwRule6 {
+        dst_ip: dst,
+        dst_mask: prefix_mask(len),
+        src_port_max: 65535,
+        dst_port_min: ports.0,
+        dst_port_max: ports.1,
+        icmp_type: icmp,
+        icmp_code: NO_ICMP,
+        proto,
+        action: if allow { FW_ACTION_ACCEPT } else { FW_ACTION_DROP },
+        direction: FW_DIR_EGRESS,
+        enabled: 1,
+        ..Default::default()
+    }
+}
+
+/// First match wins, in this order. Chosen so every classifier mechanism decides some case: a
+/// narrow deny above a wider allow (per-class shadowing of the expansion), a port range (masked
+/// prefixes, both edges), a class-0 rule above a class's later deny (the two-probe arbitration),
+/// and a /8 port rule behind a /16 deny-any.
+fn rules4() -> Vec<FwRule> {
+    vec![
+        rule4([10, 1, 1, 0], 24, TCP, (22, 22), NO_ICMP, false),
+        rule4([10, 1, 0, 0], 16, TCP, ANY_PORT, NO_ICMP, true),
+        rule4([10, 2, 0, 0], 16, UDP, (8000, 8100), NO_ICMP, true),
+        rule4([0; 4], 0, ICMP, ANY_PORT, 8, true),
+        rule4([10, 3, 0, 0], 16, 0, ANY_PORT, NO_ICMP, false),
+        rule4([10, 0, 0, 0], 8, TCP, (443, 443), NO_ICMP, true),
+    ]
+}
+
+const NET6: [u8; 16] = [0x20, 1, 0xd, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+
+fn v6(net: [u8; 16], sub: u8, host: u8) -> [u8; 16] {
+    let mut a = net;
+    a[5] = sub;
+    a[15] = host;
+    a
+}
+
+fn rules6() -> Vec<FwRule6> {
+    vec![
+        rule6(v6(NET6, 1, 0), 64, TCP, (22, 22), NO_ICMP, false),
+        rule6(NET6, 32, TCP, ANY_PORT, NO_ICMP, true),
+        rule6([0; 16], 0, ICMP6, ANY_PORT, 128, true),
+    ]
+}
+
+#[derive(Clone, Copy, Debug)]
+enum L4 {
+    Tcp(u16),
+    Udp(u16),
+    Echo(u8),
+}
+
+/// A guest frame from the guest to `dst`: a TCP SYN / UDP datagram from `sport`, or an ICMP message
+/// of type `t` (8/0 on v4, 128/129 on v6) with id `sport`.
+fn frame4(dst: [u8; 4], l4: L4, sport: u16) -> Vec<u8> {
+    use etherparse::PacketBuilder;
+    let b = PacketBuilder::ethernet2(GUEST_MAC, [0xbb; 6]).ipv4(GUEST_IP, dst, 64);
+    let mut f = Vec::new();
+    match l4 {
+        L4::Tcp(p) => b.tcp(sport, p, 1, 1024).syn().write(&mut f, &[]),
+        L4::Udp(p) => b.udp(sport, p).write(&mut f, &[]),
+        L4::Echo(8) => b.icmpv4_echo_request(sport, 1).write(&mut f, &[]),
+        L4::Echo(_) => b.icmpv4_echo_reply(sport, 1).write(&mut f, &[]),
+    }
+    .unwrap();
+    f
+}
+
+fn frame6(dst: [u8; 16], l4: L4, sport: u16) -> Vec<u8> {
+    use etherparse::PacketBuilder;
+    let b = PacketBuilder::ethernet2(GUEST_MAC, [0xbb; 6]).ipv6(GUEST_IP6, dst, 64);
+    let mut f = Vec::new();
+    match l4 {
+        L4::Tcp(p) => b.tcp(sport, p, 1, 1024).syn().write(&mut f, &[]),
+        L4::Udp(p) => b.udp(sport, p).write(&mut f, &[]),
+        L4::Echo(128) => b.icmpv6_echo_request(sport, 1).write(&mut f, &[]),
+        L4::Echo(_) => b.icmpv6_echo_reply(sport, 1).write(&mut f, &[]),
+    }
+    .unwrap();
+    f
+}
+
+fn port_meta6() -> PortMeta {
+    PortMeta {
+        guest_ipv6: GUEST_IP6,
+        ..port_meta()
+    }
+}
+
+/// The real object with the maps the encap path reads, the given rules compiled into the classifier
+/// on `IFINDEX`, a host route to every destination, and both guest-egress programs loaded. The
+/// native twin gets the same rules (as the legacy seeds its classifier state derives from) and
+/// routes.
+struct Rig {
+    ebpf: aya::Ebpf,
+    _pin: tempfile::TempDir,
+    fd4: RawFd,
+    fd6: RawFd,
+    sim: SimNode,
+}
+
+impl Rig {
+    fn new(rules: &[FwRule], rules6: &[FwRule6], dsts: &[[u8; 4]], dsts6: &[[u8; 16]]) -> Self {
+        let bytes = aya::include_bytes_aligned!(concat!(env!("OUT_DIR"), "/flowplane-prog"));
+        let pin = tempfile::Builder::new()
+            .prefix("flowplane-anchor-fw-")
+            .tempdir_in("/sys/fs/bpf")
+            .expect("bpffs tempdir");
+        let mut ebpf = aya::EbpfLoader::new()
+            .default_map_pin_directory(pin.path())
+            .load(bytes)
+            .expect("load compiled eBPF object");
+        let mut sim = SimNode::new();
+        sim.src_ifindex = IFINDEX;
+        sim.maps.local = Some(local());
+        {
+            let mut m: AyaHashMap<_, u32, PortMeta> =
+                AyaHashMap::try_from(ebpf.map_mut("PORT_META").unwrap()).unwrap();
+            m.insert(IFINDEX, port_meta6(), 0).unwrap();
+        }
+        {
+            let mut r: LpmTrie<_, RouteLpmData, RouteValue> =
+                LpmTrie::try_from(ebpf.map_mut("ROUTES").unwrap()).unwrap();
+            for d in dsts {
+                let k = RouteLpmData {
+                    vni: VNI.to_be_bytes(),
+                    ipv4: *d,
+                };
+                r.insert(&Key::new(64, k), route_value(), 0).unwrap();
+                sim.maps.add_route4(VNI, *d, route_value());
+            }
+        }
+        {
+            let mut r: LpmTrie<_, RouteLpmData6, RouteValue> =
+                LpmTrie::try_from(ebpf.map_mut("ROUTES6").unwrap()).unwrap();
+            for d in dsts6 {
+                let k = RouteLpmData6 {
+                    vni: VNI.to_be_bytes(),
+                    ipv6: *d,
+                };
+                r.insert(&Key::new(160, k), route_value(), 0).unwrap();
+                sim.maps.add_route6(VNI, *d, route_value());
+            }
+        }
+        {
+            let mut l: Array<_, Local> = Array::try_from(ebpf.map_mut("LOCAL").unwrap()).unwrap();
+            l.set(0, local(), 0).unwrap();
+        }
+        seed_classifier(&mut ebpf, IFINDEX, rules, rules6);
+        let count = |dir| rules.iter().filter(|r| r.direction == dir).count() as u32;
+        sim.maps.fw_meta.insert(
+            IFINDEX,
+            FwMeta {
+                ingress_count: 0,
+                egress_count: count(FW_DIR_EGRESS),
+            },
+        );
+        for (i, r) in rules.iter().enumerate() {
+            sim.maps.fw_rules.insert((IFINDEX, i as u32), *r);
+        }
+        sim.maps.fw_meta6.insert(
+            IFINDEX,
+            FwMeta {
+                ingress_count: 0,
+                egress_count: rules6.len() as u32,
+            },
+        );
+        for (i, r) in rules6.iter().enumerate() {
+            sim.maps.fw_rules6.insert((IFINDEX, i as u32), *r);
+        }
+        let mut fd = |name: &str| {
+            let prog: &mut SchedClassifier =
+                ebpf.program_mut(name).unwrap().try_into().unwrap();
+            prog.load().unwrap_or_else(|e| panic!("verify/load {name}: {e}"));
+            prog.fd().unwrap().as_fd().as_raw_fd()
+        };
+        let (fd4, fd6) = (fd("tc_guest_tx"), fd("tc_guest_egress_v6"));
+        Rig {
+            ebpf,
+            _pin: pin,
+            fd4,
+            fd6,
+            sim,
+        }
+    }
+
+    /// Run `frame` through the real program and the native twin; assert they agree (verdict and
+    /// bytes) and return whether the packet was forwarded.
+    fn run(&mut self, frame: &[u8], v6: bool, what: &str) -> bool {
+        let (fd, native) = if v6 {
+            (self.fd6, self.sim.guest_tx_v6(frame, &port_meta6()))
+        } else {
+            (self.fd4, self.sim.guest_tx(frame, &port_meta6()))
+        };
+        let out = bpf_prog_test_run_skb(fd, frame, IFINDEX).expect("BPF_PROG_TEST_RUN");
+        let allowed = match out.retval {
+            TC_ACT_REDIRECT => true,
+            TC_ACT_SHOT => false,
+            other => panic!("{what}: unexpected tc action {other}"),
+        };
+        let native_allowed = match native.action {
+            Action::Redirect(_) => true,
+            Action::Drop => false,
+            other => panic!("{what}: unexpected native action {other:?}"),
+        };
+        assert_eq!(
+            allowed, native_allowed,
+            "{what}: real bytecode {} but the native sim {}",
+            if allowed { "forwards" } else { "drops" },
+            if native_allowed { "forwards" } else { "drops" },
+        );
+        if allowed {
+            assert_eq!(out.data, frame, "{what}: the encap path writes no bytes");
+            assert_eq!(native.pkt, frame, "{what}: native wrote bytes");
+        }
+        allowed
+    }
+
+    fn ct(&self, key: &CtKey) -> Option<CtEntry> {
+        let m: AyaHashMap<_, CtKey, CtEntry> =
+            AyaHashMap::try_from(self.ebpf.map("CONNTRACK").unwrap()).unwrap();
+        m.get(key, 0).ok()
+    }
+
+    fn set_epoch(&mut self, epoch: u32) {
+        let mut a: Array<_, u32> = Array::try_from(self.ebpf.map_mut("FW_EPOCH").unwrap()).unwrap();
+        a.set(0, epoch, 0).unwrap();
+        self.sim.maps.fw_epoch = epoch;
+    }
+
+    /// Rebind `IFINDEX` to no scopes (every rule revoked), in both the kernel and the twin.
+    fn revoke_all(&mut self) {
+        let mut b: AyaHashMap<_, u32, FwBind> =
+            AyaHashMap::try_from(self.ebpf.map_mut("FW_BIND").unwrap()).unwrap();
+        b.insert(IFINDEX, FwBind::default(), 0).unwrap();
+        self.sim.maps.fw_bind.insert(IFINDEX, FwBind::default());
+    }
+}
+
+#[test]
+#[ignore = "privileged: run via `make sim-anchor` (needs CAP_BPF + kernel tc test-run)"]
+fn classifier_v4_verdicts_match_native_sim() {
+    use L4::*;
+    let cases: &[([u8; 4], L4, bool, &str)] = &[
+        ([10, 1, 1, 5], Tcp(22), false, "a narrow deny outranks the wider allow"),
+        ([10, 1, 1, 5], Tcp(80), true, "the wider allow, expanded into the narrow class"),
+        ([10, 1, 2, 5], Tcp(22), true, "outside the narrow class"),
+        ([10, 1, 1, 5], Udp(53), false, "no UDP rule covers 10.1/16"),
+        ([10, 2, 0, 9], Udp(8000), true, "port range, low edge"),
+        ([10, 2, 0, 9], Udp(8100), true, "port range, high edge"),
+        ([10, 2, 0, 9], Udp(8101), false, "just past the range"),
+        ([10, 2, 0, 9], Udp(7999), false, "just below the range"),
+        ([10, 3, 0, 1], Tcp(443), false, "a /16 deny-any outranks the later /8 port allow"),
+        ([10, 4, 0, 1], Tcp(443), true, "the /8 port allow"),
+        ([10, 4, 0, 1], Tcp(444), false, "the /8 allow is port 443 only"),
+        ([192, 168, 1, 1], Echo(8), true, "class 0 (any peer): echo request"),
+        ([192, 168, 1, 1], Echo(0), false, "an echo reply is not an echo request"),
+        ([10, 3, 0, 1], Echo(8), true, "the class-0 rule outranks the class's later deny"),
+        ([192, 168, 1, 1], Tcp(443), false, "no rule for this peer and port"),
+    ];
+    let dsts: Vec<[u8; 4]> = cases.iter().map(|c| c.0).collect();
+    let mut rig = Rig::new(&rules4(), &[], &dsts, &[]);
+    for (i, &(dst, l4, want, what)) in cases.iter().enumerate() {
+        // A fresh source port per case: every case is a NEW flow, so it meets the firewall.
+        let got = rig.run(&frame4(dst, l4, 40000 + i as u16), false, what);
+        assert_eq!(got, want, "{what}: {dst:?} {l4:?}");
+    }
+}
+
+#[test]
+#[ignore = "privileged: run via `make sim-anchor` (needs CAP_BPF + kernel tc test-run)"]
+fn classifier_v6_verdicts_match_native_sim() {
+    use L4::*;
+    let other = [0x20, 1, 0xd, 0xb9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
+    let cases: &[([u8; 16], L4, bool, &str)] = &[
+        (v6(NET6, 1, 5), Tcp(22), false, "a narrow /64 deny outranks the /32 allow"),
+        (v6(NET6, 1, 5), Tcp(80), true, "the /32 allow, expanded into the /64 class"),
+        (v6(NET6, 2, 5), Tcp(22), true, "outside the /64"),
+        (other, Tcp(80), false, "no rule for this peer"),
+        (other, Echo(128), true, "class 0 (any peer): ICMPv6 echo request"),
+        (other, Echo(129), false, "an echo reply is not an echo request"),
+    ];
+    let dsts: Vec<[u8; 16]> = cases.iter().map(|c| c.0).collect();
+    let mut rig = Rig::new(&[], &rules6(), &[], &dsts);
+    for (i, &(dst, l4, want, what)) in cases.iter().enumerate() {
+        let got = rig.run(&frame6(dst, l4, 40000 + i as u16), true, what);
+        assert_eq!(got, want, "{what}: {l4:?}");
+    }
+}
+
+/// A TCP segment of an established guest flow toward `dst:443` (ACK set, no SYN).
+fn ack4(dst: [u8; 4], sport: u16) -> Vec<u8> {
+    use etherparse::PacketBuilder;
+    let mut f = Vec::new();
+    PacketBuilder::ethernet2(GUEST_MAC, [0xbb; 6])
+        .ipv4(GUEST_IP, dst, 64)
+        .tcp(sport, 443, 2, 1024)
+        .ack(1)
+        .write(&mut f, &[])
+        .unwrap();
+    f
+}
+
+fn ct_key(dst: [u8; 4], sport: u16) -> CtKey {
+    CtKey {
+        vni: VNI,
+        src_ip: GUEST_IP,
+        dst_ip: dst,
+        src_port: sport,
+        dst_port: 443,
+        proto: TCP,
+        _pad: [0; 3],
+    }
+}
+
+#[test]
+#[ignore = "privileged: run via `make sim-anchor` (needs CAP_BPF + kernel tc test-run)"]
+fn conntrack_epoch_revocation_matches_native_sim() {
+    const PEER: [u8; 4] = [10, 4, 0, 1];
+    let (f, g) = (50001, 50002);
+    let mut rig = Rig::new(&rules4(), &[], &[PEER], &[]);
+
+    // A new flow is stamped with the epoch it was admitted under; its reverse entry is a reply.
+    assert!(rig.run(&frame4(PEER, L4::Tcp(443), f), false, "F: new, allowed"));
+    let e = rig.ct(&ct_key(PEER, f)).expect("F tracked");
+    assert_eq!(e.policy_epoch, 0);
+    let rev = CtKey {
+        src_ip: PEER,
+        dst_ip: GUEST_IP,
+        src_port: 443,
+        dst_port: f,
+        ..ct_key(PEER, f)
+    };
+    assert_eq!(
+        rig.ct(&rev).expect("reverse pre-seeded").flags,
+        CT_F_DEFAULT | CT_F_REPLY
+    );
+
+    // A bump with the policy unchanged: re-evaluated once, still allowed, re-stamped.
+    rig.set_epoch(1);
+    assert!(rig.run(&ack4(PEER, f), false, "F: stale, still allowed"));
+    assert_eq!(rig.ct(&ct_key(PEER, f)).unwrap().policy_epoch, 1);
+    assert!(rig.run(&frame4(PEER, L4::Tcp(443), g), false, "G: new, allowed"));
+
+    // Revoked without a bump: established flows keep their verdict until the epoch moves...
+    rig.revoke_all();
+    assert!(rig.run(&ack4(PEER, f), false, "F: current epoch, fast path"));
+    assert!(rig.run(&ack4(PEER, g), false, "G: current epoch, fast path"));
+    // ...except a bare SYN, which is a new connection on a reused tuple.
+    assert!(!rig.run(&frame4(PEER, L4::Tcp(443), g), false, "G: SYN meets the policy"));
+    assert!(rig.ct(&ct_key(PEER, g)).is_none(), "the refused flow is forgotten");
+
+    // The bump reaches F on its next packet, and the refusal forgets both of its entries.
+    rig.set_epoch(2);
+    assert!(!rig.run(&ack4(PEER, f), false, "F: stale, now refused"));
+    assert!(rig.ct(&ct_key(PEER, f)).is_none(), "forward entry forgotten");
+    assert!(rig.ct(&rev).is_none(), "its reply entry too");
+}
+
