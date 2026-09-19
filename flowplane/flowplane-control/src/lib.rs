@@ -8,7 +8,7 @@ pub mod maglev;
 pub mod mem;
 mod nat;
 pub mod natowner;
-pub mod ports;
+mod ports;
 mod routes;
 pub mod shadow;
 pub mod writer;

@@ -10,7 +10,8 @@ use flowplane_common::{
 };
 
 /// The trie entries `(prefix_len, key, owner)` that store block `b`: one per aligned port prefix of
-/// `[port_min, port_max)`. Empty for an empty range.
+/// `[port_min, port_max)`. Empty for an empty range. `enabled` is not consulted: a written block is
+/// live.
 pub fn owner_prefixes4(b: &NeighborNatEntry) -> Vec<(u32, NatOwnerKey, NatOwner)> {
     if b.port_min >= b.port_max {
         return Vec::new();
@@ -86,6 +87,8 @@ impl fmt::Display for NeighborNatError {
     }
 }
 
+// No source(): Display already renders the anyhow chain, so a chain-walking reporter would print
+// it twice.
 impl std::error::Error for NeighborNatError {}
 
 impl From<anyhow::Error> for NeighborNatError {
@@ -97,12 +100,28 @@ impl From<anyhow::Error> for NeighborNatError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flowplane_common::{NeighborNatEntry, NAT_OWNER_ADDR_BITS4};
+
+    const NAT_IP: [u8; 4] = [203, 0, 113, 9];
+    const NAT_IP6: [u8; 16] = [0x20, 1, 0xd, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 9];
+    const UNDERLAY: [u8; 16] = [7; 16];
+
+    // A mid-range block, single-port and odd-width blocks, the two split-heaviest ranges
+    // (an odd start one below the top, and the full range minus its first port), and the two
+    // extremes `port_prefixes` decomposes at: port 0 and port 65535.
+    const RANGES: [(u16, u16); 7] = [
+        (20000, 30000),
+        (1, 65535),
+        (5, 6),
+        (1024, 1524),
+        (65534, 65535),
+        (0, 65535),
+        (1024, 2048),
+    ];
 
     fn block(port_min: u16, port_max: u16) -> NeighborNatEntry {
         NeighborNatEntry {
-            underlay: [7; 16],
-            nat_ip: [203, 0, 113, 9],
+            underlay: UNDERLAY,
+            nat_ip: NAT_IP,
             vni: 42,
             port_min,
             port_max,
@@ -111,15 +130,53 @@ mod tests {
         }
     }
 
-    /// True if trie entry `(plen, key)` covers `port` of the block's nat_ip.
-    fn covers(plen: u32, key: &NatOwnerKey, port: u16) -> bool {
-        let bits = plen - NAT_OWNER_ADDR_BITS4;
-        let mask = if bits == 0 {
-            0
-        } else {
-            u16::MAX << (16 - bits)
-        };
-        port & mask == u16::from_be_bytes(key.port) & mask
+    fn block6(port_min: u16, port_max: u16) -> NeighborNat6Entry {
+        NeighborNat6Entry {
+            underlay: UNDERLAY,
+            nat_ip6: NAT_IP6,
+            vni: 42,
+            port_min,
+            port_max,
+            enabled: 1,
+            _pad: [0; 3],
+        }
+    }
+
+    fn want_owner(port_min: u16, port_max: u16) -> NatOwner {
+        NatOwner {
+            underlay: UNDERLAY,
+            vni: 42,
+            port_min,
+            port_max,
+        }
+    }
+
+    /// True if a `port_bits`-bit port prefix `key_port` covers `port`.
+    fn covers(port_bits: u32, key_port: [u8; 2], port: u16) -> bool {
+        let mask = u16::MAX.checked_shl(16 - port_bits).unwrap_or(0);
+        port & mask == u16::from_be_bytes(key_port) & mask
+    }
+
+    /// Assert that `(prefix_len, port_bytes)` pairs — stripped of the address part `entries` came
+    /// with, at `addr_bits` — cover exactly `[lo, hi)`: every port in range covered once, every
+    /// port outside it not at all. Shared by both families.
+    fn assert_exact_coverage(entries: &[(u32, [u8; 2])], addr_bits: u32, lo: u16, hi: u16) {
+        assert!(
+            entries.len() <= 30,
+            "{lo}..{hi}: {} prefixes",
+            entries.len()
+        );
+        for port in 0..=u16::MAX {
+            let n = entries
+                .iter()
+                .filter(|&&(plen, key_port)| covers(plen - addr_bits, key_port, port))
+                .count();
+            assert_eq!(
+                n,
+                usize::from(port >= lo && port < hi),
+                "{lo}..{hi}: port {port} covered {n} times"
+            );
+        }
     }
 
     #[test]
@@ -131,33 +188,40 @@ mod tests {
         assert_eq!(
             key,
             NatOwnerKey {
-                nat_ip: [203, 0, 113, 9],
+                nat_ip: NAT_IP,
                 port: 1024u16.to_be_bytes()
             }
         );
-        assert_eq!(
-            (owner.vni, owner.port_min, owner.port_max),
-            (42, 1024, 2048)
-        );
+        assert_eq!(owner, want_owner(1024, 2048));
     }
 
-    // The entries cover exactly [port_min, port_max): every port of the range once, nothing else.
+    // The entries cover exactly [port_min, port_max): every port of the range once, nothing else,
+    // every entry keyed on the block's nat_ip and carrying its full owner.
     #[test]
     fn an_arbitrary_block_covers_exactly_its_range() {
-        for (lo, hi) in [
-            (20000, 30000),
-            (1, 65535),
-            (5, 6),
-            (1024, 1524),
-            (65534, 65535),
-        ] {
+        for (lo, hi) in RANGES {
+            let want = want_owner(lo, hi);
             let e = owner_prefixes4(&block(lo, hi));
-            assert!(e.len() <= 30, "{lo}..{hi}: {} prefixes", e.len());
-            for port in 0..=u16::MAX {
-                let n = e.iter().filter(|(p, k, _)| covers(*p, k, port)).count();
-                let want = usize::from(port >= lo && port < hi);
-                assert_eq!(n, want, "{lo}..{hi}: port {port} covered {n} times");
-            }
+            assert!(
+                e.iter().all(|&(_, k, o)| k.nat_ip == NAT_IP && o == want),
+                "{lo}..{hi}: wrong nat_ip or owner"
+            );
+            let ports: Vec<(u32, [u8; 2])> = e.iter().map(|&(p, k, _)| (p, k.port)).collect();
+            assert_exact_coverage(&ports, NAT_OWNER_ADDR_BITS4, lo, hi);
+        }
+    }
+
+    #[test]
+    fn a_v6_block_covers_exactly_its_range() {
+        for (lo, hi) in RANGES {
+            let want = want_owner(lo, hi);
+            let e = owner_prefixes6(&block6(lo, hi));
+            assert!(
+                e.iter().all(|&(_, k, o)| k.nat_ip6 == NAT_IP6 && o == want),
+                "{lo}..{hi}: wrong nat_ip6 or owner"
+            );
+            let ports: Vec<(u32, [u8; 2])> = e.iter().map(|&(p, k, _)| (p, k.port)).collect();
+            assert_exact_coverage(&ports, NAT_OWNER_ADDR_BITS6, lo, hi);
         }
     }
 
@@ -165,42 +229,8 @@ mod tests {
     fn an_empty_block_has_no_entries() {
         assert!(owner_prefixes4(&block(3000, 3000)).is_empty());
         assert!(owner_prefixes4(&block(3000, 2000)).is_empty());
-    }
-
-    #[test]
-    fn a_v6_block_covers_exactly_its_range() {
-        use flowplane_common::{NeighborNat6Entry, NAT_OWNER_ADDR_BITS6};
-        let ip = [0x20, 1, 0xd, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 9];
-        for (lo, hi) in [(20000, 30000), (1, 65535), (1024, 2048)] {
-            let e = owner_prefixes6(&NeighborNat6Entry {
-                underlay: [7; 16],
-                nat_ip6: ip,
-                vni: 42,
-                port_min: lo,
-                port_max: hi,
-                enabled: 1,
-                _pad: [0; 3],
-            });
-            for port in 0..=u16::MAX {
-                let n = e
-                    .iter()
-                    .filter(|(p, k, _)| {
-                        assert_eq!(k.nat_ip6, ip);
-                        let bits = *p - NAT_OWNER_ADDR_BITS6;
-                        let mask = if bits == 0 {
-                            0
-                        } else {
-                            u16::MAX << (16 - bits)
-                        };
-                        port & mask == u16::from_be_bytes(k.port) & mask
-                    })
-                    .count();
-                assert_eq!(
-                    n,
-                    usize::from(port >= lo && port < hi),
-                    "{lo}..{hi}: port {port}"
-                );
-            }
-        }
+        // The guard's real boundary: port_max == 0 underflows `port_max - 1` unless caught first.
+        assert!(owner_prefixes4(&block(0, 0)).is_empty());
+        assert!(owner_prefixes6(&block6(0, 0)).is_empty());
     }
 }
