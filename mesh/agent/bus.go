@@ -14,6 +14,8 @@ import (
 	dpv1 "github.com/trevex/ectobase/cni/gen/dataplanev1"
 	rbv1 "github.com/trevex/ectobase/mesh/gen/routebusv1"
 	"github.com/trevex/ectobase/mesh/routebus"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // Dataplane is the subset of flowplane the agent drives. dpAdapter wraps the real
@@ -31,6 +33,9 @@ type Dataplane interface {
 	// a return landing here for natIp:[min,max) re-routes to ownerUnderlay.
 	AddNeighborNat(ctx context.Context, natIp string, min, max uint32, ownerUnderlay string, vni uint32) error
 	WithdrawNeighborNat(ctx context.Context, natIp string, min, max uint32, vni uint32) error
+	// ReplaceNeighborNats makes this node's neighbor-NAT blocks exactly `blocks` — a complete
+	// snapshot's set: unchanged blocks are left alone, absent ones removed, new ones added.
+	ReplaceNeighborNats(ctx context.Context, blocks []NeighborNatBlock) error
 	// ReplaceInterfaceFirewall replaces an interface's ENTIRE firewall rule set (ingress+egress,
 	// v4+v6) in one call. Declarative + restart-safe: the agent pushes the full desired set every
 	// reconcile, so a stale dataplane rule never survives an agent restart or in-place policy change.
@@ -142,12 +147,17 @@ type Bus struct {
 	// --- global (NAT + public) snapshot tracking, the EndOfGlobal counterpart to installed/seen.
 	// Touched only from the Run goroutine (handleServerMsg), like installed/origin — no lock.
 	//
-	// installedNat PERSISTS across reconnects (the dataplane outlives a session) so the prune can
-	// remove a block that left the fabric while we were disconnected. seenNat/seenPublic are the
-	// CURRENT session's snapshot and reset at each session open.
+	// installedNat is what THIS agent programmed, and PERSISTS across reconnects (the dataplane
+	// outlives a session). It is only the fallback path's diff basis now: against a dataplane that
+	// can replace, the snapshot's set is authoritative and installedNat merely tracks it.
+	// seenNat/seenPublic are the CURRENT session's snapshot and reset at each session open; seenNat
+	// maps each block to its owner underlay, which the replace call carries.
 	installedNat map[natEntry]bool
-	seenNat      map[natEntry]bool
+	seenNat      map[natEntry]string
 	seenPublic   map[publicEntry]bool
+	// replayingGlobal is true between a session's Hello and its EndOfGlobal: replayed NAT ADDs are
+	// collected in seenNat and applied as one replace at the marker, not one by one.
+	replayingGlobal bool
 	// globalRecords counts the NAT + public records received in this session BEFORE EndOfGlobal.
 	// It must equal the marker's count for the prune to be safe — see EndOfGlobal in the proto.
 	globalRecords uint32
@@ -193,6 +203,14 @@ type natEntry struct {
 	vni              uint32
 }
 
+// NeighborNatBlock is one neighbor-NAT block as ReplaceNeighborNats takes it.
+type NeighborNatBlock struct {
+	NatIP            string
+	PortMin, PortMax uint32
+	OwnerUnderlay    string
+	Vni              uint32
+}
+
 // publicEntry is one learned PublicPrefix record, keyed by what the prune has to act on: the LB
 // address plus the backend identity (a node VTEP alone is not enough — two backends of one service
 // can share a node).
@@ -207,9 +225,10 @@ type publicEntry struct {
 // edgeLbs deliberately survive — they mirror dataplane state, which outlives the session, and are
 // what the prune diffs the incoming snapshot against.
 func (b *Bus) resetGlobalSnapshot() {
-	b.seenNat = map[natEntry]bool{}
+	b.seenNat = map[natEntry]string{}
 	b.seenPublic = map[publicEntry]bool{}
 	b.globalRecords = 0
+	b.replayingGlobal = true
 	b.mu.Lock()
 	// Replay progress is per-session; `converged` deliberately is not (see Converged).
 	b.globalDone = false
@@ -278,9 +297,10 @@ func (b *Bus) recomputeConvergedLocked() {
 	log.Printf("route-bus converged (global snapshot + %d subscribed VNI(s)); safe to advertise", len(b.subscribedVNIs))
 }
 
-// pruneGlobal removes learned global state that was NOT replayed in this session's snapshot: a NAT
-// block whose owner released it, or an LB backend that stopped announcing, while this agent was
-// disconnected. The EndOfRIB equivalent for the global channel.
+// pruneGlobal closes this session's global snapshot, in two halves. The NAT blocks become exactly
+// the snapshot's set, declaratively (syncNeighborNats). The LB backends are diffed and the ones
+// NOT replayed are withdrawn (pruneLbBackends) — a backend that stopped announcing while this
+// agent was disconnected. The EndOfRIB equivalent for the global channel.
 //
 // It first checks the snapshot was COMPLETE. The current reflector queues a snapshot whole, but an
 // older one dropped records on overflow, so receiving fewer records than the reflector says it
@@ -288,13 +308,49 @@ func (b *Bus) recomputeConvergedLocked() {
 // state, which is strictly worse than the staleness being fixed. In that case do nothing and wait
 // for the next reconnect, which replays from scratch.
 func (b *Bus) pruneGlobal(ctx context.Context, want uint32) {
+	b.replayingGlobal = false
 	if b.globalRecords != want {
 		log.Printf("EndOfGlobal: snapshot incomplete (got %d records, reflector sent %d) — skipping prune; will retry on the next resync",
 			b.globalRecords, want)
+		// Nothing is pruned, but what did arrive is programmed: those blocks are live.
+		for e, owner := range b.seenNat {
+			b.addNeighborNat(ctx, e, owner)
+		}
+		return
+	}
+	b.syncNeighborNats(ctx)
+	b.pruneLbBackends(ctx)
+}
+
+// syncNeighborNats makes the dataplane's neighbor-NAT blocks exactly this complete snapshot's, in
+// one declarative call: an unchanged block is never unprogrammed, a block that moved or left while
+// this agent was disconnected is removed — and so is one the dataplane adopted after a restart
+// that no agent remembers installing. A compute node's set is empty, which clears anything an
+// older agent installed there. An older dataplane without the call gets per-block programming and
+// the diff against what this agent installed; any other failure programs what arrived and prunes
+// nothing, retrying on the next resync.
+func (b *Bus) syncNeighborNats(ctx context.Context) {
+	blocks := make([]NeighborNatBlock, 0, len(b.seenNat))
+	for e, owner := range b.seenNat {
+		blocks = append(blocks, NeighborNatBlock{NatIP: e.natIP, PortMin: e.portMin, PortMax: e.portMax, OwnerUnderlay: owner, Vni: e.vni})
+	}
+	err := b.dp.ReplaceNeighborNats(ctx, blocks)
+	if err == nil {
+		b.installedNat = make(map[natEntry]bool, len(b.seenNat))
+		for e := range b.seenNat {
+			b.installedNat[e] = true
+		}
+		return
+	}
+	for e, owner := range b.seenNat {
+		b.addNeighborNat(ctx, e, owner)
+	}
+	if status.Code(err) != codes.Unimplemented {
+		log.Printf("ReplaceNeighborNats (%d blocks): %v — programmed them one by one, pruned nothing; will retry on the next resync", len(blocks), err)
 		return
 	}
 	for e := range b.installedNat {
-		if b.seenNat[e] {
+		if _, ok := b.seenNat[e]; ok {
 			continue
 		}
 		if err := b.dp.WithdrawNeighborNat(ctx, e.natIP, e.portMin, e.portMax, e.vni); err != nil {
@@ -304,7 +360,6 @@ func (b *Bus) pruneGlobal(ctx context.Context, want uint32) {
 		delete(b.installedNat, e)
 		log.Printf("pruned stale NAT block %s:[%d,%d) vni=%d", e.natIP, e.portMin, e.portMax, e.vni)
 	}
-	b.pruneLbBackends(ctx)
 }
 
 // defaultReconcileEvery bounds how stale this node's fabric-wide announcements can get after a CRD
@@ -318,7 +373,7 @@ func NewBus(nodeID, underlay string, dp Dataplane, isEdge bool) *Bus {
 		learnedEdge: map[string]string{}, learnedPublic: map[string]string{},
 		edgeLbs:        map[string]*edgeLb{},
 		installedNat:   map[natEntry]bool{},
-		seenNat:        map[natEntry]bool{},
+		seenNat:        map[natEntry]string{},
 		seenPublic:     map[publicEntry]bool{},
 		subscribedVNIs: map[uint32]bool{},
 		eorSeen:        map[uint32]bool{},
@@ -330,6 +385,17 @@ func NewBus(nodeID, underlay string, dp Dataplane, isEdge bool) *Bus {
 		learnedPeer:    map[uint32]map[string]string{},
 		reconcileEvery: defaultReconcileEvery,
 	}
+}
+
+// hello is this session's opening message. A compute node opts out of the global channel: it
+// neither relays NAT returns (only an edge does) nor runs Maglev, so every NAT and public record
+// fanned out to it was work for nothing — O(records × nodes) fabric-wide.
+func (b *Bus) hello() *rbv1.Hello {
+	feed := rbv1.GlobalFeed_GLOBAL_FEED_NONE
+	if b.isEdge {
+		feed = rbv1.GlobalFeed_GLOBAL_FEED_ALL
+	}
+	return &rbv1.Hello{NodeId: b.nodeID, UnderlayIpv6: b.underlay, GlobalFeed: feed}
 }
 
 // Run drives one route-bus session to steady state. It opens a Session, sends Hello, then loops:
@@ -347,9 +413,7 @@ func (b *Bus) Run(ctx context.Context, cc rbv1.RouteBusClient, reconcile func(co
 	if err != nil {
 		return err
 	}
-	if err := stream.Send(&rbv1.ClientMsg{Msg: &rbv1.ClientMsg_Hello{
-		Hello: &rbv1.Hello{NodeId: b.nodeID, UnderlayIpv6: b.underlay},
-	}}); err != nil {
+	if err := stream.Send(&rbv1.ClientMsg{Msg: &rbv1.ClientMsg_Hello{Hello: b.hello()}}); err != nil {
 		return err
 	}
 	// New session: the reflector will replay each subscribed VNI's snapshot then send EndOfRIB. Reset
@@ -676,12 +740,13 @@ func portsFromPB(ports []*rbv1.PortProto) []LbPort {
 	return out
 }
 
-// applyNat programs a learned NAT block. Blocks OWNED BY THIS node are skipped:
-// its local SNAT is already programmed by the reconciler via AddNatSource. For a
-// block owned by a peer, install a neighbor-nat return-route so a return that
-// lands here re-routes to the owner.
+// applyNat programs a learned NAT block on an EDGE: only an edge relays a NAT return to the node
+// that owns the block, so a compute node holds none (an older reflector may still send it NAT
+// records — they are ignored). A block this node owns is never a neighbor-NAT entry: its local
+// SNAT is programmed by the reconciler via AddNatSource. While the global snapshot is replaying,
+// an ADD is only collected; the marker applies the whole set at once (see syncNeighborNats).
 func (b *Bus) applyNat(ctx context.Context, nu *rbv1.NatUpdate) {
-	if nu.OwnerUnderlay == b.underlay {
+	if !b.isEdge || nu.OwnerUnderlay == b.underlay {
 		return
 	}
 	e := natEntry{natIP: nu.NatIp, portMin: nu.PortMin, portMax: nu.PortMax, vni: nu.Vni}
@@ -689,12 +754,11 @@ func (b *Bus) applyNat(ctx context.Context, nu *rbv1.NatUpdate) {
 	case rbv1.RouteOp_ROUTE_OP_ADD:
 		// Mark seen BEFORE the call: a replayed record the dataplane rejects as a duplicate is
 		// still part of this snapshot, and must not then be pruned as absent from it.
-		b.seenNat[e] = true
-		if err := b.dp.AddNeighborNat(ctx, nu.NatIp, nu.PortMin, nu.PortMax, nu.OwnerUnderlay, nu.Vni); err != nil {
-			log.Printf("AddNeighborNat %s:[%d,%d) -> %s vni=%d: %v", nu.NatIp, nu.PortMin, nu.PortMax, nu.OwnerUnderlay, nu.Vni, err)
+		b.seenNat[e] = nu.OwnerUnderlay
+		if b.replayingGlobal {
 			return
 		}
-		b.installedNat[e] = true
+		b.addNeighborNat(ctx, e, nu.OwnerUnderlay)
 	case rbv1.RouteOp_ROUTE_OP_WITHDRAW:
 		delete(b.seenNat, e)
 		if err := b.dp.WithdrawNeighborNat(ctx, nu.NatIp, nu.PortMin, nu.PortMax, nu.Vni); err != nil {
@@ -703,6 +767,15 @@ func (b *Bus) applyNat(ctx context.Context, nu *rbv1.NatUpdate) {
 		}
 		delete(b.installedNat, e)
 	}
+}
+
+// addNeighborNat programs one block and records it as installed.
+func (b *Bus) addNeighborNat(ctx context.Context, e natEntry, owner string) {
+	if err := b.dp.AddNeighborNat(ctx, e.natIP, e.portMin, e.portMax, owner, e.vni); err != nil {
+		log.Printf("AddNeighborNat %s:[%d,%d) -> %s vni=%d: %v", e.natIP, e.portMin, e.portMax, owner, e.vni, err)
+		return
+	}
+	b.installedNat[e] = true
 }
 
 func (b *Bus) apply(ctx context.Context, ru *rbv1.RouteUpdate) {
@@ -983,6 +1056,16 @@ func (d dpAdapter) WithdrawNeighborNat(ctx context.Context, natIp string, min, m
 	_, err := d.c.WithdrawNeighborNat(ctx, &dpv1.WithdrawNeighborNatRequest{
 		NatIp: natIp, PortMin: min, PortMax: max, Vni: vni,
 	})
+	return err
+}
+func (d dpAdapter) ReplaceNeighborNats(ctx context.Context, blocks []NeighborNatBlock) error {
+	req := &dpv1.ReplaceNeighborNatsRequest{Blocks: make([]*dpv1.NeighborNatBlock, 0, len(blocks))}
+	for _, b := range blocks {
+		req.Blocks = append(req.Blocks, &dpv1.NeighborNatBlock{
+			NatIp: b.NatIP, PortMin: b.PortMin, PortMax: b.PortMax, OwnerUnderlay: b.OwnerUnderlay, Vni: b.Vni,
+		})
+	}
+	_, err := d.c.ReplaceNeighborNats(ctx, req)
 	return err
 }
 func (d dpAdapter) ReplaceInterfaceFirewall(ctx context.Context, interfaceID string, rules []FwRuleWithID) error {

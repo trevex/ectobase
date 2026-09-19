@@ -15,12 +15,15 @@ import (
 // the programmed state. All access is guarded by mu; the interface methods are
 // safe to call from the bus's reconcile goroutines.
 type recordingDP struct {
-	mu       sync.Mutex
-	added    map[string]string // "vni prefix" -> nexthop
-	external map[string]bool   // "vni prefix" -> external flag as programmed
-	withdrew map[string]bool
-	nbrNat   map[string]string // "natIp min max" -> ownerUnderlay
-	nbrNatWd map[string]bool
+	mu             sync.Mutex
+	added          map[string]string // "vni prefix" -> nexthop
+	external       map[string]bool   // "vni prefix" -> external flag as programmed
+	withdrew       map[string]bool
+	nbrNat         map[string]string // "natIp min max" -> ownerUnderlay
+	nbrNatWd       map[string]bool
+	nbrNatAdds     int                  // AddNeighborNat calls
+	nbrNatReplaces [][]NeighborNatBlock // every ReplaceNeighborNats call, in order
+	replaceErr     error                // returned by ReplaceNeighborNats when set (e.g. Unimplemented)
 	// fwReplace records the LAST ReplaceInterfaceFirewall call per interface (the full desired set),
 	// modelling the real dataplane where a replace overwrites the interface's entire rule set.
 	fwReplace map[string][]FwRuleWithID
@@ -110,6 +113,21 @@ func (f *recordingDP) AddNeighborNat(_ context.Context, natIp string, min, max u
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.nbrNat[natKeyStr(natIp, min, max)] = ownerUnderlay
+	f.nbrNatAdds++
+	return nil
+}
+
+func (f *recordingDP) ReplaceNeighborNats(_ context.Context, blocks []NeighborNatBlock) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.nbrNatReplaces = append(f.nbrNatReplaces, append([]NeighborNatBlock(nil), blocks...))
+	if f.replaceErr != nil {
+		return f.replaceErr
+	}
+	f.nbrNat = map[string]string{}
+	for _, b := range blocks {
+		f.nbrNat[natKeyStr(b.NatIP, b.PortMin, b.PortMax)] = b.OwnerUnderlay
+	}
 	return nil
 }
 func (f *recordingDP) WithdrawNeighborNat(_ context.Context, natIp string, min, max uint32, _ uint32) error {

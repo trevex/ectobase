@@ -182,8 +182,8 @@ func TestApplyPublic_LBIP_NonEdgeIgnores(t *testing.T) {
 
 func TestApplyNatInstallsNeighborNatOnlyForRemoteOwners(t *testing.T) {
 	dp := newRecordingDP()
-	// This node's underlay is fd00::b.
-	b := NewBus("nodeB", "fd00::b", dp, false)
+	// An EDGE whose own underlay is fd00::b — only an edge holds neighbor-NAT blocks.
+	b := NewBus("edge", "fd00::b", dp, true)
 	ctx := context.Background()
 
 	// A block owned by a PEER (fd00::a) -> installs a neighbor-nat return route.
@@ -210,7 +210,7 @@ func TestApplyNatInstallsNeighborNatOnlyForRemoteOwners(t *testing.T) {
 // exactly like v4 — the remote-owner gate is unchanged.
 func TestApplyNatInstallsNeighborNatForV6Block(t *testing.T) {
 	dp := newRecordingDP()
-	b := NewBus("nodeB", "fd00::b", dp, false)
+	b := NewBus("edge", "fd00::b", dp, true)
 	ctx := context.Background()
 
 	// Peer-owned (fd00::a) v6 block -> installs a neighbor-nat return route keyed by the v6 nat_ip.
@@ -229,6 +229,19 @@ func TestApplyNatInstallsNeighborNatForV6Block(t *testing.T) {
 	})
 	if _, ok := dp.getNbrNat("2001:db8:2b::9", 4096, 5120); ok {
 		t.Fatalf("locally-owned v6 block must NOT install a neighbor-nat")
+	}
+}
+
+// A compute node holds no neighbor-NAT blocks: a NAT record, even a live one, programs nothing.
+func TestApplyNatIsIgnoredOnAComputeNode(t *testing.T) {
+	dp := newRecordingDP()
+	b := NewBus("nodeB", "fd00::b", dp, false)
+	b.applyNat(context.Background(), &rbv1.NatUpdate{
+		Vni: 100, SourceIp: "10.0.0.1", NatIp: "1.2.3.4",
+		PortMin: 1024, PortMax: 2048, OwnerUnderlay: "fd00::a", Op: rbv1.RouteOp_ROUTE_OP_ADD,
+	})
+	if _, ok := dp.getNbrNat("1.2.3.4", 1024, 2048); ok {
+		t.Fatal("a compute node must not program neighbor-NAT")
 	}
 }
 
