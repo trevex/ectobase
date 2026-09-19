@@ -53,7 +53,6 @@ impl From<flowplane_control::FwError> for ServiceError {
                 ServiceError::Exhausted(e.to_string())
             }
             FwError::Unsupported(_) => ServiceError::Invalid(e.to_string()),
-            FwError::AlreadyExists => ServiceError::Conflict(e.to_string()),
             FwError::Map(e) => ServiceError::Internal(e),
         }
     }

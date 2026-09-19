@@ -261,6 +261,13 @@ firewalls. v4 and v6, sim and eBPF. The refusal now removes the entries the flow
   per-interface or per-scope stamp cannot cover the same-node path (two interfaces'
   policies, one u8/u32 slot), and a node-wide epoch costs one array read per packet instead
   of a hash lookup — every forward flow on the node re-evaluates once per change.
+- **Found in C2, not by any gate:** the classifier (B4) refuses a rule that matches the
+  interface's own address, and the live lab LB tests (`test/lab/livetest/lb_test.go`) opened
+  their backends with exactly such a rule (`dst_cidr: <backend IP>` on an ingress rule), so
+  their firewall setup would have failed from B4 on. The lab can't run in the gates, so nothing
+  noticed. Fixed in C2 when the live tests moved from the removed `AddFwRule` to the declarative
+  `ReplaceInterfaceFirewall`: the LB rules now name the client peer (`::/0` / `0.0.0.0/0`,
+  TCP/80). Compiled under the `live` tag; **not run** — the next lab run is their check.
 - Peering: non-transitivity is enforced structurally (good — matches GCP); overlap
   non-rejection is a deliberate deviation (local-precedence). Fine, but surface a warning
   condition on the peering when exposed prefixes overlap the local VPC's subnets.

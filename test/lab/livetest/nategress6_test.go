@@ -71,13 +71,9 @@ func TestNatEgressSmoke6(t *testing.T) {
 	out, err = dataplaneGRPC(t, ctx, container, "AddRoute", routeBody)
 	require.NoError(t, err, "AddRoute(external v6): %s", out)
 
-	// v6 egress-allow (deny-by-default busting): the empty-CIDR proto-0 rule addFwEgressAllow
-	// programs is v4; a v6 flow needs its own ::/0 egress allow or forward_decision_v6 drops it.
-	fwBody := fmt.Sprintf(
-		`{"interface_id":%q,"rule_id":"eg6","src_cidr":"::/0","dst_cidr":"::/0","proto":0,"allow":true,"egress":true}`,
-		nat6GuestID)
-	out, err = dataplaneGRPC(t, ctx, container, "AddFwRule", fwBody)
-	require.NoError(t, err, "AddFwRule egress-allow(v6): %s", out)
+	// v6 egress-allow (deny-by-default busting): a v6 flow needs a ::/0 egress allow or
+	// forward_decision_v6 drops it.
+	setFirewall(t, ctx, container, nat6GuestID, fwAllowAny6("eg6", true))
 
 	netprobe := buildStaticBin(t, "netprobe")
 	pid, err := dockerPID(ctx, container)
@@ -189,9 +185,7 @@ func TestNatEgressReturn6(t *testing.T) {
 	mustGRPC(t, ctx, container, "AddRoute", fmt.Sprintf(
 		`{"vni":%d,"prefix":%q,"nexthop_underlay":%q,"external":true}`,
 		overlayVNI, nat6RetExtDst+"/128", edgeUnderlay))
-	mustGRPC(t, ctx, container, "AddFwRule", fmt.Sprintf(
-		`{"interface_id":%q,"rule_id":"eg6","src_cidr":"::/0","dst_cidr":"::/0","proto":0,"allow":true,"egress":true}`,
-		nat6RetGuestID))
+	setFirewall(t, ctx, container, nat6RetGuestID, fwAllowAny6("eg6", true))
 
 	// NAT66 neighbor-nat on BOTH edges: a reply to nat_ip (either anycast edge) relays to the node.
 	for _, e := range []string{edge, edge2} {

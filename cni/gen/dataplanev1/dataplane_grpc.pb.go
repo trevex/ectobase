@@ -33,8 +33,6 @@ const (
 	DataplaneNode_AddLbBackend_FullMethodName             = "/dataplane.v1.DataplaneNode/AddLbBackend"
 	DataplaneNode_DelLoadBalancer_FullMethodName          = "/dataplane.v1.DataplaneNode/DelLoadBalancer"
 	DataplaneNode_DelLbBackend_FullMethodName             = "/dataplane.v1.DataplaneNode/DelLbBackend"
-	DataplaneNode_AddFwRule_FullMethodName                = "/dataplane.v1.DataplaneNode/AddFwRule"
-	DataplaneNode_DelFwRule_FullMethodName                = "/dataplane.v1.DataplaneNode/DelFwRule"
 	DataplaneNode_ReplaceInterfaceFirewall_FullMethodName = "/dataplane.v1.DataplaneNode/ReplaceInterfaceFirewall"
 	DataplaneNode_ConfigureQoS_FullMethodName             = "/dataplane.v1.DataplaneNode/ConfigureQoS"
 )
@@ -82,16 +80,11 @@ type DataplaneNodeClient interface {
 	// DelLbBackend removes a single backend underlay /128 from a registered LB address and rebuilds its
 	// Maglev table.
 	DelLbBackend(ctx context.Context, in *DelLbBackendRequest, opts ...grpc.CallOption) (*DelLbBackendResponse, error)
-	// AddFwRule programs a single per-interface firewall rule (ingress or egress). A LoadBalancer
-	// service opens its ports on the backend by adding INGRESS ALLOW rules here; LB/service traffic
-	// is NOT exempt from the firewall.
-	AddFwRule(ctx context.Context, in *AddFwRuleRequest, opts ...grpc.CallOption) (*AddFwRuleResponse, error)
-	// DelFwRule removes a per-interface firewall rule by id.
-	DelFwRule(ctx context.Context, in *DelFwRuleRequest, opts ...grpc.CallOption) (*DelFwRuleResponse, error)
 	// ReplaceInterfaceFirewall atomically replaces an interface's ENTIRE firewall rule set
 	// (ingress + egress, v4 + v6) with the supplied rules, clearing any prior rules. This is the
 	// declarative, restart-safe primitive the node agent uses: it pushes the complete desired set
 	// each reconcile, so a stale rule can never survive an agent restart or an in-place policy change.
+	// Load-balanced traffic is not exempt: a backend admits it through its ingress rules like any other.
 	ReplaceInterfaceFirewall(ctx context.Context, in *ReplaceInterfaceFirewallRequest, opts ...grpc.CallOption) (*ReplaceInterfaceFirewallResponse, error)
 	// ConfigureQoS sets (or clears) the per-interface QoS lanes. egress_mbps is EDT-shaped; public and
 	// ingress are token-bucket policed. All 0 = unlimited (clears the entry). Idempotent.
@@ -246,26 +239,6 @@ func (c *dataplaneNodeClient) DelLbBackend(ctx context.Context, in *DelLbBackend
 	return out, nil
 }
 
-func (c *dataplaneNodeClient) AddFwRule(ctx context.Context, in *AddFwRuleRequest, opts ...grpc.CallOption) (*AddFwRuleResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(AddFwRuleResponse)
-	err := c.cc.Invoke(ctx, DataplaneNode_AddFwRule_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *dataplaneNodeClient) DelFwRule(ctx context.Context, in *DelFwRuleRequest, opts ...grpc.CallOption) (*DelFwRuleResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(DelFwRuleResponse)
-	err := c.cc.Invoke(ctx, DataplaneNode_DelFwRule_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *dataplaneNodeClient) ReplaceInterfaceFirewall(ctx context.Context, in *ReplaceInterfaceFirewallRequest, opts ...grpc.CallOption) (*ReplaceInterfaceFirewallResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ReplaceInterfaceFirewallResponse)
@@ -329,16 +302,11 @@ type DataplaneNodeServer interface {
 	// DelLbBackend removes a single backend underlay /128 from a registered LB address and rebuilds its
 	// Maglev table.
 	DelLbBackend(context.Context, *DelLbBackendRequest) (*DelLbBackendResponse, error)
-	// AddFwRule programs a single per-interface firewall rule (ingress or egress). A LoadBalancer
-	// service opens its ports on the backend by adding INGRESS ALLOW rules here; LB/service traffic
-	// is NOT exempt from the firewall.
-	AddFwRule(context.Context, *AddFwRuleRequest) (*AddFwRuleResponse, error)
-	// DelFwRule removes a per-interface firewall rule by id.
-	DelFwRule(context.Context, *DelFwRuleRequest) (*DelFwRuleResponse, error)
 	// ReplaceInterfaceFirewall atomically replaces an interface's ENTIRE firewall rule set
 	// (ingress + egress, v4 + v6) with the supplied rules, clearing any prior rules. This is the
 	// declarative, restart-safe primitive the node agent uses: it pushes the complete desired set
 	// each reconcile, so a stale rule can never survive an agent restart or an in-place policy change.
+	// Load-balanced traffic is not exempt: a backend admits it through its ingress rules like any other.
 	ReplaceInterfaceFirewall(context.Context, *ReplaceInterfaceFirewallRequest) (*ReplaceInterfaceFirewallResponse, error)
 	// ConfigureQoS sets (or clears) the per-interface QoS lanes. egress_mbps is EDT-shaped; public and
 	// ingress are token-bucket policed. All 0 = unlimited (clears the entry). Idempotent.
@@ -394,12 +362,6 @@ func (UnimplementedDataplaneNodeServer) DelLoadBalancer(context.Context, *DelLoa
 }
 func (UnimplementedDataplaneNodeServer) DelLbBackend(context.Context, *DelLbBackendRequest) (*DelLbBackendResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DelLbBackend not implemented")
-}
-func (UnimplementedDataplaneNodeServer) AddFwRule(context.Context, *AddFwRuleRequest) (*AddFwRuleResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method AddFwRule not implemented")
-}
-func (UnimplementedDataplaneNodeServer) DelFwRule(context.Context, *DelFwRuleRequest) (*DelFwRuleResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method DelFwRule not implemented")
 }
 func (UnimplementedDataplaneNodeServer) ReplaceInterfaceFirewall(context.Context, *ReplaceInterfaceFirewallRequest) (*ReplaceInterfaceFirewallResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ReplaceInterfaceFirewall not implemented")
@@ -680,42 +642,6 @@ func _DataplaneNode_DelLbBackend_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
-func _DataplaneNode_AddFwRule_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(AddFwRuleRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(DataplaneNodeServer).AddFwRule(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: DataplaneNode_AddFwRule_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(DataplaneNodeServer).AddFwRule(ctx, req.(*AddFwRuleRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _DataplaneNode_DelFwRule_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(DelFwRuleRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(DataplaneNodeServer).DelFwRule(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: DataplaneNode_DelFwRule_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(DataplaneNodeServer).DelFwRule(ctx, req.(*DelFwRuleRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _DataplaneNode_ReplaceInterfaceFirewall_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ReplaceInterfaceFirewallRequest)
 	if err := dec(in); err != nil {
@@ -814,14 +740,6 @@ var DataplaneNode_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DelLbBackend",
 			Handler:    _DataplaneNode_DelLbBackend_Handler,
-		},
-		{
-			MethodName: "AddFwRule",
-			Handler:    _DataplaneNode_AddFwRule_Handler,
-		},
-		{
-			MethodName: "DelFwRule",
-			Handler:    _DataplaneNode_DelFwRule_Handler,
 		},
 		{
 			MethodName: "ReplaceInterfaceFirewall",

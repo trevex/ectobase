@@ -91,12 +91,12 @@ func TestLbDistributeSmoke(t *testing.T) {
 	// leaves src=overlay and the backend egress reverse-SNATs src -> LB address so the WAN client sees the LB address.
 	startLbBackendHTTPD(t, ctx, beContainer, "lbbe", lbBackendIP6)
 
-	// 3. Firewall: v6 ingress-allow for the backend overlay IP (the DSR-rewritten inner dst), v6
-	//    egress-allow for the reply.
-	mustGRPC(t, ctx, beContainer, "AddFwRule", fmt.Sprintf(
-		`{"interface_id":"lbbe","rule_id":"lb-in","dst_cidr":%q,"proto":6,"dst_port_min":80,"dst_port_max":80,"allow":true,"egress":false}`, lbBackendIP6+"/128"))
-	mustGRPC(t, ctx, beContainer, "AddFwRule",
-		`{"interface_id":"lbbe","rule_id":"lb-eg","src_cidr":"::/0","proto":0,"allow":true,"egress":true}`)
+	// 3. Firewall: v6 ingress-allow for TCP/80 from any client (the DSR forward arrives with the
+	//    inner dst rewritten to the backend's overlay IP; a rule names the peer, never the
+	//    interface's own address), v6 egress-allow for the reply.
+	setFirewall(t, ctx, beContainer, "lbbe",
+		`{"rule_id":"lb-in","src_cidr":"::/0","proto":6,"dst_port_min":80,"dst_port_max":80,"allow":true,"egress":false}`,
+		fwAllowAny6("lb-eg", true))
 	// DSR return route: the WAN-client prefix -> the edge underlay. Guest egress encaps the reply to
 	// the edge, which local-delivers it to VyOS -> WAN.
 	mustGRPC(t, ctx, beContainer, "AddRoute", fmt.Sprintf(
@@ -202,12 +202,11 @@ func TestLbDistributeSmokeV4(t *testing.T) {
 	// httpd binds the backend's OVERLAY IP (the DSR-rewritten inner dst); egress reverse-SNATs src -> LB address.
 	startLbBackendHTTPDv4(t, ctx, beContainer, "lbbe4", lbBackendIP4)
 
-	// 3. Firewall: v4 ingress-allow for the backend overlay IP (the DSR-rewritten inner dst), v4
-	//    egress-allow for the reply.
-	mustGRPC(t, ctx, beContainer, "AddFwRule", fmt.Sprintf(
-		`{"interface_id":"lbbe4","rule_id":"lb-in4","dst_cidr":%q,"proto":6,"dst_port_min":80,"dst_port_max":80,"allow":true,"egress":false}`, lbBackendIP4+"/32"))
-	mustGRPC(t, ctx, beContainer, "AddFwRule",
-		`{"interface_id":"lbbe4","rule_id":"lb-eg4","src_cidr":"0.0.0.0/0","proto":0,"allow":true,"egress":true}`)
+	// 3. Firewall: v4 ingress-allow for TCP/80 from any client (see the v6 test), v4 egress-allow
+	//    for the reply.
+	setFirewall(t, ctx, beContainer, "lbbe4",
+		`{"rule_id":"lb-in4","src_cidr":"0.0.0.0/0","proto":6,"dst_port_min":80,"dst_port_max":80,"allow":true,"egress":false}`,
+		fwAllowAny("lb-eg4", true))
 	// DSR return route: the WAN v4 client's /24 -> the edge underlay (the underlay nexthop
 	// is always v6 regardless of the routed prefix's family — the fabric transport stays
 	// v6 end-to-end; only the encapped inner packet is v4 here).

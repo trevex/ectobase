@@ -24,7 +24,6 @@ use crate::maps::{
 mod adopt_test;
 mod aya_writer;
 mod bringup;
-mod firewall;
 mod lb;
 mod nat;
 mod recover;

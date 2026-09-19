@@ -369,57 +369,6 @@ impl DataplaneNode for NodeService {
         Ok(Response::new(resp))
     }
 
-    async fn add_fw_rule(
-        &self,
-        req: Request<pb::AddFwRuleRequest>,
-    ) -> Result<Response<pb::AddFwRuleResponse>, Status> {
-        let attach = self
-            .attach
-            .as_ref()
-            .ok_or_else(|| Status::failed_precondition("datapath not initialized"))?
-            .clone();
-        let r = req.into_inner();
-        let log = format!(
-            "FW rule add iface={} id={} src={} dst={} proto={} dports={}..={} allow={} egress={}",
-            r.interface_id,
-            r.rule_id,
-            r.src_cidr,
-            r.dst_cidr,
-            r.proto,
-            r.dst_port_min,
-            r.dst_port_max,
-            r.allow,
-            r.egress
-        );
-        let resp = tokio::task::spawn_blocking(move || {
-            attach.control.with_core(|c| handlers::add_fw_rule(c, &r))
-        })
-        .await
-        .map_err(|e| Status::internal(format!("add_fw_rule task panicked: {e}")))??;
-        println!("{log}");
-        Ok(Response::new(resp))
-    }
-
-    async fn del_fw_rule(
-        &self,
-        req: Request<pb::DelFwRuleRequest>,
-    ) -> Result<Response<pb::DelFwRuleResponse>, Status> {
-        let attach = self
-            .attach
-            .as_ref()
-            .ok_or_else(|| Status::failed_precondition("datapath not initialized"))?
-            .clone();
-        let r = req.into_inner();
-        let log = format!("FW rule del iface={} id={}", r.interface_id, r.rule_id);
-        let resp = tokio::task::spawn_blocking(move || {
-            attach.control.with_core(|c| handlers::del_fw_rule(c, &r))
-        })
-        .await
-        .map_err(|e| Status::internal(format!("del_fw_rule task panicked: {e}")))??;
-        println!("{log}");
-        Ok(Response::new(resp))
-    }
-
     async fn replace_interface_firewall(
         &self,
         req: Request<ReplaceInterfaceFirewallRequest>,

@@ -21,16 +21,11 @@ type recordingDP struct {
 	withdrew map[string]bool
 	nbrNat   map[string]string // "natIp min max" -> ownerUnderlay
 	nbrNatWd map[string]bool
-	fwAdds   []fwCall
-	fwDels   []struct{ iface, ruleID string }
 	// fwReplace records the LAST ReplaceInterfaceFirewall call per interface (the full desired set),
 	// modelling the real dataplane where a replace overwrites the interface's entire rule set.
 	fwReplace map[string][]FwRuleWithID
-	// fwInstalled models the real dataplane: a rule id is unique per interface, and AddFwRule on an
-	// existing id fails (ALREADY_EXISTS) — so a correct reconcile must NOT re-add unchanged rules.
-	fwInstalled map[string]bool
-	lbIPs       []string // ids added, in call order
-	lbDels      []string // ids deleted, in call order
+	lbIPs     []string // ids added, in call order
+	lbDels    []string // ids deleted, in call order
 	// lbRegistered is the set of LBs currently registered (id -> the last AddLoadBalancer call), modelling
 	// the real dataplane's `lbs` table: create_lb rejects a duplicate id, add_lb_target rejects an
 	// unknown one, and DelLoadBalancer drops the LB with its backends.
@@ -79,12 +74,6 @@ type qosCall struct {
 	egressMbps, publicMbps, ingressMbps uint32
 }
 
-type fwCall struct {
-	iface  string
-	ruleID string
-	rule   FwRule
-}
-
 type routeCall struct {
 	vni         uint32
 	prefix      string
@@ -103,7 +92,6 @@ func newRecordingDP() *recordingDP {
 	return &recordingDP{
 		added: map[string]string{}, external: map[string]bool{}, withdrew: map[string]bool{},
 		nbrNat: map[string]string{}, nbrNatWd: map[string]bool{},
-		fwInstalled:   map[string]bool{},
 		fwReplace:     map[string][]FwRuleWithID{},
 		lbRegistered:  map[string]lbCall{},
 		lbBackends:    map[string][]string{},
@@ -152,24 +140,6 @@ func (f *recordingDP) AddNatSource(_ context.Context, vni uint32, src, nat strin
 	f.natSrcN[src]++
 	return nil
 }
-func (f *recordingDP) AddFwRule(_ context.Context, iface, ruleID string, r FwRule) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	k := iface + "|" + ruleID
-	if f.fwInstalled[k] {
-		return fmt.Errorf("fwrule %s already exists", k) // model dataplane ALREADY_EXISTS
-	}
-	f.fwInstalled[k] = true
-	f.fwAdds = append(f.fwAdds, fwCall{iface, ruleID, r})
-	return nil
-}
-func (f *recordingDP) DelFwRule(_ context.Context, iface, ruleID string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	delete(f.fwInstalled, iface+"|"+ruleID)
-	f.fwDels = append(f.fwDels, struct{ iface, ruleID string }{iface, ruleID})
-	return nil
-}
 
 // fwMaxRulesPerFamily mirrors flowplane-common's FW_MAX_RULES: the dataplane holds at most this many
 // rules per interface PER ADDRESS FAMILY, ingress and egress sharing the budget.
@@ -195,15 +165,6 @@ func (f *recordingDP) ReplaceInterfaceFirewall(_ context.Context, iface string, 
 	}
 	// Overwrite: the whole set for this interface becomes exactly `rules` (clears prior on empty).
 	f.fwReplace[iface] = append([]FwRuleWithID(nil), rules...)
-	// Keep fwInstalled consistent with a wholesale replace so any cross-checks stay accurate.
-	for k := range f.fwInstalled {
-		if len(k) > len(iface) && k[:len(iface)+1] == iface+"|" {
-			delete(f.fwInstalled, k)
-		}
-	}
-	for _, rr := range rules {
-		f.fwInstalled[iface+"|"+rr.ID] = true
-	}
 	return nil
 }
 func (f *recordingDP) WithdrawRoute(_ context.Context, vni uint32, prefix string) error {

@@ -15,7 +15,7 @@ use flowplane_common::{
 };
 
 /// A firewall programming failure, classified so the gRPC layer can return a meaningful status:
-/// an unknown interface, a rule-budget overflow and a duplicate rule id are client errors that a
+/// an unknown interface, an oversized rule list and an inexpressible rule are client errors that a
 /// retry cannot fix, unlike a failed map write.
 #[derive(Debug)]
 pub enum FwError {
@@ -24,8 +24,6 @@ pub enum FwError {
     /// One family's rule list exceeds the per-interface budget (`FW_MAX_RULES`, shared by ingress
     /// and egress).
     TooManyRules { family: &'static str, count: usize },
-    /// A rule with this id is already installed (the imperative `add_fw_rule*` path only).
-    AlreadyExists,
     /// The rule uses a match the classifier cannot express (e.g. the interface's own address).
     Unsupported(&'static str),
     /// A direction's rules compile into more classes or policy entries than a scope may hold.
@@ -47,7 +45,6 @@ impl fmt::Display for FwError {
                 f,
                 "too many {family} firewall rules for interface: {count} (max {FW_MAX_RULES} per family)"
             ),
-            FwError::AlreadyExists => f.write_str("ALREADY_EXISTS: firewall rule already exists"),
             FwError::Unsupported(what) => write!(f, "firewall rules cannot express {what}"),
             FwError::ScopeTooLarge {
                 family,
@@ -184,19 +181,6 @@ impl<W: MapWriter> ControlCore<W> {
         }
     }
 
-    /// Recompile `ifindex`'s classifier scopes from the rule shadows and rebind.
-    fn fw_reclassify(&mut self, ifindex: u32) -> Result<(), FwError> {
-        let v4 = self.fw.get(&ifindex).map(Vec::as_slice).unwrap_or_default();
-        let v6 = self
-            .fw6
-            .get(&ifindex)
-            .map(Vec::as_slice)
-            .unwrap_or_default();
-        let (ingress, egress) =
-            compile_iface(v4.iter().map(|(_, r)| r), v6.iter().map(|(_, r)| r))?;
-        self.fw_bind_scopes(ifindex, ingress, egress)
-    }
-
     /// Adopt after a restart: the pinned `FW_BIND` entries and scopes survived but the in-memory
     /// bookkeeping did not. Rebuild the bindings and scope references from the maps, and delete
     /// scopes nothing binds (leaked by a process that died between a create and its binding).
@@ -305,60 +289,6 @@ impl<W: MapWriter> ControlCore<W> {
         Ok(())
     }
 
-    /// Add or replace a firewall rule on an interface.
-    /// Returns an error with "already exists" if a rule with that ID already exists.
-    pub fn add_fw_rule(
-        &mut self,
-        interface_id: &[u8],
-        rule_id: Vec<u8>,
-        rule: FwRule,
-    ) -> Result<(), FwError> {
-        let ifindex = self.fw_ifindex(interface_id)?;
-        let entry = self.fw.entry(ifindex).or_default();
-        check_budget("IPv4", entry.len() + 1)?;
-        // Reject duplicate rule IDs.
-        if entry.iter().any(|(id, _)| id == &rule_id) {
-            return Err(FwError::AlreadyExists);
-        }
-        let v6 = self
-            .fw6
-            .get(&ifindex)
-            .map(Vec::as_slice)
-            .unwrap_or_default();
-        let entry = self.fw.get(&ifindex).map(Vec::as_slice).unwrap_or_default();
-        compile_iface(
-            entry.iter().map(|(_, r)| r).chain(core::iter::once(&rule)),
-            v6.iter().map(|(_, r)| r),
-        )?;
-        self.fw.entry(ifindex).or_default().push((rule_id, rule));
-        self.fw_reprogram(ifindex)?;
-        self.fw_reclassify(ifindex)
-    }
-
-    /// Remove a firewall rule by id from an interface. Tries the v4 shadow first, then v6.
-    /// Returns true if removed, false if not found.
-    pub fn del_fw_rule(&mut self, interface_id: &[u8], rule_id: &[u8]) -> Result<bool, FwError> {
-        if self.del_fw_rule_v4(interface_id, rule_id)? {
-            return Ok(true);
-        }
-        self.del_fw_rule6(interface_id, rule_id)
-    }
-
-    /// Remove a v4 firewall rule by id from an interface.
-    /// Returns true if removed, false if not found.
-    fn del_fw_rule_v4(&mut self, interface_id: &[u8], rule_id: &[u8]) -> Result<bool, FwError> {
-        let ifindex = self.fw_ifindex(interface_id)?;
-        let entry = self.fw.entry(ifindex).or_default();
-        let before = entry.len();
-        entry.retain(|(id, _)| id.as_slice() != rule_id);
-        if entry.len() == before {
-            return Ok(false);
-        }
-        self.fw_reprogram(ifindex)?;
-        self.fw_reclassify(ifindex)?;
-        Ok(true)
-    }
-
     /// Reprogram all v6 firewall slots for one interface from the in-memory `fw6` vec.
     fn fw6_reprogram(&mut self, ifindex: u32) -> anyhow::Result<()> {
         let rules = self.fw6.get(&ifindex).cloned().unwrap_or_default();
@@ -391,162 +321,18 @@ impl<W: MapWriter> ControlCore<W> {
         )?;
         Ok(())
     }
-
-    /// Add or replace a v6 firewall rule on an interface.
-    /// Returns an error with "already exists" if a rule with that ID already exists.
-    pub fn add_fw_rule6(
-        &mut self,
-        interface_id: &[u8],
-        rule_id: Vec<u8>,
-        rule: FwRule6,
-    ) -> Result<(), FwError> {
-        let ifindex = self.fw_ifindex(interface_id)?;
-        let entry = self.fw6.entry(ifindex).or_default();
-        check_budget("IPv6", entry.len() + 1)?;
-        // Reject duplicate rule IDs.
-        if entry.iter().any(|(id, _)| id == &rule_id) {
-            return Err(FwError::AlreadyExists);
-        }
-        let v4 = self.fw.get(&ifindex).map(Vec::as_slice).unwrap_or_default();
-        let entry = self
-            .fw6
-            .get(&ifindex)
-            .map(Vec::as_slice)
-            .unwrap_or_default();
-        compile_iface(
-            v4.iter().map(|(_, r)| r),
-            entry.iter().map(|(_, r)| r).chain(core::iter::once(&rule)),
-        )?;
-        self.fw6.entry(ifindex).or_default().push((rule_id, rule));
-        self.fw6_reprogram(ifindex)?;
-        self.fw_reclassify(ifindex)
-    }
-
-    /// Remove a v6 firewall rule by id from an interface.
-    /// Returns true if removed, false if not found.
-    fn del_fw_rule6(&mut self, interface_id: &[u8], rule_id: &[u8]) -> Result<bool, FwError> {
-        let ifindex = self.fw_ifindex(interface_id)?;
-        let entry = self.fw6.entry(ifindex).or_default();
-        let before = entry.len();
-        entry.retain(|(id, _)| id.as_slice() != rule_id);
-        if entry.len() == before {
-            return Ok(false);
-        }
-        self.fw6_reprogram(ifindex)?;
-        self.fw_reclassify(ifindex)?;
-        Ok(true)
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use crate::{mem::MemMapWriter, shadow::IfaceMeta, ControlCore, FwError, MapWriter};
-    use flowplane_common::{FwRule, FwRuleKey, FW_DIR_EGRESS, FW_MAX_RULES};
+    use flowplane_common::{FwRule, FwRuleKey, FW_DIR_EGRESS};
 
     fn rule(direction: u8) -> FwRule {
         FwRule {
             direction,
             ..Default::default()
         }
-    }
-
-    #[test]
-    fn add_and_del_fw_rule_programs_slots_and_rejects_dupes() {
-        let mut c = ControlCore::new(MemMapWriter::default());
-        let ifindex = 42u32;
-        c.register_iface_meta(
-            b"if1".to_vec(),
-            IfaceMeta {
-                vni: 5,
-                ipv4: [10, 0, 0, 2],
-                ipv6: [0u8; 16],
-                underlay: [1u8; 16],
-                ifindex,
-            },
-        );
-
-        // Add two rules (one ingress, one egress).
-        c.add_fw_rule(b"if1", b"r0".to_vec(), rule(0)).unwrap();
-        c.add_fw_rule(b"if1", b"r1".to_vec(), rule(FW_DIR_EGRESS))
-            .unwrap();
-
-        // Two slots written; FW_META reflects the per-direction counts.
-        assert!(c.w.fw_rules.contains_key(&FwRuleKey { ifindex, idx: 0 }));
-        assert!(c.w.fw_rules.contains_key(&FwRuleKey { ifindex, idx: 1 }));
-        let meta = c.w.fw_meta.get(&ifindex).unwrap();
-        assert_eq!(meta.ingress_count, 1);
-        assert_eq!(meta.egress_count, 1);
-
-        // Duplicate rule-id rejected.
-        assert!(c.add_fw_rule(b"if1", b"r0".to_vec(), rule(0)).is_err());
-
-        // Delete one: only slot 0 remains, meta updated.
-        assert!(c.del_fw_rule(b"if1", b"r0").unwrap());
-        assert!(c.w.fw_rules.contains_key(&FwRuleKey { ifindex, idx: 0 }));
-        assert!(!c.w.fw_rules.contains_key(&FwRuleKey { ifindex, idx: 1 }));
-        let meta = c.w.fw_meta.get(&ifindex).unwrap();
-        assert_eq!(meta.ingress_count, 0);
-        assert_eq!(meta.egress_count, 1);
-
-        // Deleting a non-existent rule returns false.
-        assert!(!c.del_fw_rule(b"if1", b"nope").unwrap());
-
-        // Unknown interface errors.
-        assert!(c.add_fw_rule(b"nope", b"x".to_vec(), rule(0)).is_err());
-    }
-
-    #[test]
-    fn add_fw_rule6_programs_rules6_and_meta6() {
-        use flowplane_common::{FwRule6, FW_ACTION_ACCEPT, FW_DIR_INGRESS};
-        let mut c = ControlCore::new(MemMapWriter::default());
-        let ifindex = 42u32;
-        c.register_iface_meta(
-            b"if0".to_vec(),
-            IfaceMeta {
-                vni: 5,
-                ipv4: [10, 0, 0, 2],
-                ipv6: [0u8; 16],
-                underlay: [1u8; 16],
-                ifindex,
-            },
-        );
-
-        let r6 = FwRule6 {
-            src_ip: [0; 16],
-            src_mask: [0; 16],
-            dst_ip: [0; 16],
-            dst_mask: [0; 16],
-            src_port_min: 0,
-            src_port_max: 65535,
-            dst_port_min: 0,
-            dst_port_max: 65535,
-            icmp_type: 0xffff,
-            icmp_code: 0xffff,
-            proto: 0,
-            action: FW_ACTION_ACCEPT,
-            direction: FW_DIR_INGRESS,
-            enabled: 1,
-        };
-        c.add_fw_rule6(b"if0", b"r1".to_vec(), r6).unwrap();
-
-        // Slot 0 written to FW_RULES6; FW_META6 reflects the ingress count.
-        assert!(c.w.fw_rules6.contains_key(&FwRuleKey { ifindex, idx: 0 }));
-        let meta = c.w.fw_meta6.get(&ifindex).unwrap();
-        assert_eq!(meta.ingress_count, 1);
-        assert_eq!(meta.egress_count, 0);
-
-        // Duplicate rule-id rejected.
-        assert!(c.add_fw_rule6(b"if0", b"r1".to_vec(), r6).is_err());
-
-        // del_fw_rule (v4-first, then v6) removes the v6 rule and drops the count.
-        assert!(c.del_fw_rule(b"if0", b"r1").unwrap());
-        assert!(!c.w.fw_rules6.contains_key(&FwRuleKey { ifindex, idx: 0 }));
-        let meta = c.w.fw_meta6.get(&ifindex).unwrap();
-        assert_eq!(meta.ingress_count, 0);
-        assert_eq!(meta.egress_count, 0);
-
-        // Deleting a non-existent rule returns false (misses both v4 and v6).
-        assert!(!c.del_fw_rule(b"if0", b"nope").unwrap());
     }
 
     // ---- classifier programming (FW_BIND + scopes) -------------------------------------------
@@ -761,30 +547,6 @@ mod tests {
             1,
             "the adopted scope is freed once unreferenced"
         );
-    }
-
-    #[test]
-    fn fw_rules_capped_at_max() {
-        let mut c = ControlCore::new(MemMapWriter::default());
-        let ifindex = 7u32;
-        c.register_iface_meta(
-            b"if1".to_vec(),
-            IfaceMeta {
-                vni: 1,
-                ipv4: [10, 0, 0, 1],
-                ipv6: [0u8; 16],
-                underlay: [1u8; 16],
-                ifindex,
-            },
-        );
-        for i in 0..FW_MAX_RULES {
-            c.add_fw_rule(b"if1", format!("r{i}").into_bytes(), rule(0))
-                .unwrap();
-        }
-        // One over the cap is rejected.
-        assert!(c
-            .add_fw_rule(b"if1", b"overflow".to_vec(), rule(0))
-            .is_err());
     }
 
     #[test]

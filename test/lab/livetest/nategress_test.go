@@ -73,7 +73,7 @@ func TestNatEgressSmoke(t *testing.T) {
 	out, err = dataplaneGRPC(t, ctx, container, "AddRoute", routeBody)
 	require.NoError(t, err, "AddRoute(external): %s", out)
 
-	addFwEgressAllow(t, ctx, container, natGuestID)
+	setFirewall(t, ctx, container, natGuestID, fwAllowAny("eg", true))
 
 	netprobe := buildStaticBin(t, "netprobe")
 	pid, err := dockerPID(ctx, container)

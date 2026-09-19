@@ -160,18 +160,7 @@ func wireOverlay(t *testing.T, ctx context.Context, container, id, peerIP, peerU
 	out, err := dataplaneGRPC(t, ctx, container, "AddRoute", routeBody)
 	require.NoError(t, err, "AddRoute %s->%s: %s", id, peerIP, out)
 
-	addFwEgressAllow(t, ctx, container, id)
-	addFwIngressAllow(t, ctx, container, id)
-}
-
-// addFwIngressAllow programs a deny-by-default-busting ingress allow rule (proto 0
-// = any) on the interface — the mirror of addFwEgressAllow for the return/receive
-// direction.
-func addFwIngressAllow(t *testing.T, ctx context.Context, container, id string) {
-	t.Helper()
-	body := fmt.Sprintf(`{"interface_id":%q,"rule_id":"in","proto":0,"allow":true,"egress":false}`, id)
-	out, err := dataplaneGRPC(t, ctx, container, "AddFwRule", body)
-	require.NoError(t, err, "AddFwRule ingress-allow on %s: %s", id, out)
+	setFirewall(t, ctx, container, id, fwAllowAny("eg", true), fwAllowAny("in", false))
 }
 
 // configureQoS sets the per-interface QoS lanes over the dataplane gRPC (0 =
