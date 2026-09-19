@@ -142,7 +142,7 @@ impl Maps for GlobalMaps {
     }
     #[inline(always)]
     fn nat_owner6(&self, nat_ip: &[u8; 16], port: u16) -> Option<NatOwner> {
-        crate::nat::nat_owner6(*nat_ip, port)
+        crate::nat::nat_owner6(nat_ip, port)
     }
     #[inline(always)]
     fn nat_ct6_get(&self, key: &flowplane_common::CtKey6) -> Option<flowplane_common::CtEntry6> {
