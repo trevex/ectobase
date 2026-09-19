@@ -22,33 +22,30 @@ type natKey struct {
 // VNIs it subscribes to) and replays the current NAT + public snapshot, closing
 // it with EndOfGlobal. Called on Hello.
 //
-// The marker carries how many records were replayed, and is queued while r.mu is
-// STILL HELD. Both matter:
-//   - the count lets the consumer tell a complete snapshot from one the sink's
-//     outbound queue dropped records from, and prune only on the former (see the
-//     EndOfGlobal doc in routebus.proto — pruning against a lossy snapshot would
-//     withdraw live state);
-//   - holding the lock across the replay AND the marker means a concurrent
-//     Announce/Withdraw fanout cannot interleave into the snapshot or slip in
-//     ahead of the marker, so the consumer's pre-marker count is exactly this
-//     count and no live delta can inflate it.
+// The replay and its marker go to the sink as ONE snapshot, handed over while r.mu is still
+// held. The sink queues a snapshot whole (see Sink), and a concurrent Announce/Withdraw fanout
+// cannot interleave with it or slip in ahead of the marker — so the marker's record count is
+// exactly what the consumer receives before it. The consumer still checks that count before it
+// prunes (see the EndOfGlobal doc in routebus.proto): an older reflector dropped snapshot
+// records, and pruning against a lossy snapshot would withdraw live state.
 func (r *RIB) RegisterSink(s Sink) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.sinks[s.ID()] = s
+	snap := make([]*pb.ServerMsg, 0, len(r.nat)+len(r.public)+1)
 	var n uint32
 	for k := range r.nat {
-		b := r.nat[k]
-		s.Send(natUpdate(b, pb.RouteOp_ROUTE_OP_ADD))
+		snap = append(snap, natUpdate(r.nat[k], pb.RouteOp_ROUTE_OP_ADD))
 		n++
 	}
 	for k := range r.public {
-		s.Send(publicUpdate(r.public[k], pb.RouteOp_ROUTE_OP_ADD))
+		snap = append(snap, publicUpdate(r.public[k], pb.RouteOp_ROUTE_OP_ADD))
 		n++
 	}
-	s.Send(&pb.ServerMsg{Msg: &pb.ServerMsg_EndOfGlobal{
+	snap = append(snap, &pb.ServerMsg{Msg: &pb.ServerMsg_EndOfGlobal{
 		EndOfGlobal: &pb.EndOfGlobal{RecordCount: n},
 	}})
+	s.SendSnapshot(snap)
 }
 
 // UnregisterSink removes s from the global sink set (on disconnect). Its NAT

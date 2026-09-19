@@ -18,22 +18,6 @@ type Server struct {
 
 func NewServer(rib *RIB) *Server { return &Server{rib: rib} }
 
-// chanSink is a subscriber's non-blocking outbound queue. A dedicated goroutine
-// drains it onto the stream (gRPC allows only one concurrent Send per stream).
-type chanSink struct {
-	id string
-	ch chan *pb.ServerMsg
-}
-
-func (c *chanSink) ID() string { return c.id }
-func (c *chanSink) Send(m *pb.ServerMsg) {
-	select {
-	case c.ch <- m:
-	default:
-		// Slow consumer: drop. Recovered on the next full-table resync (reconnect).
-	}
-}
-
 func (s *Server) Session(stream pb.RouteBus_SessionServer) error {
 	first, err := stream.Recv()
 	if err != nil {
@@ -47,25 +31,34 @@ func (s *Server) Session(stream pb.RouteBus_SessionServer) error {
 	// IP SANs (the node's underlay /128). No-op when mTLS is off (no verified cert).
 	guard := newUnderlayGuard(stream.Context())
 
-	sink := &chanSink{id: h.NodeId, ch: make(chan *pb.ServerMsg, 1024)}
-	// Register globally on Hello: NAT blocks broadcast to every session (not just
-	// VNI subscribers), and this replays the current NAT snapshot to the new peer.
+	sink := newSessionQueue(h.NodeId)
+	// Register globally on Hello: NAT + public records broadcast to every session (not just
+	// VNI subscribers), and this replays the current global snapshot to the new peer.
 	s.rib.RegisterSink(sink)
 
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		for m := range sink.ch {
-			if err := stream.Send(m); err != nil {
+		for {
+			batch, ok := sink.take()
+			if !ok {
 				return
+			}
+			for i, m := range batch {
+				if err := stream.Send(m); err != nil {
+					log.Printf("reflector: session %s: send: %v", sink.id, err)
+					sink.close() // the stream is gone: stop queueing for it
+					return
+				}
+				batch[i] = nil // sent: let a huge snapshot's messages be GC'd as the batch drains
 			}
 		}
 	}()
 	defer func() {
-		s.rib.UnregisterSink(sink.id) // stop broadcasting NAT updates to this dead session
-		s.rib.DropOrigin(sink.id)     // fast-withdraw this node's routes AND NAT blocks on disconnect
-		close(sink.ch)
+		s.rib.UnregisterSink(sink.id) // stop broadcasting NAT/public updates to this dead session
+		s.rib.DropOrigin(sink.id)     // fast-withdraw this node's routes AND NAT/public records on disconnect
+		sink.close()
 		wg.Wait()
 	}()
 
