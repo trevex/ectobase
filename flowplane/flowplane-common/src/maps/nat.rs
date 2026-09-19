@@ -36,11 +36,50 @@ pub struct NatValue6 {
     pub port_max: u16,
 }
 
+/// `NAT_OWNERS` trie key data (after the LPM trie's 4-byte prefix length): a nat_ip and a
+/// destination port, big-endian so a prefix masks the port's high bits. A neighbor-NAT block
+/// `[port_min, port_max)` is stored as the fewest aligned port prefixes covering it; the prefix
+/// length is [`NAT_OWNER_ADDR_BITS4`] + the port prefix bits.
+#[repr(C)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Default)]
+pub struct NatOwnerKey {
+    pub nat_ip: [u8; 4],
+    pub port: [u8; 2],
+}
+
+/// IPv6 sibling of [`NatOwnerKey`] (`NAT_OWNERS6`); prefix length [`NAT_OWNER_ADDR_BITS6`] + port bits.
+#[repr(C)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Default)]
+pub struct NatOwnerKey6 {
+    pub nat_ip6: [u8; 16],
+    pub port: [u8; 2],
+}
+
+/// The node owning the NAT port block a `NAT_OWNERS{,6}` prefix belongs to — its underlay /128 and
+/// the block's VNI — and the block itself (`[port_min, port_max)`), so the dataplane can rebuild
+/// its block list from the pinned trie after a restart.
+#[repr(C)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Default)]
+pub struct NatOwner {
+    pub underlay: [u8; 16],
+    pub vni: u32,
+    pub port_min: u16,
+    pub port_max: u16,
+}
+
+/// Prefixes each `NAT_OWNERS{,6}` trie holds. A default 1024-port block starting on a multiple of
+/// 1024 is one prefix; an arbitrary range is at most 30.
+pub const NAT_OWNERS_MAX: u32 = 65536;
+/// Prefix bits of the address part of a [`NatOwnerKey`] / [`NatOwnerKey6`].
+pub const NAT_OWNER_ADDR_BITS4: u32 = 32;
+pub const NAT_OWNER_ADDR_BITS6: u32 = 128;
+
 /// Maximum number of neighbor-NAT entries the datapath will scan.
 pub const NB_MAX_ENTRIES: u32 = 64;
 
-/// A neighbor-NAT entry: a remote node owns `(vni, nat_ip, [port_min, port_max))`; return traffic
-/// to that nat_ip:port is re-forwarded to `underlay`. `enabled` 1 = slot in use.
+/// A neighbor-NAT block: a remote node owns `(vni, nat_ip, [port_min, port_max))`; return traffic
+/// to that nat_ip:port is re-forwarded to `underlay`. Stored in the datapath as `NAT_OWNERS`
+/// prefixes (see [`NatOwnerKey`]).
 #[repr(C)]
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Default)]
 pub struct NeighborNatEntry {
@@ -53,9 +92,9 @@ pub struct NeighborNatEntry {
     pub _pad: [u8; 3],
 }
 
-/// A NAT66 neighbor-NAT entry: v6 sibling of [`NeighborNatEntry`]. A remote node owns
+/// A neighbor-NAT block: v6 sibling of [`NeighborNatEntry`]. A remote node owns
 /// `(vni, nat_ip6, [port_min, port_max))`; return traffic to that nat_ip6:port is re-forwarded to
-/// `underlay`. `enabled` 1 = slot in use.
+/// `underlay`. Stored in the datapath as `NAT_OWNERS6` prefixes (see [`NatOwnerKey6`]).
 #[repr(C)]
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Default)]
 pub struct NeighborNat6Entry {
@@ -77,6 +116,9 @@ mod user_impls {
     unsafe impl aya::Pod for NatValue {}
     unsafe impl aya::Pod for NatKey6 {}
     unsafe impl aya::Pod for NatValue6 {}
+    unsafe impl aya::Pod for NatOwnerKey {}
+    unsafe impl aya::Pod for NatOwnerKey6 {}
+    unsafe impl aya::Pod for NatOwner {}
     unsafe impl aya::Pod for NeighborNatEntry {}
     unsafe impl aya::Pod for NeighborNat6Entry {}
 }
@@ -110,5 +152,16 @@ mod tests {
         // + 1 (enabled) + 3 (_pad) = 32.
         assert_eq!(size_of::<NeighborNatEntry>(), 32);
         assert_eq!(align_of::<NeighborNatEntry>(), 4);
+    }
+
+    #[test]
+    fn nat_owner_layouts() {
+        use core::mem::size_of;
+        // 4 (nat_ip) + 2 (port): the trie key is 4 (prefix length) + 6.
+        assert_eq!(size_of::<NatOwnerKey>(), 6);
+        // 16 (nat_ip6) + 2 (port).
+        assert_eq!(size_of::<NatOwnerKey6>(), 18);
+        // 16 (underlay) + 4 (vni) + 2 + 2 (the block's ports).
+        assert_eq!(size_of::<NatOwner>(), 24);
     }
 }
