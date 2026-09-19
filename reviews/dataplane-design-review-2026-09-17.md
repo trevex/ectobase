@@ -34,10 +34,21 @@ asymmetries plus doc drift.
 
 ---
 
+## Status at a glance (verified against `main`, 2026-09-19)
+
+| Section | Done | Open |
+|---|---|---|
+| §1 Correctness (P0) | all seven (`0e2e601f`) | — |
+| §2 Scale ceilings | firewall rule cap (firewall redesign, `acd0d55b` + `ec23ad68`) | neighbor-NAT 64 + NAT/public broadcast, map ceilings, conntrack pressure, IPAM + peering list costs, sizing doc |
+| §3 Control-plane resilience | NAT/public prune (`a334ef8`), route-prune guard (`cb4188e6`), fence completeness (`a4dd915`), dispatch-controller leader election (`54dda54c`) | edge `/readyz` not consumed, `replicas: 1` everywhere, `GenerationApplied`, broker sync ordering |
+| §4 Policy model | priorities, `defaultPolicy`, FirewallPolicy validation, revocation (`b19cbb3`, `99d3880`, `acd0d55b`) | Route intent, source selectors, remaining validation, peering-overlap warning |
+| §5 Symmetry | — | all items |
+| §6 Doc drift | overlay MTU, NAT return wording | the rest of the list |
+
 ## Status: the P0 batch is done (2026-09-17)
 
-All of §1 is fixed on `fix/p0-dataplane-batch`, each with a failing test written first
-(`make ci` green; 185 sim/core tests). Two findings did not survive scrutiny and are
+All of §1 is fixed, each with a failing test written first (`make ci` green; 185 sim/core
+tests), and merged to `main` in `0e2e601f`. Two findings did not survive scrutiny and are
 corrected in place below — 1.3's IPv6 half and part of 1.4.
 
 Privileged gates run and passing: `make verifier` **and** `make sim-anchor` (all five
@@ -178,9 +189,11 @@ firewalls. v4 and v6, sim and eBPF. The refusal now removes the entries the flow
    NAT blocks and LB backends against it, dropping a load balancer whose last backend is gone.
    The marker carries the replayed record count and the agent prunes only on an exact match:
    a sink drops on overflow, so pruning against a lossy snapshot would withdraw LIVE state —
-   strictly worse than the staleness. **Note this exposed a pre-existing sibling hazard:**
-   prune-on-EndOfRIB has the same lossy-snapshot exposure for routes and no count guard. Not
-   fixed there; worth doing.
+   strictly worse than the staleness. This exposed a pre-existing sibling hazard:
+   prune-on-EndOfRIB had the same lossy-snapshot exposure for routes and no count guard.
+   **Fixed since** (`cb4188e6`, merged in `379dd45`): `EndOfRIB` carries the replayed record
+   count, counted from when the Subscribe is sent, and the agent prunes routes only on an exact
+   match.
 2. ~~**Edge anycast has no readiness gating.**~~ **HALF FIXED** (`c7f779b`). `Bus.Converged`
    (global snapshot + EndOfRIB for every subscribed VNI, latching) is exposed over
    `--health-addr` `/readyz`. But nothing consumes it yet: the lab advertises the public
@@ -199,8 +212,8 @@ firewalls. v4 and v6, sim and eBPF. The refusal now removes the entries the flow
    reattaching the disk is the step that corrupts. Also note: a placement cross-check was
    considered and rejected — `CompiledVM.status.placement` comes from the same broker, so it
    freezes at the same instant and cannot see the node either.
-4. ~~**dispatch-controller has no leader election**~~ **FIXED** (branch
-   `dispatch/leader-election`): the manager takes a Lease (`ectobase-dispatch-controller`, host
+4. ~~**dispatch-controller has no leader election**~~ **FIXED** (`42c6ea1d`, merged in
+   `54dda54c`): the manager takes a Lease (`ectobase-dispatch-controller`, host
    kube-apiserver, `ReleaseOnCancel`) before starting any reconciler, with lease RBAC in the
    generated ClusterRole and a chart test pinning it. An envtest test builds two managers from
    the binary's own options and asserts one leader and a handover inside the lease duration
@@ -251,7 +264,7 @@ firewalls. v4 and v6, sim and eBPF. The refusal now removes the entries the flow
   NATGateway validation. Also still open, found on the way: the other `Validate` hooks
   (Subnet, NIC, LB, LBPool) implement create only — an update bypasses them.
 - ~~**Policy revocation doesn't reach established flows for up to 24 h**~~ **FIXED**
-  (firewall redesign increment B5, branch `fw/b-classifier`) — not by a sweep: a node-wide
+  (firewall redesign increment B5, `fb3966e7`, merged in `acd0d55b`) — not by a sweep: a node-wide
   firewall epoch (`FW_EPOCH`), bumped after every `FW_BIND` change, is stamped into each
   conntrack entry (`CtEntry.policy_epoch`, carved from the pad; 24 B unchanged). A FORWARD
   entry hit under an older epoch meets the firewall again at that hook (guest egress v4/v6
@@ -320,23 +333,27 @@ get mirrored, and each gap is individually "known" but the set is growing.
 
 ## 6. Doc drift (quick sweep, all low-effort)
 
-- `docs/concepts/overlay.md` — 56-byte overhead → effective reserve is 80.
-- `docs/features/qos.md` — claims v6 ingress policing exists; doesn't. Same-node bypass of
-  ingress policing undocumented.
+- ~~`docs/concepts/overlay.md` — 56-byte overhead → effective reserve is 80.~~ **FIXED**
+  (`59c46c15`): the page now gives the 56-byte header and the 80-byte advertised reserve.
+- `docs/features/qos.md` — presents ingress policing with no family caveat; the v6 uplink
+  (`xdp_uplink_v6`) has none. Same-node bypass of ingress policing undocumented (the page
+  covers only the shaping half).
 - `docs/features/ns-edge.md:165-168` + `mesh/agent/public.go:80` — `learnedEdge`
   return-path pinning described as live; `LearnedEdge()` has no production caller (dead
   code — delete or wire).
 - `docs/architecture/kubevirt-integration.md` / `cni-integration.md` — say veth + literal
   `tap0`; code uses netkit-L2 and derives/rejects `tap0` (`attach/naming.rs:77-89`).
-- `attach/mod.rs:44-46` — stale "fails until B.4 lands" comment on the *default* container
+- `attach/mod.rs:44-45` — stale "fails ... until B.4 lands" comment on the *default* container
   path (B.4 landed); would misdirect an incident.
 - `mesh/reflector/admin.go:19-21` — stale `TODO(authz)`; CN-gating is implemented.
 - Broker `main.go:6-7,180` — says "filtered by spec.clusterName"; it's namespace-scoped.
-- `docs/features/nat.md:73` (v4-only return wording), `:125` (NAT64 "reuses" egress path —
-  it's a separate subsystem); `routing-vni.md:2` "VXLAN" → Geneve.
+- `docs/features/nat.md` — ~~v4-only return wording~~ **FIXED** (`a3f5089a`: the return path
+  now covers both families over `NEIGHBOR_NAT`/`NEIGHBOR_NAT6`); still open: `:159` says NAT64
+  "reuses" the egress path — it's a separate subsystem. `routing-vni.md:4` "VXLAN" → Geneve.
 - "Scaffold-only" markers on FirewallPolicy/LoadBalancer types that are fully compiled.
   (FirewallPolicy's fixed in `b19cbb3`; LoadBalancer's remains.)
-- `Subnet.status.V4Total/V6Total` include network/broadcast the allocator excludes.
+- `Subnet.status.V4Total/V6Total` include network/broadcast the allocator excludes
+  (`subnet.go` `totalHosts`), while the API field doc says "allocatable".
 - `docs/features/loadbalancer.md` "Direct server return" says the inner destination stays the LB
   address all the way to the backend; the edge's N/S DSR encode (`datapath::process_wan_rx`)
   rewrites it to the backend's overlay IP. Verify per LB path and correct. (Its firewall section
@@ -345,14 +362,17 @@ get mirrored, and each gap is individually "known" but the set is growing.
 
 ## 7. Suggested sequencing
 
-1. ~~**P0 correctness batch**~~ — **DONE**, see the status note at the top. One follow-up
-   carried over: run `make verifier` (root) against the new ICMP-relay rewrite windows.
-2. **N/S resilience pair:** NAT/public snapshot-prune + edge readiness gating. These two
-   close the only "silent traffic loss with no self-healing" paths in the system.
+1. ~~**P0 correctness batch**~~ — **DONE**, see the status note at the top. The carried-over
+   `make verifier` run against the ICMP-relay rewrite windows is done too (`b4662df`, which
+   also brought `xdp_uplink_v6` back under the stack limit); the verifier has passed on every
+   datapath merge since.
+2. **N/S resilience pair:** ~~NAT/public snapshot-prune~~ (done, `a334ef8`) + edge readiness
+   gating (half done, `c7f779b`: `/readyz` exists, nothing gates an advertisement on it yet).
+   These two close the only "silent traffic loss with no self-healing" paths in the system.
 3. ~~**Failover safety:** fence completeness + dispatch-controller leader election.~~ Both done.
-4. **Scale groundwork:** firewall rule-storage redesign (kills the 16-rule cap and sets up
-   priorities), NAT/public subscription scoping + keyed neighbor-NAT map. Write a sizing
-   doc making every remaining map ceiling an explicit budget.
+4. **Scale groundwork:** ~~firewall rule-storage redesign~~ (done: the LPM classifier,
+   `acd0d55b` + `ec23ad68`), NAT/public subscription scoping + keyed neighbor-NAT map. Write
+   a sizing doc making every remaining map ceiling an explicit budget.
 5. **Policy semantics:** ~~firewall priority field, DefaultPolicy wire-or-delete,
    FirewallPolicy admission validation~~ (done, firewall redesign increment A),
    ~~revocation-vs-established-flows contract~~ (done, increment B5: CT epoch).
