@@ -38,8 +38,9 @@ service DataplaneNode {
   // nat_ip (ALREADY_EXISTS) or more prefixes than the table holds (RESOURCE_EXHAUSTED). Two
   // identical blocks in one set are an overlap like any other, so an exact duplicate is
   // ALREADY_EXISTS too. INTERNAL is the one code that does NOT mean nothing changed: a map
-  // failure part way leaves the set PARTLY applied — removals up to that point are done, no
-  // addition is — so the caller retries the SAME set, which finishes the job.
+  // failure part way leaves the set PARTLY applied — the removals and additions it reached are
+  // done, and every trie prefix still belongs to a listed block — so the caller retries the SAME
+  // set, which finishes the job.
   rpc ReplaceNeighborNats(ReplaceNeighborNatsRequest) returns (ReplaceNeighborNatsResponse);
   // AddLoadBalancer registers an external load balancer LB address: an IPv4 (vni=0 for the WAN edge) with a set
   // of (port, proto) services, programming the LB map + allocating a Maglev table. Backends are
