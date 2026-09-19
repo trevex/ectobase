@@ -105,9 +105,9 @@ mod tests {
     const NAT_IP6: [u8; 16] = [0x20, 1, 0xd, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 9];
     const UNDERLAY: [u8; 16] = [7; 16];
 
-    // A mid-range block, single-port and odd-width blocks, the two split-heaviest ranges
-    // (an odd start one below the top, and the full range minus its first port), and the two
-    // extremes `port_prefixes` decomposes at: port 0 and port 65535.
+    // Aligned, mid-range, odd-width and single-port blocks; the 30-prefix worst case [1, 65535);
+    // and both ends of the space: a block from port 0, and one ending at 65534, the highest port
+    // a half-open u16 block can hold.
     const RANGES: [(u16, u16); 7] = [
         (20000, 30000),
         (1, 65535),
