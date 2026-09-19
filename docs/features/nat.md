@@ -77,8 +77,10 @@ flowchart TD
 Return traffic from the internet arrives at the [WAN edge](ns-edge.md) addressed to a
 public IP + port. The edge must forward it to the node that owns that
 `(nat_ip, port)` block; the neighbor-NAT lookup does this. The owning node announces its
-NAT block on the route bus with owner = that node's own VTEP, so every node
-(including the edge) learns which node to encapsulate the return toward.
+NAT block on the route bus with owner = that node's own VTEP, and the sessions that take
+the route bus's global feed — the WAN edges — learn it. A compute node opts out
+(`Hello.global_feed = GLOBAL_FEED_NONE`) and holds no neighbor-NAT blocks at all: the
+relay code below still runs there, just against a table that is always empty.
 
 The edge's `uplink_rx` / `wan_rx` path looks the return packet's `(nat_ip, dport)` up in
 the `NAT_OWNERS` trie (`NAT_OWNERS6` for IPv6), gets back the owning node's underlay
@@ -91,13 +93,28 @@ delivered to the original guest. (A plain return from the internet carries no VN
 the edge uses a VNI-agnostic lookup that returns both the underlay and the owner's VNI.
 Both families work the same way, over `NAT_OWNERS` / `NAT_OWNERS6`.)
 
+The edge keeps this table in sync declaratively, not incrementally. While a snapshot
+replays, the agent only collects the blocks it sees; at that snapshot's exact-count
+`EndOfGlobal` marker it calls `ReplaceNeighborNats` once with the whole set, which makes
+the dataplane's blocks exactly that set — an unchanged block is left alone, and one that
+left is removed, including a block the dataplane adopted after its own restart that no
+agent remembers installing. A lossy snapshot (fewer records arrived than the marker
+claims) programs what did arrive and prunes nothing, since removing blocks against an
+incomplete picture would drop live routes. Live NAT announcements after the marker are
+still applied incrementally, one block at a time.
+
 !!! note "Limits"
 
     Each trie holds up to 65,536 prefixes per family. A block that overlaps another
     block on the same `nat_ip` — in any VNI — is refused as `AlreadyExists`; a full trie
     is refused as `ResourceExhausted`. Blocks live in pinned maps, so they survive a
     dataplane restart: adopt rebuilds the block list from the trie values (each prefix
-    carries its whole block) and re-writes any prefix a crash left missing.
+    carries its whole block) and re-writes any prefix a crash left missing. If the
+    dataplane and the agent both restarted while a block was withdrawn or reassigned,
+    the adopted block used to stay listed forever, misrouting that public IP's return
+    traffic and refusing any overlapping successor — CLOSED: the edge's next complete
+    snapshot replaces the whole block set declaratively, so the stranded block is removed
+    and its successor admitted in the same call.
 
     Upgrading a node from the old 64-slot neighbor-NAT table does not convert its
     existing blocks — the loader unpins the old maps without reading them, so an edge's

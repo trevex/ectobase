@@ -53,17 +53,23 @@ is a small tagged union in each direction (`api/proto/routebus/v1/routebus.proto
 
 | Client → reflector | Reflector → client |
 |---|---|
-| `Hello` (node id + underlay IPv6) | `RouteUpdate` (add/withdraw per VNI) |
+| `Hello` (node id + underlay IPv6 + `global_feed`) | `RouteUpdate` (add/withdraw per VNI) |
 | `Subscribe` / `Unsubscribe` (by VNI) | `EndOfRIB` (snapshot-complete / prune marker) |
 | `Announce` / `Withdraw` (route) | |
-| `AnnounceNat` / `WithdrawNat` (SNAT port-block) | |
+| `AnnounceNat` / `WithdrawNat` (SNAT port-block) | `EndOfGlobal` (global-snapshot-complete marker) |
 | `AnnouncePublic` / `WithdrawPublic` (edge identity, public prefix) | |
 | `KeepAlive` | |
 
-The first message on a session must be `Hello`; it carries the node id, which
-becomes the origin tag on everything the node announces (`server.go`). On `Hello`
-the reflector registers the session globally, because NAT and public records
-broadcast to every session regardless of VNI subscription (see below).
+The first message on a session must be `Hello`; it carries the node id, which becomes the
+origin tag on everything the node announces (`server.go`), plus `global_feed` — whether
+this session takes the GLOBAL channel described below. On `Hello` the reflector registers
+the session for NAT/public fanout only if `global_feed` asks for it (`GLOBAL_FEED_ALL`,
+the default); a session that opts out (`GLOBAL_FEED_NONE`) is never added to that fanout
+and instead gets an immediate `EndOfGlobal{record_count: 0}`, which still closes its
+snapshot so convergence latches. A compute agent sends `GLOBAL_FEED_NONE` — it neither
+relays NAT returns nor runs Maglev, so the global records were work for nothing — and a
+WAN edge sends `GLOBAL_FEED_ALL`. The default being `ALL` keeps an older agent, which
+never sets the field, receiving everything exactly as before.
 
 ### Per-VNI routes vs global records
 
@@ -73,11 +79,21 @@ replays the current table for that VNI in deterministic prefix order, then sends
 origin fan out only to that VNI's subscribers (`RIB.fanout`), and never back to the
 origin that sent them.
 
-NAT port-blocks and public/edge-identity records, by contrast, broadcast to every
-connected session — a node must learn the return path for a NAT block, or the
-identity of an edge, no matter which VNI it subscribed to. Registration on `Hello`
-(`RegisterSink`) also replays the current NAT/public snapshot to a freshly connected
-peer.
+NAT port-blocks and public/edge-identity records, by contrast, broadcast to every session
+that takes the GLOBAL feed — a WAN edge needs the return path for a NAT block, or the
+identity of an edge, no matter which VNI it subscribed to; a compute node needs neither
+and opts out. Registration on `Hello` (`RegisterSink`) also replays the current NAT/public
+snapshot to a freshly connected peer that takes the feed.
+
+At that snapshot's `EndOfGlobal` marker, an edge applies everything it collected as one
+declarative call: `ReplaceNeighborNats` makes its neighbor-NAT blocks exactly that
+snapshot's set, leaving an unchanged block alone and removing one that left — including a
+block a restarted dataplane adopted that no agent remembers installing. A lossy snapshot
+(fewer records arrived than the marker's count) programs what did arrive and prunes
+nothing, since pruning against an incomplete picture would drop live state; live NAT
+records after the marker are still applied incrementally, one at a time. An older
+dataplane that answers `Unimplemented` falls back to the same per-block programming plus a
+diff against what the agent previously installed.
 
 ## Reference-counted, anycast-safe routes
 

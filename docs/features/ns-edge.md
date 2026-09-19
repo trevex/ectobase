@@ -58,11 +58,13 @@ source NIC's `CompiledNIC.NAT`, and the source node performs the SNAT locally on
 
 The NAT block owner is the source node's VTEP (`mesh/agent/natreconcile.go`,
 `NatBlock` carries the owning node's underlay). Each node announces the NAT blocks it owns on the
-route bus so every other node — and the edge — can return-route to it. When a return packet arrives
-from the WAN, the receiving edge maps `(public-IP, dst-port ∈ block) → source underlay` from that
-distributed reverse map and re-encaps toward the owning source node. Because the mapping is a pure
-function of the distributed allocation, any edge computes the same answer, so the return need not
-hit the same edge that handled egress, which is what makes a drain safe.
+route bus's GLOBAL channel; only the WAN edges take that feed (`Hello.global_feed`) and hold the
+resulting reverse map — a compute node has no use for a return-routing table and opts out, holding
+none. When a return packet arrives from the WAN, the receiving edge maps
+`(public-IP, dst-port ∈ block) → source underlay` from that distributed reverse map and re-encaps
+toward the owning source node. Because the mapping is a pure function of the distributed
+allocation, any edge computes the same answer, so the return need not hit the same edge that
+handled egress, which is what makes a drain safe.
 
 ## Public-VNI egress: default routes originated once
 
