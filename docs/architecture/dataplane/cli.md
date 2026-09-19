@@ -63,7 +63,7 @@ map is populated from repeatable flags, each encoding one control-plane object:
 | `--nat guest_ip=nat_ip:min:max` | a NAT source block (`NAT`). |
 | `--neighbor-nat nat_ip:min:max@owner@vni` | a distributed-NAT return entry (`NEIGHBOR_NAT`). |
 | `--underlay-vni ipv6:vni` | a VNI-only underlay marker for a NAT node with no local interface. |
-| `--fw ifname:dir:action:proto:src:dst:dport` | a firewall rule (`FW_RULES`/`FW_META`). |
+| `--fw ifname:dir:action:proto:src:dst:dport` | a firewall rule; each interface's rules, in order, are compiled into its classifier scopes (`FW_BIND` + `FW_CLASS`/`FW_POLICY`). |
 | `--meter ifname=total_mbps:public_mbps` | a per-interface egress rate cap (`METER`). |
 | `--external ip4` | mark a remote route NAT-eligible. |
 

@@ -46,7 +46,7 @@ flowchart TD
         guest["in-overlay guest → LB address:port"] --> route["ROUTES lookup: LB address is a host route<br/>with N backend nexthops"]
         route --> ecmp["fabric ECMP → one backend node VTEP"]
     end
-    dsr1 --> be["backend NIC<br/>ingress firewall: dst = LB address"]
+    dsr1 --> be["backend NIC<br/>ingress firewall: client source + service port"]
     ecmp --> be
 ```
 
@@ -86,19 +86,17 @@ The consequence: the backend sees traffic addressed to the LB address, not to it
 IP. In the multi-node relay case, the selecting node re-forwards (reforwards) the packet to
 the chosen backend's node, still LB address-addressed.
 
-## The DSR firewall gotcha
+## Firewall: backends admit their clients
 
-Because DSR keeps `inner dst = LB address`, the backend's ingress firewall evaluates the packet
-with `dst = LB address` — not the backend's overlay IP. The firewall is
-[deny-by-default](firewall.md), and LB membership generates no firewall rule. So a
-`FirewallPolicy` that allows traffic to the backend's own overlay IP does not cover its
-LB traffic, and deny-by-default drops it.
-
-The fix is an explicit `LB address:port` allow rule in the backend's ingress `FirewallPolicy`.
-This must be authored as policy; the LB never creates it. This is the same "reachability is
-not permission" split as the rest of the firewall: being an LB backend makes the backend reachable
-at the LB address, but only an explicit rule admits the traffic. (This exact failure — "LB packets
-dropped" — is reproduced synthetically in the fabric simulator and pinned by the fix.)
+The firewall is [deny-by-default](firewall.md), and LB membership generates no firewall rule, so a
+backend admits LB traffic only through its own ingress `FirewallPolicy`. A firewall rule names
+the peer — for ingress, the source — and the destination port, never an address of the
+interface itself. The backend's policy therefore allows the clients' source range on the service
+port (`0.0.0.0/0` and `::/0` for an internet-facing service); whether a packet arrives addressed
+to the LB address or to the backend's overlay IP makes no difference to the match. This must be
+authored as policy; the LB never creates it. This is the same "reachability is not permission"
+split as the rest of the firewall: being an LB backend makes the backend reachable, but only an
+explicit rule admits the traffic.
 
 ## The agent split: edge LB address vs. backend anycast
 
@@ -142,7 +140,7 @@ CompiledNIC.Spec.LB[]  CompiledLB{ LB address, Ports[] }
               AddLoadBalancer(ip, vni=0, lbUnderlay=this edge, ports) then AddLbBackend(...)
         ▼
 datapath: lb_select_forward — maglev select LbBackend {node VTEP, overlay IP, vni}
-          DSR forward — inner dst stays LB address → backend ingress firewall sees dst = LB address
+          DSR forward to the backend → backend ingress firewall admits the client source + port
 ```
 
 - CRD → compiler. `Compile()` records LB membership on each matched backend NIC's
@@ -152,12 +150,12 @@ datapath: lb_select_forward — maglev select LbBackend {node VTEP, overlay IP, 
   `LB_IP` record; the edge programs the maglev LB address (N/S) from those records alone — LB address, ports and
   backends all arrive on the bus, which is what lets the edge stay API-less.
 - Agent → dataplane. The edge's `LB` + `MAGLEV` maps drive backend selection; DSR
-  forwards LB address-addressed to the chosen backend. The backend's ingress firewall must
-  explicitly allow `LB address:port`.
+  forwards to the chosen backend. The backend's ingress firewall must explicitly allow the
+  clients on the service port.
 
 ## Related
 
-- [Distributed firewall](firewall.md) — why DSR needs an explicit `LB address:port` rule.
+- [Distributed firewall](firewall.md) — how a backend's ingress policy admits LB clients.
 - [Routing & multi-VNI tenancy](routing-vni.md) — the anycast route + node-VTEP nexthop
   the E/W path reuses.
 - [North-South WAN edge](ns-edge.md) — where the maglev LB address datapath runs for ingress.

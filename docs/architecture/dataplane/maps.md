@@ -38,8 +38,10 @@ the flow state in them — survive a control-plane restart. See
 | `NAT_IPS` | HashMap (1024) | `FloatingIPKey` → `u8` | marks a `(vni, nat_ip)` as a NAT IP so ingress can answer ICMP echo to it in-datapath. |
 | `LB` | HashMap (1024) | `LbKey` → `LbValue` | load-balancer service definition (LB address+port+proto → Maglev table handle). |
 | `MAGLEV` | HashMap (65536) | `MaglevKey` → `LbBackend` | Maglev lookup table: hashed slot → the selected backend (underlay VTEP /128 + overlay IP + VNI + family). |
-| `FW_RULES` | HashMap (16384) | `FwRuleKey` → `FwRule` | firewall rule slots, keyed `(ifindex, slot)`. |
-| `FW_META` | HashMap (1024) | ifindex → `FwMeta` | per-interface firewall rule counts per direction (ingress/egress). Absence ⇒ deny (deny-by-default). |
+| `FW_BIND` | HashMap (1024) | ifindex → `FwBind` | the interface's firewall scopes: one per direction (0 = no rules). Absence ⇒ deny (deny-by-default). One write moves an interface to new rules. |
+| `FW_CLASS` / `FW_CLASS6` | HashOfMaps (4096) | scope id → LPM trie (peer prefix → class) | a scope's peer classes, per family. Pinned by name from the loader. |
+| `FW_POLICY` / `FW_POLICY6` | HashOfMaps (4096) | scope id → LPM trie (`FwPolKey` → precedence) | a scope's `[class, proto, port]` policy entries, per family. |
+| `FW_EPOCH` | Array (1) | `[0]` → `u32` | the node's firewall epoch, bumped after every `FW_BIND` change; conntrack entries record it so established flows meet a new policy. |
 | `NEIGHBOR_NAT` | HashMap (64) | slot → `NeighborNatEntry` | distributed NAT-gateway return: `nat_ip:port-range@owner-underlay@vni`, so return traffic is reforwarded to the owning node. |
 | `NEIGHBOR_NAT_COUNT` | Array (1) | `[0]` → `u32` | number of populated `NEIGHBOR_NAT` slots (the datapath scans `0..count`). |
 | `DHCP_CONFIG` | Array (1) | `[0]` → `DhcpConfig` | server-wide DHCP: MTU + DNS server lists (v4/v6). |
@@ -49,7 +51,7 @@ the flow state in them — survive a control-plane restart. See
 
 | Map | Type | Key → Value | Holds |
 |---|---|---|---|
-| `CONNTRACK` | LRU HashMap (1,048,576) | `CtKey` → `CtEntry` | the unified stateful conntrack table (NAT/NAT64/firewall flows). LRU pre-allocated (~80–100 MB, memcg-accounted); sized to dpservice's `DP_FLOW_TABLE_MAX` order. Capacity is fixed at load time and overridable via `--conntrack-max` / `FLOWPLANE_CONNTRACK_MAX`. |
+| `CONNTRACK` | LRU HashMap (1,048,576) | `CtKey` → `CtEntry` | the unified stateful conntrack table (NAT/NAT64/firewall flows). Each entry records the firewall epoch it was last evaluated under; pre-seeded reply entries carry `CT_F_REPLY` and are never re-evaluated. LRU pre-allocated (~80–100 MB, memcg-accounted); sized to dpservice's `DP_FLOW_TABLE_MAX` order. Capacity is fixed at load time and overridable via `--conntrack-max` / `FLOWPLANE_CONNTRACK_MAX`. |
 | `METER` | HashMap (1024) | ifindex → `MeterState` | per-interface egress srTCM token-bucket state. Read and refilled by the datapath meter; the cap is programmed by the control plane. |
 
 ## Redirect / devmap helpers: loader written
@@ -75,7 +77,7 @@ carry the peer-program requirement:
 
 The datapath never touches these globals directly — it reads them through the
 [`Maps` trait](pure-core.md), whose production impl (`GlobalMaps`) is a set of zero-cost
-wrappers over exactly these statics (`route4_get` → `ROUTES`, `fw_rule` → `FW_RULES`,
+wrappers over exactly these statics (`route4_get` → `ROUTES`, `fw_bind` → `FW_BIND`,
 `conntrack_get`/`_insert` → `CONNTRACK`, and so on). The simulator's `MemMaps` backs the
 same trait with `HashMap`s, which is why the same core logic runs in both. The
 `#[repr(C)]` key/value structs (`RouteValue`, `CtEntry`, `FwRule`, `NatValue`, …) live in

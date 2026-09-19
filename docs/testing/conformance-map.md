@@ -143,7 +143,7 @@ can only prove the program fails safe without a tunnel key.
 | `test1_vf_to_vf_firewall_tcp` | Ingress firewall ALLOW on matching src prefix | `firewall_test::ingress_allow_rule_matches` (sim) |
 | `test2_vf_to_vf_firewall_tcp` | Egress firewall DROP on non-matching src prefix | `firewall_test::ingress_allow_rule_matches` + `firewall_test::deny_by_default_when_no_rules` (sim); `ns_scenario_test::external_to_guest_firewall_drop_on_unopened_port` |
 | `test3_vf_to_vf_ingress_firewall_tcp` | Ingress firewall on destination VM DROP for non-matching src | `firewall_test::deny_by_default_when_no_rules` (sim); `lb_scenario_test::ns_lb_dropped_when_policy_misses_lb_ip` + `lb_scenario_test::ew_lb_anycast_dropped_without_policy` |
-| `test_vf_to_vf_icmp` | Same-node ICMP echo round-trip (twice); `addfwallrule` proto=icmp | `firewall_test::ingress_allow_rule_matches` (proto=icmp is same `fw_eval_dir` codepath) |
+| `test_vf_to_vf_icmp` | Same-node ICMP echo round-trip (twice); `addfwallrule` proto=icmp | `firewall_test::ingress_allow_rule_matches` (proto=icmp is the same `fw_classify` codepath) |
 | `test_vf_to_vf_icmpv6` | Same-node ICMPv6 echo round-trip | Same as above; IPv6 ICMP checksum verified by `arp_nd_test` path |
 | `test_vf_to_vf_ipv6_tcp` | Same-node IPv6 TCP delivery | `firewall_test::ingress_allow_rule_matches` + encap/decap via `guest_tx_v6_test` |
 

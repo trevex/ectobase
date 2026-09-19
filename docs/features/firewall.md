@@ -7,34 +7,36 @@ packet is forwarded only when an explicit allow rule matches it.
 
 ## Deny-by-default
 
-The evaluator, `flowplane_core::firewall::fw_eval_dir`, returns `ACCEPT` only when a rule
-in the packet's direction explicitly matches with an accept action. Every other
-outcome is `DROP`:
+The datapath's evaluator, `flowplane_core::firewall::fw_classify` (`fw_classify6` for IPv6),
+returns `ACCEPT` only when the rule that decides the packet is an allow. Every other outcome is
+`DROP`:
 
-- no per-interface firewall metadata at all → drop;
-- zero rules in this direction → drop;
+- the interface has no firewall binding at all → drop;
+- no rules in the packet's direction → drop;
 - an unreadable inner header → drop;
-- rules present but none match → drop.
+- no rule matches → drop.
 
 The drop is unconditional. This is a hard invariant of the datapath — the control plane is
 responsible for materializing any "default-allow" behavior as explicit allow rules.
 
 ```mermaid
 flowchart TD
-    pkt["packet at interface (dir = ingress | egress)"] --> meta{"fw_meta<br/>for ifindex?"}
-    meta -->|none| drop["DROP"]
-    meta -->|yes| count{"rule count<br/>in this dir > 0?"}
-    count -->|no| drop
-    count -->|yes| hdr{"inner header<br/>readable?"}
+    pkt["packet at interface (dir = ingress | egress)"] --> bind{"FW_BIND<br/>for ifindex?"}
+    bind -->|none| drop["DROP"]
+    bind -->|yes| scope{"scope for<br/>this dir?"}
+    scope -->|none| drop
+    scope -->|yes| hdr{"inner header<br/>readable?"}
     hdr -->|no| drop
-    hdr -->|yes| scan["scan rules in dir:<br/>match (src, dst, proto, sport, dport, icmp)"]
-    scan -->|first matching rule| act["return rule.action<br/>(Allow / Deny)"]
-    scan -->|no match| drop
+    hdr -->|yes| class["peer address → class<br/>(longest prefix in the scope's class trie)"]
+    class --> probe["policy trie, probed twice:<br/>[class, proto, port] and [any peer, proto, port]"]
+    probe -->|higher-precedence entry| act["ACCEPT if that rule allows,<br/>else DROP"]
+    probe -->|no entry| drop
 ```
 
-Each rule matches on the packet's 5-tuple selectors (`src`, `dst`, `proto`, `sport`,
-`dport`) plus ICMP type/code. Rules are scanned in order; the first matching rule's action
-wins.
+A rule matches the packet's PEER — the source of an ingress packet, the destination of an egress
+one — together with its protocol and destination port, or ICMP type and code. The first rule of
+the interface's list that matches decides; the classifier answers exactly that in a constant
+number of lookups, however many rules there are (see [The classifier](#the-classifier)).
 
 ## From FirewallPolicy to datapath
 
@@ -50,7 +52,7 @@ ingress:
   - { cidr: 2001:db8::/32, proto: ICMP, icmpType: 1, icmpCode: 4, action: Deny } # ICMPv6 port unreachable
 ```
  The control plane compiles every policy that selects a NIC into one
-first-match-wins rule list per direction, which the agent programs into BPF maps.
+first-match-wins rule list per direction, which the agent hands to the dataplane.
 
 ### Admission
 
@@ -109,11 +111,12 @@ it lowers each `CompiledFwRule`:
 
 ### The rule budget and the FirewallCompiled condition
 
-The datapath holds 16 rules per interface per address family, ingress and egress sharing
-the budget (`FW_MAX_RULES`). Shadowed rules cost nothing; the allow-all pair a posture adds
-counts like any other rule. The compiler enforces the budget. When a NIC's rules exceed it
-in either family, or a rule stored before admission validation can't be interpreted, the
-compiler does not guess:
+A NIC's firewall may hold 256 rules per address family, ingress and egress sharing the budget
+(`FirewallRuleBudget`). Shadowed rules cost nothing; the allow-all pair a posture adds counts
+like any other rule. The budget is a quota, not a datapath constant: it keeps policies far below
+the dataplane's own limits (see [The classifier](#the-classifier)). The compiler enforces it.
+When a NIC's rules exceed it in either family, or a rule stored before admission validation can't
+be interpreted, the compiler does not guess:
 
 - a NIC that already has a `CompiledNIC` keeps its last good rule set, since truncating
   could drop a `Deny` and emptying would cut a running workload off over an unrelated edit;
@@ -123,9 +126,9 @@ compiler does not guess:
 Either way the NIC's `FirewallCompiled` condition turns `False`, with reason
 `RuleBudgetExceeded` or `InvalidRule` and a message naming the family and count, or the
 policy and rule. While compilation succeeds the condition is `True` and its message reports
-budget use, for example `IPv4 2/16, IPv6 1/16`.
+budget use, for example `IPv4 2/256, IPv6 1/256`.
 
-### The agent: CompiledNIC.Firewall → fw maps
+### The agent: CompiledNIC.Firewall → the dataplane
 
 The agent is declarative. `ReconcileFirewall` computes the whole desired rule set for each
 locally-attached interface and calls `ReplaceInterfaceFirewall`, a single gRPC that carries
@@ -133,16 +136,45 @@ the entire set. It holds no in-memory diff and never issues a per-rule delete; t
 replaces the interface's rules wholesale, and cleanup happens through `DetachInterface`.
 Failures are collected, not fatal, so the loop retries the interfaces that didn't land.
 
-Each `CompiledFwRule` becomes a dataplane `FwRule` with the proto number, destination-port
-range, ICMP type and code, allow/deny bit, and direction, keyed per interface. On the wire
-`icmp_type` and `icmp_code` are optional fields, since type 0 (echo reply) is a real
-selector; unset becomes the datapath's `0xffff` wildcard. Those land in the per-interface
-firewall maps (`fw_meta` + the rule table) that `fw_eval_dir` reads.
+Each `CompiledFwRule` becomes one rule of the request with the proto number, destination-port
+range, ICMP type and code, allow/deny bit and direction. On the wire `icmp_type` and `icmp_code`
+are optional fields, since type 0 (echo reply) is a real selector; unset means any.
 
-The dataplane replaces an interface's rules in both families or in neither. A family over
-the budget is refused with `RESOURCE_EXHAUSTED` and an unknown interface with `NOT_FOUND`,
-before either family's maps are touched. With the compiler enforcing the budget, the first
-should not happen; it remains as a backstop.
+The dataplane replaces an interface's rules in both families or in neither: it compiles the whole
+set before writing anything, and a set it refuses leaves the interface on its previous rules. An
+unknown interface is `NOT_FOUND`; a rule the classifier cannot express (one that also restricts
+the interface's own address, or a source port — neither can come from a `FirewallPolicy`) is
+`INVALID_ARGUMENT`; a set too large for a scope is `RESOURCE_EXHAUSTED`. With the compiler
+enforcing the budget, the last should not happen; it remains as a backstop.
+
+## The classifier
+
+The dataplane compiles each interface's rule list into two SCOPES, one per direction, each
+holding both families. A scope is a pair of longest-prefix tries per family:
+
+1. **Classes.** Every distinct peer prefix in the direction's rules becomes a class; a
+   packet's peer address is classified by longest prefix. The any-peer `/0` is class 0 and never
+   stored.
+2. **Policy.** Each rule is expanded into every class its prefix covers, as entries keyed
+   `[class, proto, port]` with the protocol and port as a maskable suffix: a port range becomes a
+   handful of masked port prefixes, an ICMP rule keys its type and code in the port bytes. Each
+   entry carries the rule's rank in the first-match list as its precedence. An expansion that a
+   higher-ranked entry of the same class already covers is dropped, so the longest match in a
+   class is always the first-match rule.
+
+A packet probes the policy trie twice, with its class and with class 0, and the entry with the
+higher precedence decides. The cost is a binding lookup, a class lookup and two probes whatever
+the number of rules, so the datapath has no rule cap. Its limits are per scope: 4096 peer classes and
+16384 policy entries per family, which the compiler checks before anything is written.
+
+Scopes are content-addressed: interfaces with the same rules share one scope. Changing an
+interface's rules builds the new scopes in full, then one `FW_BIND` write moves the interface to
+them — both directions, both families at once — and a scope nothing references is deleted. The
+bindings, scopes and epoch are pinned, so a dataplane restart keeps enforcing and re-adopts them.
+
+A randomized differential test holds the classifier to first-match semantics: hundreds of rule
+lists, each checked against the original first-match evaluator on every generated packet, in both
+directions and both families.
 
 ## Connections and policy changes
 
@@ -182,18 +214,20 @@ So importing a [peered VPC](vpc-peering.md)'s prefixes makes those destinations 
 but grants nothing: traffic flows only where the destination's firewall already admits it.
 Under `defaultPolicy: Deny`, or in a direction a policy governs, that takes a matching
 `FirewallPolicy`. Likewise, [load-balancer](loadbalancer.md) membership is pure forwarding
-data: a NIC being an LB backend adds no firewall rule. This is why LB traffic can be silently
-dropped if only the backend's own overlay IP is allowed (see the DSR gotcha below).
+data: a NIC being an LB backend adds no firewall rule (see below).
 
-## The DSR gotcha
+## Load-balanced traffic
 
-Load balancing uses direct server return: the inner destination address stays the LB address
-all the way to the backend (see [Load balancing](loadbalancer.md)). The backend's ingress
-firewall therefore sees `dst = LB address`, not the backend's own overlay IP. A
-`FirewallPolicy` written for the backend's overlay IP will not match LB-delivered traffic,
-so deny-by-default drops it. The fix is an explicit `LB address:port` allow rule in the
-backend's ingress policy. LB membership never generates this rule; it must be authored as
-policy.
+Being a [load-balancer](loadbalancer.md) backend adds no firewall rule, so a backend admits LB
+traffic only through its own ingress policy. Because a rule names the peer, that policy is
+written for the clients, not for any address of the backend: an ingress rule allowing the
+clients' source range (`0.0.0.0/0` and `::/0` for an internet-facing service) on the service
+port admits the traffic. Neither the LB address nor the backend's overlay IP appears in the rule;
+the destination address is never part of an ingress match.
+
+(An earlier version of this page said a backend needed an `LB address:port` rule because of DSR.
+That described the pre-classifier rule table, which could also match the local side; a
+`FirewallPolicy` rule never could.)
 
 ## How it's wired
 
@@ -203,18 +237,19 @@ FirewallPolicy { interfaceSelector, priority, ingress[], egress[] }  + VPC.spec.
         │    · match selector → NIC labels
         │    · rank rules by priority, drop shadowed ones
         │    · add the default posture's allow-all pair
-        │    · enforce the 16-per-family budget (else keep last good; report on the NIC)
+        │    · enforce the 256-per-family budget (else keep last good; report on the NIC)
         ▼
 CompiledNIC.Spec.Firewall { Ingress[], Egress[] }
         │  agent.ReconcileFirewall() — whole desired set, per interface
         ▼
 DataplaneNode gRPC: ReplaceInterfaceFirewall (per interface, whole rule set)
+        │  compile into content-addressed scopes; create the missing ones;
+        │  one FW_BIND write; bump the firewall epoch; free unreferenced scopes
+        ▼
+BPF maps: FW_BIND (ifindex → scopes), FW_CLASS{,6} / FW_POLICY{,6} (scope → tries), FW_EPOCH
         │
         ▼
-BPF fw maps (fw_meta + rule table, keyed by ifindex)
-        │
-        ▼
-datapath: fw_eval_dir(pkt, ifindex, dir) → ACCEPT only on explicit match, else DROP
+datapath: fw_classify(pkt, ifindex, dir) → ACCEPT only if the deciding rule allows, else DROP
 ```
 
 - CRD → compiler. `FirewallPolicy` selectors resolve to concrete, priority-ordered rules
@@ -222,12 +257,13 @@ datapath: fw_eval_dir(pkt, ifindex, dir) → ACCEPT only on explicit match, else
   deny-by-default datapath is only as permissive as the intent.
 - Compiler → agent. The agent reads only `CompiledNIC.Spec.Firewall`, never the raw
   `FirewallPolicy`, and replaces each interface's whole rule set from it.
-- Agent → dataplane. Rules are written per interface and evaluated in both directions
-  by `fw_eval_dir` on every guest ingress and egress.
+- Agent → dataplane. The dataplane compiles each interface's rules into its classifier scopes;
+  `fw_classify` evaluates them on every new guest flow in both directions, and conntrack carries
+  the flow from there (see [Connections and policy changes](#connections-and-policy-changes)).
 
 ## Related
 
 - [Routing & multi-VNI tenancy](routing-vni.md) — the reachability half of the two-step.
-- [Load balancing (Maglev + DSR)](loadbalancer.md) — why DSR needs explicit LB address rules.
+- [Load balancing (Maglev + DSR)](loadbalancer.md) — backends admit LB clients through their own policy.
 - [VPC peering](vpc-peering.md) — imports grant reachability, not permission.
 - [Compilers: CompiledNIC](../architecture/compile-sync-materialize.md)
