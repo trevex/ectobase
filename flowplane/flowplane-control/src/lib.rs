@@ -7,6 +7,7 @@ pub mod maglev;
 #[cfg(feature = "mem-writer")]
 pub mod mem;
 mod nat;
+pub mod natowner;
 pub mod ports;
 mod routes;
 pub mod shadow;
@@ -14,6 +15,7 @@ pub mod writer;
 
 pub use firewall::FwError;
 pub use interface::{meter_state, IfaceParams};
+pub use natowner::NeighborNatError;
 pub use writer::{CtFlushScope, CtFlushScope6, MapWriter};
 
 /// Backend-agnostic control-plane state + programming, generic over the map write surface.
