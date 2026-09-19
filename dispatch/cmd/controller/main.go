@@ -37,6 +37,31 @@ import (
 	"github.com/trevex/ectobase/mesh/routebus"
 )
 
+// managerOptions are the controller manager's options, shared with the tests so they exercise
+// exactly what the binary runs.
+func managerOptions(scheme *runtime.Scheme) ctrl.Options {
+	// Disable the metrics server: a default :8080 listener collides on rolling
+	// restart (new pod can't bind while the old holds it) → crashloop. Nothing
+	// scrapes it in this deployment; "0" turns it off. Same lesson as the
+	// mesh controller.
+	//
+	// Leader election: Tier-2 failover fences a pool and rebinds its VMs elsewhere, and two
+	// managers acting at once would each do it — a second rebind of a disk the first already
+	// moved. A rolling restart overlaps two pods even at replicas: 1, so a Lease lock keeps one
+	// manager running the reconcilers. The lease lives on the host kube-apiserver (the
+	// in-cluster config; the ectobase groups reach it through APIService aggregation), in the
+	// pod's service-account namespace (LeaderElectionNamespace left empty).
+	// ReleaseOnCancel hands the lease over on a graceful shutdown instead of after its expiry.
+	return ctrl.Options{
+		Scheme:                        scheme,
+		Metrics:                       metricsserver.Options{BindAddress: "0"},
+		LeaderElection:                true,
+		LeaderElectionID:              "ectobase-dispatch-controller",
+		LeaderElectionResourceLock:    "leases",
+		LeaderElectionReleaseOnCancel: true,
+	}
+}
+
 func main() {
 	// CRITICAL: disable client-go streaming list-watch before any client/manager
 	// construction. The aggregated apiserver does not support WatchList; without
@@ -76,14 +101,7 @@ func main() {
 
 	cfg := ctrl.GetConfigOrDie()
 
-	// Disable the metrics server: a default :8080 listener collides on rolling
-	// restart (new pod can't bind while the old holds it) → crashloop. Nothing
-	// scrapes it in this deployment; "0" turns it off. Same lesson as the
-	// mesh controller.
-	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
-		Scheme:  scheme,
-		Metrics: metricsserver.Options{BindAddress: "0"},
-	})
+	mgr, err := ctrl.NewManager(cfg, managerOptions(scheme))
 	if err != nil {
 		log.Fatalf("new manager: %v", err)
 	}

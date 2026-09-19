@@ -10,3 +10,14 @@ tests:
           path: spec.template.spec.containers[0].args
           content: "-reflector-admin=[fd00:db8:0:1::1]:1339"
         documentIndex: 3
+  # Without it the manager retries a forbidden lease forever and never starts the failover
+  # reconcilers — no crash, just a silent outage.
+  - it: may hold its leader-election lease
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["coordination.k8s.io"]
+            resources: ["leases"]
+            verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
+        documentIndex: 1

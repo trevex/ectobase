@@ -16,3 +16,8 @@ package main
 // Route-bus PKI signer: watches RouteBusIdentity CSRs and writes the signed intermediate to status.
 //+kubebuilder:rbac:groups=platform.ectobase.dev,resources=routebusidentities,verbs=get;list;watch
 //+kubebuilder:rbac:groups=platform.ectobase.dev,resources=routebusidentities/status,verbs=get;update;patch
+
+// Leader election: the manager holds a Lease lock (on the host kube-apiserver) so only one pod
+// runs the reconcilers. Leader election also emits events.
+//+kubebuilder:rbac:groups=coordination.k8s.io,resources=leases,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups="",resources=events,verbs=create;patch
