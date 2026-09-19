@@ -1181,8 +1181,9 @@ func (*KeepAlive) Descriptor() ([]byte, []int) {
 
 // AnnounceNat announces this node's ownership of a deterministic egress SNAT
 // block: overlay source_ip (in vni) is SNATed onto nat_ip:[port_min,port_max)
-// and the owning node's underlay is owner_underlay. NAT blocks are GLOBAL: every
-// node learns every block so a return that lands on the wrong node re-routes.
+// and the owning node's underlay is owner_underlay. Every node announces its own blocks; they are
+// fanned out on the GLOBAL channel (not per-VNI), so every session that TAKES that feed — only WAN
+// edges do (see Hello.global_feed) — learns every block and re-routes a return that lands on it.
 type AnnounceNat struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Vni           uint32                 `protobuf:"varint,1,opt,name=vni,proto3" json:"vni,omitempty"`

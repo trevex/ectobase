@@ -7,9 +7,9 @@ import (
 
 // NatBlock aliases the shared routebus.NatBlock: a deterministic egress SNAT
 // block where overlay SourceIP (in Vni) is SNATed onto NatIP:[PortMin,PortMax)
-// and owned by the node at OwnerUnderlay. NAT blocks are GLOBAL (not per-VNI):
-// every node learns every block so a return packet that lands on the wrong node
-// can re-route to the owner.
+// and owned by the node at OwnerUnderlay. Blocks are GLOBAL rather than per-VNI: every session
+// registered for the global feed learns every block, so a return packet landing on it can re-route
+// to the owner. Only WAN edges register (see Hello.global_feed); every node still announces its own.
 type NatBlock = routebus.NatBlock
 
 // natKey identifies a block by its NAT (public-IP, port-block-start).
@@ -18,9 +18,10 @@ type natKey struct {
 	portMin uint32
 }
 
-// RegisterSink adds s to the global sink set (every session, regardless of the
-// VNIs it subscribes to) and replays the current NAT + public snapshot, closing
-// it with EndOfGlobal. Called on Hello.
+// RegisterSink adds s to the global sink set — the sessions that asked for the global feed,
+// regardless of the VNIs they subscribe to — and replays the current NAT + public snapshot,
+// closing it with EndOfGlobal. Called on Hello, for a session that did not opt out; one that did
+// is sent the bare marker instead and never joins this set.
 //
 // The replay and its marker go to the sink as ONE snapshot, handed over while r.mu is still
 // held. The sink queues a snapshot whole (see Sink), and a concurrent Announce/Withdraw fanout
