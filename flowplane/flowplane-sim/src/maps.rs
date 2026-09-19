@@ -113,7 +113,7 @@ fn pol_key_bytes(k: &FwPolKey) -> [u8; 7] {
 }
 
 /// The bytes a `NAT_OWNERS` trie compares for a key: `nat_ip` then big-endian port, in the same
-/// memory order as the kernel's `NatOwnerKey` (Task 5's eBPF lookup builds the identical key).
+/// memory order as the kernel's `NatOwnerKey` (the eBPF lookup builds the identical key).
 fn owner_key_bytes4(k: &NatOwnerKey) -> [u8; 6] {
     [
         k.nat_ip[0],

@@ -127,6 +127,9 @@ fn v6_blocks_resolve_at_their_edges() {
 // port-space edges on every ip (random probes alone almost never land exactly on a boundary): the
 // trie must agree with the naive scan on every one, in both the VNI-agnostic and the VNI-filtered
 // form — the latter is the design's whole basis for dropping the VNI from the trie key.
+/// The VNIs the oracle's blocks are drawn from; the per-VNI relay oracle has one slot each.
+const VNIS: u64 = 3;
+
 #[test]
 fn the_trie_agrees_with_the_block_scan() {
     let mut r = Rng(0x9e37_79b9_7f4a_7c15);
@@ -137,14 +140,15 @@ fn the_trie_agrees_with_the_block_scan() {
         let mut m = MemMaps::default();
         let mut blocks = Vec::new();
         for ip in 0..4u8 {
-            let mut port: u32 = (r.next() % 500) as u32;
+            // ip 0's first block starts at port 0; the others at a random offset.
+            let mut port: u32 = if ip == 0 { 0 } else { (r.next() % 500) as u32 };
             while port < 65000 {
                 let size = 1 + (r.next() % 3000) as u32;
                 let hi = (port + size).min(65535);
                 if !r.next().is_multiple_of(4) {
                     let b = block(
                         [10, 0, 0, ip],
-                        (r.next() % 3) as u32,
+                        (r.next() % VNIS) as u32,
                         port as u16,
                         hi as u16,
                         (r.next() % 250) as u8 + 1,
@@ -175,15 +179,13 @@ fn the_trie_agrees_with_the_block_scan() {
         for &(ip8, port) in &probes {
             let ip = [10, 0, 0, ip8];
             // One naive pass over the block list stands in for both oracles: the first match of
-            // any VNI, and the first match per VNI in 0..3 (the only VNIs ever generated above).
+            // any VNI, and the first match per VNI in 0..VNIS (the only VNIs generated above).
             let mut want: Option<([u8; 16], u32, u16, u16)> = None;
-            let mut want_by_vni: [Option<[u8; 16]>; 3] = [None; 3];
+            let mut want_by_vni = [None::<[u8; 16]>; VNIS as usize];
             for b in &blocks {
                 if b.nat_ip == ip && port >= b.port_min && port < b.port_max {
                     want.get_or_insert((b.underlay, b.vni, b.port_min, b.port_max));
-                    if let Some(slot) = want_by_vni.get_mut(b.vni as usize) {
-                        slot.get_or_insert(b.underlay);
-                    }
+                    want_by_vni[b.vni as usize].get_or_insert(b.underlay);
                 }
             }
 

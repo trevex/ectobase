@@ -497,10 +497,10 @@ fn uplink_track_flow6<P: Pkt, M: Maps>(
 ///   0. NAT66-return reverse-DNAT ([`nat_return_dnat6`]) for a locally-owned nat_ip6 with a live
 ///      reverse entry — v6's mechanism #2, inline here rather than behind a separate v4-style
 ///      `process_uplink_rx` caller (NAT64 only translates a v4 inner, so it stays v4-only);
-///   1. `lb_select_forward_v6`, ICMPv6-error relay first (the ICMP-error LB relay is NOT v4-only —
-///      [`lb_select_forward_icmp_error_v6`] mirrors the v4 arm at the top of this file) → local
-///      backend (deliver to its tap) | remote (reforward, no decap) | None → mechanism #3 (NAT66
-///      neighbor-NAT relay, [`crate::nat::neighbor_nat_owner6`]) then mechanisms #1/#4
+///   1. `lb_select_forward_v6`, ICMPv6-error relay first ([`lb_select_forward_icmp_error_v6`],
+///      mirroring the v4 arm at the top of this file) → local backend (deliver to its tap) | remote
+///      (reforward, no decap) | None → mechanism #3 (NAT66 neighbor-NAT relay,
+///      [`crate::nat::neighbor_nat_owner6`]) then mechanisms #1/#4
 ///      (`resolve_uplink_target6`). A `ROUTES6` miss that is also not the WAN-edge sentinel is a
 ///      genuine miss: **`Drop`, fail-closed** — a decapped overlay v6 frame with no legitimate local
 ///      claimant must never leak into the local kernel netns;
