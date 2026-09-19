@@ -2,6 +2,7 @@ package reflector
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"testing"
 	"time"
@@ -12,11 +13,12 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 )
 
-func startServer(t *testing.T) pb.RouteBusClient {
+func startServerWithRIB(t *testing.T) (pb.RouteBusClient, *RIB) {
 	t.Helper()
+	rib := NewRIB()
 	lis := bufconn.Listen(1 << 20)
 	srv := grpc.NewServer()
-	pb.RegisterRouteBusServer(srv, NewServer(NewRIB()))
+	pb.RegisterRouteBusServer(srv, NewServer(rib))
 	go srv.Serve(lis)
 	t.Cleanup(srv.Stop)
 
@@ -27,7 +29,13 @@ func startServer(t *testing.T) pb.RouteBusClient {
 		t.Fatalf("dial: %v", err)
 	}
 	t.Cleanup(func() { conn.Close() })
-	return pb.NewRouteBusClient(conn)
+	return pb.NewRouteBusClient(conn), rib
+}
+
+func startServer(t *testing.T) pb.RouteBusClient {
+	t.Helper()
+	cl, _ := startServerWithRIB(t)
+	return cl
 }
 
 func hello(t *testing.T, s pb.RouteBus_SessionClient, id string) {
@@ -154,5 +162,87 @@ func TestSessionAnnounceNatBroadcastsAndSnapshots(t *testing.T) {
 	m = recvSubstantive(t, bStream)
 	if nu := m.GetNatUpdate(); nu == nil || nu.Op != pb.RouteOp_ROUTE_OP_WITHDRAW {
 		t.Fatalf("want NAT WITHDRAW after owner disconnect, got %+v", m)
+	}
+}
+
+// bigSnapshot is several times the old 1024-slot sink, which dropped the tail of any larger replay
+// — usually its marker too, so the session never pruned and never reported converged.
+const bigSnapshot = 5000
+
+// A late joiner receives every global record and the EndOfGlobal marker, whose count matches.
+func TestSessionDeliversAWholeGlobalSnapshot(t *testing.T) {
+	cl, rib := startServerWithRIB(t)
+	for i := 0; i < bigSnapshot; i++ {
+		rib.AnnounceNat("seed", NatBlock{
+			Vni: 100, SourceIP: fmt.Sprintf("10.0.%d.%d", i>>8, i&0xff),
+			NatIP: fmt.Sprintf("198.51.%d.%d", i>>8, i&0xff), PortMin: 1024, PortMax: 2048,
+			OwnerUnderlay: "fd00::a",
+		})
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	st, err := cl.Session(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hello(t, st, "late")
+	got := 0
+	for {
+		m, err := st.Recv()
+		if err != nil {
+			t.Fatalf("no EndOfGlobal after %d of %d records: %v", got, bigSnapshot, err)
+		}
+		if m.GetNatUpdate() != nil {
+			got++
+			continue
+		}
+		eog := m.GetEndOfGlobal()
+		if eog == nil {
+			t.Fatalf("unexpected message inside the snapshot: %+v", m.Msg)
+		}
+		if got != bigSnapshot || eog.RecordCount != uint32(bigSnapshot) {
+			t.Fatalf("received %d records, marker says %d, want %d", got, eog.RecordCount, bigSnapshot)
+		}
+		return
+	}
+}
+
+// A subscriber receives every route of the VNI and the EndOfRIB marker, whose count matches.
+func TestSessionDeliversAWholeVNISnapshot(t *testing.T) {
+	cl, rib := startServerWithRIB(t)
+	for i := 0; i < bigSnapshot; i++ {
+		rib.Announce("seed", 100, fmt.Sprintf("10.1.%d.%d/32", i>>8, i&0xff), []string{"fd00::a"}, false)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	st, err := cl.Session(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hello(t, st, "sub")
+	if err := st.Send(&pb.ClientMsg{Msg: &pb.ClientMsg_Subscribe{Subscribe: &pb.Subscribe{Vni: 100}}}); err != nil {
+		t.Fatal(err)
+	}
+	got := 0
+	for {
+		m, err := st.Recv()
+		if err != nil {
+			t.Fatalf("no EndOfRIB after %d of %d routes: %v", got, bigSnapshot, err)
+		}
+		switch {
+		case m.GetEndOfGlobal() != nil:
+			continue // the (empty) global snapshot every session gets on Hello
+		case m.GetRouteUpdate() != nil:
+			got++
+			continue
+		}
+		eor := m.GetEndOfRib()
+		if eor == nil {
+			t.Fatalf("unexpected message inside the snapshot: %+v", m.Msg)
+		}
+		if got != bigSnapshot || eor.RecordCount != uint32(bigSnapshot) {
+			t.Fatalf("received %d routes, marker says %d, want %d", got, eor.RecordCount, bigSnapshot)
+		}
+		return
 	}
 }
