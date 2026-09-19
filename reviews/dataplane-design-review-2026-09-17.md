@@ -212,6 +212,20 @@ firewalls. v4 and v6, sim and eBPF. The refusal now removes the entries the flow
    reattaching the disk is the step that corrupts. Also note: a placement cross-check was
    considered and rejected — `CompiledVM.status.placement` comes from the same broker, so it
    freezes at the same instant and cannot see the node either.
+4a. **Found 2026-09-19 (NAT return scaling research) — route-bus snapshots are lossy by
+   construction.** `Session` (`mesh/reflector/server.go`) creates a 1024-slot non-blocking sink and
+   registers it — which replays the NAT/public snapshot into it under the RIB lock — BEFORE the
+   goroutine that drains it starts; `chanSink.Send` drops on a full channel. A global snapshot of
+   ≥1024 records therefore always loses records and usually the `EndOfGlobal` marker itself, so the
+   session never prunes and never reports converged. Per-VNI `Subscribe` replays use the same sink:
+   a VNI with more routes than the drain keeps up with loses records the same way (the count guard
+   prevents a wrong prune, not the non-convergence). Planned: NAT return scaling, Increment 2.
+4b. **Found 2026-09-19 — NAT/public record ownership is not enforced.** `WithdrawNat` /
+   `WithdrawPublic` carry no certificate guard and no ownership check, so any authenticated session
+   can withdraw any record; `AnnounceNat` on a key another origin holds overwrites it without moving
+   it out of the old origin's set, so the old origin's disconnect later withdraws the new owner's
+   block. `Hello.node_id` is also self-asserted and not bound to the certificate. Planned (all but
+   the node_id binding): NAT return scaling, Increment 4.
 4. ~~**dispatch-controller has no leader election**~~ **FIXED** (`42c6ea1d`, merged in
    `54dda54c`): the manager takes a Lease (`ectobase-dispatch-controller`, host
    kube-apiserver, `ReleaseOnCancel`) before starting any reconciler, with lease RBAC in the
