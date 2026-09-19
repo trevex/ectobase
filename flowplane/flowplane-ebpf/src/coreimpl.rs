@@ -1,7 +1,7 @@
 use aya_ebpf::{bindings::bpf_adj_room_mode::BPF_ADJ_ROOM_MAC, programs::TcContext};
 use flowplane_common::{
     CtEntry, CtKey, DhcpConfig, DhcpMeta, DsrLbIP, FloatingIPKey, IfaceKey, IfaceKey6, IfaceValue,
-    LbBackend, LbKey, LbValue, Local, MaglevKey, MeterState, NatKey, NatValue, PortMeta,
+    LbBackend, LbKey, LbValue, Local, MaglevKey, MeterState, NatKey, NatOwner, NatValue, PortMeta,
     RouteLpmData, RouteLpmData6, RouteValue, UnderlayValue,
 };
 use flowplane_core::maps::Maps;
@@ -105,12 +105,15 @@ impl Maps for GlobalMaps {
         unsafe { crate::maps::MAGLEV.get(key).copied() }
     }
     #[inline(always)]
-    fn neighbor_nat_lookup(&self, vni: u32, dst: [u8; 4], dport: u16) -> Option<[u8; 16]> {
-        crate::nat::neighbor_nat_lookup(vni, dst, dport)
-    }
-    #[inline(always)]
-    fn neighbor_nat_lookup_any(&self, dst: [u8; 4], dport: u16) -> Option<([u8; 16], u32)> {
-        crate::nat::neighbor_nat_lookup_any(dst, dport)
+    fn nat_owner(&self, nat_ip: &[u8; 4], port: u16) -> Option<NatOwner> {
+        let key = aya_ebpf::maps::lpm_trie::Key::new(
+            flowplane_common::NAT_OWNER_ADDR_BITS4 + 16,
+            flowplane_common::NatOwnerKey {
+                nat_ip: *nat_ip,
+                port: port.to_be_bytes(),
+            },
+        );
+        crate::maps::NAT_OWNERS.get(&key).copied()
     }
     #[inline(always)]
     fn nat_get(&self, key: &NatKey) -> Option<NatValue> {
@@ -138,12 +141,8 @@ impl Maps for GlobalMaps {
         }
     }
     #[inline(always)]
-    fn neighbor_nat_lookup6(&self, vni: u32, dst: [u8; 16], dport: u16) -> Option<[u8; 16]> {
-        crate::nat::neighbor_nat_lookup6(vni, dst, dport)
-    }
-    #[inline(always)]
-    fn neighbor_nat_lookup_any6(&self, dst: [u8; 16], dport: u16) -> Option<([u8; 16], u32)> {
-        crate::nat::neighbor_nat_lookup_any6(dst, dport)
+    fn nat_owner6(&self, nat_ip: &[u8; 16], port: u16) -> Option<NatOwner> {
+        crate::nat::nat_owner6(*nat_ip, port)
     }
     #[inline(always)]
     fn nat_ct6_get(&self, key: &flowplane_common::CtKey6) -> Option<flowplane_common::CtEntry6> {
