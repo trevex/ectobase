@@ -7,6 +7,7 @@ pub mod maglev;
 #[cfg(feature = "mem-writer")]
 pub mod mem;
 mod nat;
+pub mod ports;
 mod routes;
 pub mod shadow;
 pub mod writer;
