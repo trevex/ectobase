@@ -5,11 +5,11 @@ use aya_ebpf::{
 };
 use flowplane_common::{
     Config, CtEntry, CtEntry6, CtKey, CtKey6, DhcpConfig, DhcpMeta, DsrLbIP, FloatingIPKey,
-    FloatingIPKey6, FwBind, FwMeta, FwPolKey, FwRule, FwRule6, FwRuleKey, IfaceKey, IfaceKey6,
-    IfaceMetaKey, IfaceMetaVal, IfaceValue, InspectEntry, LbBackend, LbKey, LbKey6, LbValue, Local,
-    MaglevKey, MeterState, NatKey, NatKey6, NatValue, NatValue6, NeighborNat6Entry,
-    NeighborNatEntry, PortMeta, RouteLpmData, RouteLpmData6, RouteValue, UnderlayValue,
-    FW_SCOPES_MAX, FW_SCOPE_MAX_CLASSES, FW_SCOPE_MAX_ENTRIES,
+    FloatingIPKey6, FwBind, FwPolKey, IfaceKey, IfaceKey6, IfaceMetaKey, IfaceMetaVal, IfaceValue,
+    InspectEntry, LbBackend, LbKey, LbKey6, LbValue, Local, MaglevKey, MeterState, NatKey, NatKey6,
+    NatValue, NatValue6, NeighborNat6Entry, NeighborNatEntry, PortMeta, RouteLpmData,
+    RouteLpmData6, RouteValue, UnderlayValue, FW_SCOPES_MAX, FW_SCOPE_MAX_CLASSES,
+    FW_SCOPE_MAX_ENTRIES,
 };
 
 #[map]
@@ -75,17 +75,6 @@ pub static NAT: HashMap<NatKey, NatValue> = HashMap::pinned(1024, 0);
 /// are forwarded (an unsolicited ping to a SNAT address has no backend and drops).
 #[map]
 pub static NAT_IPS: HashMap<FloatingIPKey, u8> = HashMap::pinned(1024, 0);
-#[map]
-pub static FW_RULES: HashMap<FwRuleKey, FwRule> = HashMap::pinned(16384, 0);
-#[map]
-pub static FW_META: HashMap<u32, FwMeta> = HashMap::pinned(1024, 0);
-/// IPv6 firewall rule slots ((ifindex, slot) -> FwRule6). Mirror of `FW_RULES` with 16-byte prefixes.
-#[map]
-pub static FW_RULES6: HashMap<FwRuleKey, FwRule6> = HashMap::pinned(16384, 0);
-/// IPv6 firewall per-interface meta (ifindex -> per-direction rule counts). Mirror of `FW_META`.
-#[map]
-pub static FW_META6: HashMap<u32, FwMeta> = HashMap::pinned(1024, 0);
-
 // ---- Firewall classifier (see flowplane_common::FwBind / FwPolKey and core `fw_classify{,6}`) ----
 
 /// ifindex -> the interface's ingress/egress scopes. One write cuts over.

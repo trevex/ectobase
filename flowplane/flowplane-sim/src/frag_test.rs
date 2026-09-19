@@ -20,7 +20,7 @@
 use crate::{MemMaps, SimNode, VecPkt};
 use etherparse::PacketBuilder;
 use flowplane_common::{
-    FwMeta, FwRule, NatKey, NatValue, PortMeta, RouteValue, FW_ACTION_ACCEPT, FW_DIR_EGRESS,
+    FwRule, NatKey, NatValue, PortMeta, RouteValue, FW_ACTION_ACCEPT, FW_DIR_EGRESS,
 };
 use flowplane_core::nat::{snat_egress, SnatOutcome};
 use flowplane_core::parse::l4_ports;
@@ -183,15 +183,8 @@ fn guest_tx_drops_a_nat_required_non_first_fragment() {
         },
     );
     // A port-agnostic egress allow, so the firewall is NOT what drops this.
-    node.maps.fw_meta.insert(
+    node.maps.add_fw_rule(
         SRC_IFINDEX,
-        FwMeta {
-            ingress_count: 0,
-            egress_count: 1,
-        },
-    );
-    node.maps.fw_rules.insert(
-        (SRC_IFINDEX, 0),
         FwRule {
             src_ip: [0; 4],
             src_mask: [0; 4],

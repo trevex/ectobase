@@ -15,9 +15,8 @@
 
 use etherparse::PacketBuilder;
 use flowplane_common::{
-    CtEntry, CtKey, FwMeta, FwRule, Local, NatKey, NatValue, NeighborNatEntry, PortMeta,
-    RouteValue, UnderlayValue, CT_F_SRC_NAT, CT_REWRITE_DST, FW_ACTION_ACCEPT, FW_DIR_EGRESS,
-    FW_DIR_INGRESS,
+    CtEntry, CtKey, FwRule, Local, NatKey, NatValue, NeighborNatEntry, PortMeta, RouteValue,
+    UnderlayValue, CT_F_SRC_NAT, CT_REWRITE_DST, FW_ACTION_ACCEPT, FW_DIR_EGRESS, FW_DIR_INGRESS,
 };
 use flowplane_core::encap::{TunnelEncap, ETH_LEN};
 use flowplane_core::pkt::Action;
@@ -73,15 +72,8 @@ fn guest_tcp_frame(src_ip: [u8; 4], sport: u16, dport: u16) -> Vec<u8> {
 
 /// Install an egress ALLOW rule on `ifindex` (wildcard src/dst).
 fn allow_egress(node: &mut SimNode, ifindex: u32) {
-    node.maps.fw_meta.insert(
+    node.maps.add_fw_rule(
         ifindex,
-        FwMeta {
-            ingress_count: 0,
-            egress_count: 1,
-        },
-    );
-    node.maps.fw_rules.insert(
-        (ifindex, 0),
         FwRule {
             src_ip: [0; 4],
             src_mask: [0; 4],
@@ -501,16 +493,9 @@ fn snat_no_op_for_internal_route() {
     add_nat(&mut node.maps, GUEST_A_IP, NAT_IP_A, PORT_MIN_A, PORT_MAX_A);
     allow_egress(&mut node, SRC_IFINDEX_A);
     // Install an ingress allow rule on PEER_TAP so same-node delivery isn't firewalled.
-    use flowplane_common::{FwMeta, FwRule, FW_DIR_INGRESS};
-    node.maps.fw_meta.insert(
+    use flowplane_common::{FwRule, FW_DIR_INGRESS};
+    node.maps.add_fw_rule(
         PEER_TAP,
-        FwMeta {
-            ingress_count: 1,
-            egress_count: 0,
-        },
-    );
-    node.maps.fw_rules.insert(
-        (PEER_TAP, 0),
         FwRule {
             src_ip: [0; 4],
             src_mask: [0; 4],
@@ -809,15 +794,8 @@ fn dnat_return_udp_rewrites_dst_ip_and_port() {
 /// admitting a DIFFERENT dst (`192.0.2.1`, TEST-NET-1) — so the actual return (`EXT_IP -> NAT_IP`)
 /// never matches. If the return took the base path, `process_uplink`'s ingress firewall would DROP it.
 fn seed_deny_by_default_ingress_fw(node: &mut SimNode) {
-    node.maps.fw_meta.insert(
+    node.maps.add_fw_rule(
         DNAT_TAP,
-        FwMeta {
-            ingress_count: 1,
-            egress_count: 0,
-        },
-    );
-    node.maps.fw_rules.insert(
-        (DNAT_TAP, 0),
         FwRule {
             src_ip: [0; 4],
             src_mask: [0; 4],

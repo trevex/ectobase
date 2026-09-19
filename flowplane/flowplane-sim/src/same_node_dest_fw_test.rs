@@ -4,7 +4,7 @@
 
 use etherparse::PacketBuilder;
 use flowplane_common::{
-    FwMeta, FwRule, FwRule6, IfaceValue, PortMeta, RouteValue, UnderlayValue, FW_ACTION_ACCEPT,
+    FwRule, FwRule6, IfaceValue, PortMeta, RouteValue, UnderlayValue, FW_ACTION_ACCEPT,
     FW_DIR_EGRESS,
 };
 
@@ -78,15 +78,8 @@ fn node() -> SimNode {
             _pad: [0; 1],
         },
     );
-    node.maps.fw_meta.insert(
+    node.maps.add_fw_rule(
         SRC_IFINDEX,
-        FwMeta {
-            ingress_count: 0,
-            egress_count: 1,
-        },
-    );
-    node.maps.fw_rules.insert(
-        (SRC_IFINDEX, 0),
         FwRule {
             src_port_max: 65535,
             dst_port_max: 65535,
@@ -107,15 +100,8 @@ fn node() -> SimNode {
 #[test]
 fn a_flow_the_destination_allows_is_delivered() {
     let mut n = node();
-    n.maps.fw_meta.insert(
+    n.maps.add_fw_rule(
         DST_TAP,
-        FwMeta {
-            ingress_count: 1,
-            egress_count: 0,
-        },
-    );
-    n.maps.fw_rules.insert(
-        (DST_TAP, 0),
         FwRule {
             src_port_max: 65535,
             dst_port_max: 65535,
@@ -248,15 +234,8 @@ fn node6() -> SimNode {
             _pad: [0; 1],
         },
     );
-    node.maps.fw_meta6.insert(
+    node.maps.add_fw_rule6(
         SRC_IFINDEX,
-        FwMeta {
-            ingress_count: 0,
-            egress_count: 1,
-        },
-    );
-    node.maps.fw_rules6.insert(
-        (SRC_IFINDEX, 0),
         FwRule6 {
             src_port_max: 65535,
             dst_port_max: 65535,
@@ -282,15 +261,8 @@ fn port_meta6() -> PortMeta {
 #[test]
 fn v6_a_flow_the_destination_allows_is_delivered() {
     let mut n = node6();
-    n.maps.fw_meta6.insert(
+    n.maps.add_fw_rule6(
         DST_TAP,
-        FwMeta {
-            ingress_count: 1,
-            egress_count: 0,
-        },
-    );
-    n.maps.fw_rules6.insert(
-        (DST_TAP, 0),
         FwRule6 {
             src_port_max: 65535,
             dst_port_max: 65535,

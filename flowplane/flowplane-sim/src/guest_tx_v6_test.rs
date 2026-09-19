@@ -15,8 +15,7 @@
 
 use etherparse::PacketBuilder;
 use flowplane_common::{
-    CtKey6, FwMeta, FwRule6, Local, PortMeta, RouteValue, FW_ACTION_ACCEPT, FW_ACTION_DROP,
-    FW_DIR_EGRESS,
+    CtKey6, FwRule6, Local, PortMeta, RouteValue, FW_ACTION_ACCEPT, FW_ACTION_DROP, FW_DIR_EGRESS,
 };
 use flowplane_core::conntrack::{ct_key6, invert_key6};
 use flowplane_core::encap::{TunnelEncap, ETH_LEN};
@@ -103,16 +102,7 @@ fn node() -> SimNode {
     node.maps.local = Some(local());
     node.src_ifindex = SRC_IFINDEX;
     node.maps.add_route6(VNI, EXT_V6, route_value());
-    node.maps.fw_meta6.insert(
-        SRC_IFINDEX,
-        FwMeta {
-            ingress_count: 0,
-            egress_count: 1,
-        },
-    );
-    node.maps
-        .fw_rules6
-        .insert((SRC_IFINDEX, 0), egress_allow_rule());
+    node.maps.add_fw_rule6(SRC_IFINDEX, egress_allow_rule());
     node
 }
 
@@ -209,7 +199,7 @@ fn native_v6_egress_deny_by_default_drops_fresh_flow() {
     node.maps.local = Some(local());
     node.src_ifindex = SRC_IFINDEX;
     node.maps.add_route6(VNI, EXT_V6, route_value());
-    // No fw_meta6 / fw_rules6 → fw_eval_dir6 returns DROP on the fresh flow.
+    // No v6 rules → fw_classify6 returns DROP on the fresh flow.
 
     let frame = tcp_frame();
     let before = node.maps.conntrack6.len();
@@ -239,16 +229,7 @@ fn native_v6_egress_no_route_passes() {
     // Route a DIFFERENT dst; the frame's EXT_V6 has no route6 → Pass.
     node.maps = MemMaps::default();
     node.maps.local = Some(local());
-    node.maps.fw_meta6.insert(
-        SRC_IFINDEX,
-        FwMeta {
-            ingress_count: 0,
-            egress_count: 1,
-        },
-    );
-    node.maps
-        .fw_rules6
-        .insert((SRC_IFINDEX, 0), egress_allow_rule());
+    node.maps.add_fw_rule6(SRC_IFINDEX, egress_allow_rule());
 
     let frame = tcp_frame();
     let out = node.guest_tx_v6(&frame, &port_meta());
@@ -259,7 +240,7 @@ fn native_v6_egress_no_route_passes() {
 /// Helper: evaluate the egress firewall for the fixed guest frame (deny-by-default smoke check).
 fn fw_eval_smoke(m: &MemMaps) -> u8 {
     let pkt = crate::VecPkt::from_bytes(&tcp_frame());
-    flowplane_core::firewall::fw_eval_dir6(&pkt, m, ETH_LEN, SRC_IFINDEX, FW_DIR_EGRESS)
+    flowplane_core::firewall::fw_classify6(&pkt, m, ETH_LEN, SRC_IFINDEX, FW_DIR_EGRESS)
 }
 
 /// The forward conntrack6 key derivation matches what the datapath tracks (guards against a

@@ -6,11 +6,11 @@ use aya::maps::{
 };
 use aya::Ebpf;
 use flowplane_common::{
-    CtEntry, CtEntry6, CtKey, CtKey6, DhcpConfig, DhcpMeta, FloatingIPKey, FloatingIPKey6, FwMeta,
-    FwRule, FwRule6, FwRuleKey, IfaceKey, IfaceKey6, IfaceMetaKey, IfaceMetaVal, IfaceValue,
-    InspectEntry, LbBackend, LbKey, LbKey6, LbValue, Local, MaglevKey, MeterState, NatKey, NatKey6,
-    NatValue, NatValue6, NeighborNat6Entry, NeighborNatEntry, PortMeta, RouteLpmData,
-    RouteLpmData6, RouteValue, UnderlayValue,
+    CtEntry, CtEntry6, CtKey, CtKey6, DhcpConfig, DhcpMeta, FloatingIPKey, FloatingIPKey6,
+    IfaceKey, IfaceKey6, IfaceMetaKey, IfaceMetaVal, IfaceValue, InspectEntry, LbBackend, LbKey,
+    LbKey6, LbValue, Local, MaglevKey, MeterState, NatKey, NatKey6, NatValue, NatValue6,
+    NeighborNat6Entry, NeighborNatEntry, PortMeta, RouteLpmData, RouteLpmData6, RouteValue,
+    UnderlayValue,
 };
 
 /// Generate a typed handle over a BPF `HashMap`.
@@ -311,28 +311,6 @@ impl FwScopes {
         ids
     }
 }
-
-bpf_hash_map!(
-    /// Typed handle over the `FW_RULES` BPF map ((ifindex, slot) -> rule).
-    FwRules, "FW_RULES", FwRuleKey, FwRule, upsert, remove
-);
-
-bpf_hash_map!(
-    /// Typed handle over the `FW_META` BPF map (ifindex -> per-direction rule counts).
-    FwMetaMap, "FW_META", u32, FwMeta, upsert
-);
-
-bpf_hash_map!(
-    /// Typed handle over the `FW_RULES6` BPF map ((ifindex, slot) -> IPv6 rule). Mirror of
-    /// [`FwRules`].
-    FwRules6, "FW_RULES6", FwRuleKey, FwRule6, upsert, remove
-);
-
-bpf_hash_map!(
-    /// Typed handle over the `FW_META6` BPF map (ifindex -> per-direction rule counts). Mirror of
-    /// [`FwMetaMap`].
-    FwMetaMap6, "FW_META6", u32, FwMeta, upsert
-);
 
 bpf_hash_map!(
     /// Typed handle over the `UNDERLAY` BPF map (underlay IPv6 -> VNI + tap + guest MAC).

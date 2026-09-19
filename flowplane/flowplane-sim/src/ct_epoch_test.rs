@@ -24,17 +24,8 @@ const A_IF: u32 = 10;
 const B_TAP: u32 = 77;
 
 fn allow_all(n: &mut SimNode, ifindex: u32, dir: u8) {
-    let m = n.maps.fw_meta.entry(ifindex).or_default();
-    if dir == FW_DIR_EGRESS {
-        m.egress_count += 1;
-    } else {
-        m.ingress_count += 1;
-    }
-    let slot = (0..)
-        .find(|i| !n.maps.fw_rules.contains_key(&(ifindex, *i)))
-        .unwrap();
-    n.maps.fw_rules.insert(
-        (ifindex, slot),
+    n.maps.add_fw_rule(
+        ifindex,
         FwRule {
             src_port_max: 65535,
             dst_port_max: 65535,
@@ -50,12 +41,8 @@ fn allow_all(n: &mut SimNode, ifindex: u32, dir: u8) {
 
 /// Revoke every rule of `ifindex` in `dir` (the dataplane would rebind to an empty scope).
 fn revoke(n: &mut SimNode, ifindex: u32, dir: u8) {
-    if let Some(m) = n.maps.fw_meta.get_mut(&ifindex) {
-        if dir == FW_DIR_EGRESS {
-            m.egress_count = 0;
-        } else {
-            m.ingress_count = 0;
-        }
+    if let Some(rules) = n.maps.fw_rules.get_mut(&ifindex) {
+        rules.retain(|r| r.direction != dir);
     }
 }
 
@@ -262,17 +249,8 @@ const B6: [u8; 16] = [
 ];
 
 fn allow_all6(n: &mut SimNode, ifindex: u32, dir: u8) {
-    let m = n.maps.fw_meta6.entry(ifindex).or_default();
-    if dir == FW_DIR_EGRESS {
-        m.egress_count += 1;
-    } else {
-        m.ingress_count += 1;
-    }
-    let slot = (0..)
-        .find(|i| !n.maps.fw_rules6.contains_key(&(ifindex, *i)))
-        .unwrap();
-    n.maps.fw_rules6.insert(
-        (ifindex, slot),
+    n.maps.add_fw_rule6(
+        ifindex,
         FwRule6 {
             src_port_max: 65535,
             dst_port_max: 65535,
@@ -316,8 +294,8 @@ fn v6_revoking_the_destination_ingress_cuts_an_established_same_node_flow() {
         n.guest_tx_v6(&tcp6(false), &meta6).action,
         Action::Redirect(B_TAP)
     );
-    if let Some(m) = n.maps.fw_meta6.get_mut(&B_TAP) {
-        m.ingress_count = 0;
+    if let Some(rules) = n.maps.fw_rules6.get_mut(&B_TAP) {
+        rules.retain(|r| r.direction != FW_DIR_INGRESS);
     }
     n.maps.fw_epoch = n.maps.fw_epoch.wrapping_add(1);
     assert_eq!(n.guest_tx_v6(&tcp6(false), &meta6).action, Action::Drop);

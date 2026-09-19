@@ -4,7 +4,7 @@
 //! Serde mirror of the CompiledNIC JSON produced by the Go compiler, plus `apply()` which lowers
 //! a CompiledNIC's firewall into the sim's native MemMaps. This is the pillar1→pillar2 bridge.
 
-use flowplane_common::{FwMeta, FwRule, FW_ACTION_ACCEPT, FW_ACTION_DROP, FW_DIR_INGRESS};
+use flowplane_common::{FwRule, FW_ACTION_ACCEPT, FW_ACTION_DROP, FW_DIR_INGRESS};
 use serde::Deserialize;
 
 use crate::MemMaps;
@@ -156,31 +156,22 @@ pub fn rule_to_fw(r: &Rule, direction: u8) -> FwRule {
 }
 
 /// Lower a CompiledNIC's firewall into `tap`'s native maps — the sim analog of the agent's gRPC
-/// lowering. Sets fw_meta ingress_count + one FwRule per ingress rule (dst CIDR/proto/port/action).
+/// lowering: one first-match rule list, the ingress rules then the egress rules (the agent's order;
+/// each direction keeps its own order, and the two never compete).
 pub fn apply(m: &mut MemMaps, c: &CompiledNic, tap: u32) {
-    let ingress = &c.spec.firewall.ingress;
-    let egress = &c.spec.firewall.egress;
-
-    m.fw_meta.insert(
-        tap,
-        FwMeta {
-            ingress_count: ingress.len() as u32,
-            egress_count: egress.len() as u32,
-        },
-    );
-
-    for (idx, r) in ingress.iter().enumerate() {
-        m.fw_rules
-            .insert((tap, idx as u32), rule_to_fw(r, FW_DIR_INGRESS));
-    }
-
-    // Egress rules follow after ingress in the index space (matching the agent convention).
-    for (idx, r) in egress.iter().enumerate() {
-        m.fw_rules.insert(
-            (tap, (ingress.len() + idx) as u32),
-            rule_to_fw(r, flowplane_common::FW_DIR_EGRESS),
-        );
-    }
+    let ingress = c
+        .spec
+        .firewall
+        .ingress
+        .iter()
+        .map(|r| rule_to_fw(r, FW_DIR_INGRESS));
+    let egress = c
+        .spec
+        .firewall
+        .egress
+        .iter()
+        .map(|r| rule_to_fw(r, flowplane_common::FW_DIR_EGRESS));
+    m.fw_rules.insert(tap, ingress.chain(egress).collect());
 }
 
 #[cfg(test)]
@@ -189,7 +180,7 @@ mod tests {
     use crate::firewall_test::tcp_v4;
     use crate::VecPkt;
     use flowplane_common::{FW_ACTION_ACCEPT, FW_ACTION_DROP, FW_DIR_INGRESS};
-    use flowplane_core::firewall::fw_eval_dir;
+    use flowplane_core::firewall::fw_classify;
     use flowplane_core::pkt::Pkt;
 
     const FIXTURE: &str = include_str!("../testdata/compilednic.json");
@@ -203,15 +194,18 @@ mod tests {
         apply(&mut maps, &c, tap);
 
         // Sanity: the 443 rule, the 8000-8100 range and the typed ICMP rule were installed.
-        let meta = maps.fw_meta.get(&tap).expect("fw_meta for tap");
-        assert_eq!(meta.ingress_count, 3, "should have 3 ingress rules");
+        let ingress = maps.fw_rules[&tap]
+            .iter()
+            .filter(|r| r.direction == FW_DIR_INGRESS)
+            .count();
+        assert_eq!(ingress, 3, "should have 3 ingress rules");
 
         // Ingress rule = allow from SOURCE 10.0.0.0/24 on port 443. A packet FROM 10.0.0.5:*->:443
         // matches. (PacketBuilder::ipv4 emits starting at the IPv4 header, so ip_off = 0.)
         let pkt_accept = VecPkt::from_bytes(&tcp_v4([10, 0, 0, 5], [10, 0, 0, 10], 5000, 443));
         assert_eq!(pkt_accept.read_u8(9), Some(6), "proto should be TCP=6");
         assert_eq!(
-            fw_eval_dir(&pkt_accept, &maps, 0, tap, FW_DIR_INGRESS),
+            fw_classify(&pkt_accept, &maps, 0, tap, FW_DIR_INGRESS),
             FW_ACTION_ACCEPT,
             "in-range source on port 443 should be accepted"
         );
@@ -219,7 +213,7 @@ mod tests {
         // Wrong source (not in 10.0.0.0/24) → no match → deny-by-default DROP.
         let pkt_bad_src = VecPkt::from_bytes(&tcp_v4([192, 168, 1, 1], [10, 0, 0, 10], 5000, 443));
         assert_eq!(
-            fw_eval_dir(&pkt_bad_src, &maps, 0, tap, FW_DIR_INGRESS),
+            fw_classify(&pkt_bad_src, &maps, 0, tap, FW_DIR_INGRESS),
             FW_ACTION_DROP,
             "out-of-range source should be dropped"
         );
@@ -227,7 +221,7 @@ mod tests {
         // In-range source but wrong port (80) → no match → DROP.
         let pkt_drop = VecPkt::from_bytes(&tcp_v4([10, 0, 0, 5], [10, 0, 0, 10], 5000, 80));
         assert_eq!(
-            fw_eval_dir(&pkt_drop, &maps, 0, tap, FW_DIR_INGRESS),
+            fw_classify(&pkt_drop, &maps, 0, tap, FW_DIR_INGRESS),
             FW_ACTION_DROP,
             "port 80 should be dropped"
         );
@@ -241,7 +235,7 @@ mod tests {
         ] {
             let pkt = VecPkt::from_bytes(&tcp_v4([10, 0, 1, 5], [10, 0, 0, 10], 5000, port));
             assert_eq!(
-                fw_eval_dir(&pkt, &maps, 0, tap, FW_DIR_INGRESS),
+                fw_classify(&pkt, &maps, 0, tap, FW_DIR_INGRESS),
                 want,
                 "range rule, port {port}"
             );
@@ -260,12 +254,12 @@ mod tests {
             VecPkt::from_bytes(&out)
         };
         assert_eq!(
-            fw_eval_dir(&icmp(true), &maps, 0, tap, FW_DIR_INGRESS),
+            fw_classify(&icmp(true), &maps, 0, tap, FW_DIR_INGRESS),
             FW_ACTION_ACCEPT,
             "echo request"
         );
         assert_eq!(
-            fw_eval_dir(&icmp(false), &maps, 0, tap, FW_DIR_INGRESS),
+            fw_classify(&icmp(false), &maps, 0, tap, FW_DIR_INGRESS),
             FW_ACTION_DROP,
             "echo reply"
         );

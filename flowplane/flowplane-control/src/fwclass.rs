@@ -111,9 +111,9 @@ fn bits_match(a: &[u8], b: &[u8], len: u32) -> bool {
     rem == 0 || (a[full] ^ b[full]) & (0xffu8 << (8 - rem)) == 0
 }
 
-/// Read one rule the way the old first-match evaluator (`fw_rule_matches{,6}`) does, or refuse the
-/// forms a peer classifier cannot express. `Ok(None)`: the rule can never match (disabled, or an
-/// empty port range), exactly as the old evaluator treated it.
+/// Read one rule the way the first-match semantics read it (the sim's reference evaluator,
+/// `flowplane_sim`'s `fw_oracle`), or refuse the forms a peer classifier cannot express.
+/// `Ok(None)`: the rule can never match (disabled, or an empty port range).
 fn parse<const N: usize>(
     r: &RuleView<'_, N>,
     dir: u8,

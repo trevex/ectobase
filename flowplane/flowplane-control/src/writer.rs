@@ -1,10 +1,9 @@
 //! The control-plane map write surface. The eBPF `AyaWriter` (and the in-memory `MemMapWriter`
 //! used in tests) implement this; `ControlCore` programs maps only through it.
 use flowplane_common::{
-    DhcpConfig, FloatingIPKey, FwBind, FwMeta, FwRule, FwRule6, FwRuleKey, IfaceKey, IfaceKey6,
-    IfaceMetaKey, IfaceMetaVal, IfaceValue, LbBackend, LbKey, LbKey6, LbValue, MaglevKey,
-    MeterState, NatKey, NatKey6, NatValue, NatValue6, NeighborNat6Entry, NeighborNatEntry,
-    PortMeta, RouteValue, UnderlayValue,
+    DhcpConfig, FloatingIPKey, FwBind, IfaceKey, IfaceKey6, IfaceMetaKey, IfaceMetaVal, IfaceValue,
+    LbBackend, LbKey, LbKey6, LbValue, MaglevKey, MeterState, NatKey, NatKey6, NatValue, NatValue6,
+    NeighborNat6Entry, NeighborNatEntry, PortMeta, RouteValue, UnderlayValue,
 };
 
 /// The set of conntrack entries a NAT teardown must invalidate; the eBPF writer flushes the
@@ -74,16 +73,6 @@ pub trait MapWriter {
     fn underlay_upsert(&mut self, key: [u8; 16], val: UnderlayValue) -> anyhow::Result<()>;
     fn underlay_remove(&mut self, key: &[u8; 16]) -> anyhow::Result<()>;
     fn underlay_get(&self, key: &[u8; 16]) -> Option<UnderlayValue>;
-    fn fw_rules_upsert(&mut self, key: FwRuleKey, val: FwRule) -> anyhow::Result<()>;
-    fn fw_rules_remove(&mut self, key: &FwRuleKey) -> anyhow::Result<()>;
-    fn fw_meta_upsert(&mut self, ifindex: u32, val: FwMeta) -> anyhow::Result<()>;
-    /// IPv6 firewall rule upsert (`FW_RULES6`). Required (no default): a silently
-    /// no-op'd v6 firewall fails OPEN, so every backend must implement it explicitly.
-    fn fw_rules6_upsert(&mut self, key: FwRuleKey, val: FwRule6) -> anyhow::Result<()>;
-    /// IPv6 firewall rule remove (`FW_RULES6`). Required — see `fw_rules6_upsert`.
-    fn fw_rules6_remove(&mut self, key: &FwRuleKey) -> anyhow::Result<()>;
-    /// IPv6 firewall meta upsert (`FW_META6`). Required — see `fw_rules6_upsert`.
-    fn fw_meta6_upsert(&mut self, ifindex: u32, val: FwMeta) -> anyhow::Result<()>;
     /// FIREWALL classifier: make a compiled scope reachable under its id — both families' class and
     /// policy tries, FULLY populated before the id is inserted into the outer maps, so no lookup
     /// ever sees a half-built scope. Required (no default): a no-op'd scope would deny everything

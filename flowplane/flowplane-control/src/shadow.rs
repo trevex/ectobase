@@ -12,7 +12,7 @@ pub struct IfaceMeta {
     pub ipv6: [u8; 16],
     pub underlay: [u8; 16],
     /// Tap ifindex (was `Control::Inner.by_ifindex`); the firewall resolves interface_id -> ifindex
-    /// through this so it can key `FW_RULES`/`FW_META`.
+    /// through this so it can key `FW_BIND`.
     pub ifindex: u32,
 }
 

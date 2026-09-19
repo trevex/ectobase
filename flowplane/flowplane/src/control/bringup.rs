@@ -135,10 +135,6 @@ impl Control {
         let lb6 = crate::maps::Lb6::open(&mut ebpf)?;
         let maglev = Maglev::open(&mut ebpf)?;
         let nat = Nat::open(&mut ebpf)?;
-        let fw_rules = FwRules::open(&mut ebpf)?;
-        let fw_meta = FwMetaMap::open(&mut ebpf)?;
-        let fw_rules6 = FwRules6::open(&mut ebpf)?;
-        let fw_meta6 = FwMetaMap6::open(&mut ebpf)?;
         let fw_bind = crate::maps::FwBindMap::open(&mut ebpf)?;
         let fw_scopes = crate::maps::FwScopes::open(&mut ebpf)?;
         let fw_epoch = crate::maps::FwEpochMap::open(&mut ebpf)?;
@@ -176,10 +172,6 @@ impl Control {
             lb6,
             maglev,
             underlay,
-            fw_rules,
-            fw_meta,
-            fw_rules6,
-            fw_meta6,
             fw_bind,
             fw_scopes,
             fw_epoch,

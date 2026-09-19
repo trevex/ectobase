@@ -11,8 +11,8 @@
 
 use etherparse::PacketBuilder;
 use flowplane_common::{
-    FwMeta, FwRule, PortMeta, RouteValue, UnderlayValue, FW_ACTION_ACCEPT, FW_DIR_EGRESS,
-    FW_DIR_INGRESS, TCP_ESTABLISHED,
+    FwRule, PortMeta, RouteValue, UnderlayValue, FW_ACTION_ACCEPT, FW_DIR_EGRESS, FW_DIR_INGRESS,
+    TCP_ESTABLISHED,
 };
 use flowplane_core::conntrack::{
     ct_is_expired, ct_key, ct_refresh, timeout_ns, DEFAULT_TIMEOUT_NS, TCP_ESTABLISHED_TIMEOUT_NS,
@@ -47,20 +47,8 @@ fn guest_tcp_frame(sport: u16, dport: u16, syn: bool, ack: bool) -> Vec<u8> {
 }
 
 fn allow_all(node: &mut SimNode, ifindex: u32, dir: u8) {
-    let (ingress_count, egress_count) = if dir == FW_DIR_INGRESS {
-        (1, 0)
-    } else {
-        (0, 1)
-    };
-    node.maps.fw_meta.insert(
+    node.maps.add_fw_rule(
         ifindex,
-        FwMeta {
-            ingress_count,
-            egress_count,
-        },
-    );
-    node.maps.fw_rules.insert(
-        (ifindex, 0),
         FwRule {
             src_ip: [0; 4],
             src_mask: [0; 4],

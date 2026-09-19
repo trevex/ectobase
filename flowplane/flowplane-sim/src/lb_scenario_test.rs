@@ -673,18 +673,11 @@ fn ns_lb_v4_wan_rx_dsr_encode() {
 /// v4 helper — `allow_from_any_443` — is source-wildcarded, dest-agnostic; the v6 mirror needs the
 /// same shape since the LB/DSR delivery keeps the inner dst as the LB_IP_CONST, not either backend's own
 /// overlay IP). No `apply6`/`compilednic` v6 helper exists in this sim yet (checked: only a v4
-/// `apply()` — see `compilednic.rs`), so this seeds `FW_META6`/`FW_RULES6` directly, the same way
+/// `apply()` — see `compilednic.rs`), so this seeds the v6 rule list directly, the same way
 /// `ns_scenario_v6_test.rs` and `firewall_test.rs` do.
 fn apply_fw6(maps: &mut MemMaps, tap: u32, port: u16) {
-    maps.fw_meta6.insert(
+    maps.add_fw_rule6(
         tap,
-        flowplane_common::FwMeta {
-            ingress_count: 1,
-            egress_count: 0,
-        },
-    );
-    maps.fw_rules6.insert(
-        (tap, 0),
         flowplane_common::FwRule6 {
             src_ip: [0; 16],
             src_mask: [0; 16],

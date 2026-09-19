@@ -261,6 +261,14 @@ firewalls. v4 and v6, sim and eBPF. The refusal now removes the entries the flow
   per-interface or per-scope stamp cannot cover the same-node path (two interfaces'
   policies, one u8/u32 slot), and a node-wide epoch costs one array read per packet instead
   of a hash lookup — every forward flow on the node re-evaluates once per change.
+- **Upgrade caveat (B5 + C2):** `CONNTRACK{,6}` are pinned and survive a restart-upgrade.
+  Entries written by a pre-classifier dataplane carry no `CT_F_REPLY` and a zero epoch; the
+  first epoch bump after the upgrade (the agent's first re-push binds every interface) makes
+  their reverse entries look like stale FORWARD entries, so replies of pre-upgrade connections
+  are re-evaluated as new flows in the reply direction and dropped where policy does not allow
+  that direction. Pre-production, so not engineered around; an upgrade that must keep
+  connections would flush conntrack or mark pinned reverse entries first. The retired
+  `FW_RULES`/`FW_META{,6}` pins are removed at load (C2), covered by `make ha`.
 - **Found in C2, not by any gate:** the classifier (B4) refuses a rule that matches the
   interface's own address, and the live lab LB tests (`test/lab/livetest/lb_test.go`) opened
   their backends with exactly such a rule (`dst_cidr: <backend IP>` on an ingress rule), so

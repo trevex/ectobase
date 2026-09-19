@@ -49,7 +49,7 @@
 use std::os::fd::{AsFd, AsRawFd, RawFd};
 
 use aya::programs::SchedClassifier;
-use flowplane_common::{FwMeta, FwRule, FW_ACTION_ACCEPT, FW_DIR_INGRESS};
+use flowplane_common::{FwRule, FW_ACTION_ACCEPT, FW_DIR_INGRESS};
 use flowplane_core::pkt::Action;
 use flowplane_sim::SimNode;
 
@@ -104,14 +104,7 @@ fn allow_rule() -> FwRule {
 /// half of this anchor can no longer provide one).
 fn native_reference(inner: &[u8]) -> (Action, Vec<u8>) {
     let mut host = SimNode::new();
-    host.maps.fw_meta.insert(
-        TAP,
-        FwMeta {
-            ingress_count: 1,
-            egress_count: 0,
-        },
-    );
-    host.maps.fw_rules.insert((TAP, 0), allow_rule());
+    host.maps.add_fw_rule(TAP, allow_rule());
     let out = host.host_uplink(inner, VNI, GUEST_IP, TAP, GUEST_MAC);
     (out.action, out.pkt)
 }

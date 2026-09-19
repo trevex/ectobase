@@ -767,16 +767,11 @@ mod tests {
             },
         )
         .unwrap();
-        // v4 slot 0 and v6 slot 0 are programmed.
-        assert!(c
-            .writer()
-            .fw_rules
-            .contains_key(&flowplane_common::FwRuleKey { ifindex: 0, idx: 0 }));
-        assert!(c
-            .writer()
-            .fw_rules6
-            .contains_key(&flowplane_common::FwRuleKey { ifindex: 0, idx: 0 }));
-        // Empty replace clears both families.
+        // Both families compile into the interface's ingress scope.
+        let bind = c.writer().fw_bind[&0];
+        let scope = &c.writer().fw_scopes[&bind.ingress_scope];
+        assert!(!scope.v4.policy.is_empty() && !scope.v6.policy.is_empty());
+        // Empty replace clears both families: no scope in either direction.
         replace_interface_firewall(
             &mut c,
             &pb::ReplaceInterfaceFirewallRequest {
@@ -785,14 +780,9 @@ mod tests {
             },
         )
         .unwrap();
-        assert!(!c
-            .writer()
-            .fw_rules
-            .contains_key(&flowplane_common::FwRuleKey { ifindex: 0, idx: 0 }));
-        assert!(!c
-            .writer()
-            .fw_rules6
-            .contains_key(&flowplane_common::FwRuleKey { ifindex: 0, idx: 0 }));
+        let bind = c.writer().fw_bind[&0];
+        assert_eq!((bind.ingress_scope, bind.egress_scope), (0, 0));
+        assert!(c.writer().fw_scopes.is_empty());
     }
 
     fn fw_spec(id: &str, src_cidr: &str, allow: bool) -> pb::FwRuleSpec {
@@ -818,11 +808,27 @@ mod tests {
         .map(|_| ())
     }
 
-    /// ICMP type/code reach the rule with presence intact: type 0 (echo reply) is a real
-    /// selector, unset is the 0xffff wildcard the datapath matches as "any".
+    /// The (proto, type, code) policy entries of `if0`'s ingress scope, one family: the ICMP
+    /// selectors ride in the policy key's port bytes, a wildcard code as a shorter prefix.
+    fn icmp_entries(c: &ControlCore<MemMapWriter>, v6: bool) -> Vec<(u8, [u8; 2], u32)> {
+        let bind = c.writer().fw_bind[&0];
+        let scope = &c.writer().fw_scopes[&bind.ingress_scope];
+        let policy = if v6 {
+            &scope.v6.policy
+        } else {
+            &scope.v4.policy
+        };
+        policy
+            .iter()
+            .map(|(plen, k, _)| (k.proto, k.port, *plen))
+            .collect()
+    }
+
+    /// ICMP type/code reach the classifier with presence intact: type 0 (echo reply) is a real
+    /// selector, and an unset code is a wildcard (the key's code byte left out of the prefix).
     #[test]
     fn replace_interface_firewall_carries_icmp_selectors() {
-        let slot0 = flowplane_common::FwRuleKey { ifindex: 0, idx: 0 };
+        use flowplane_common::FW_POL_PREFIX_FULL;
         let mut c = core();
         register_iface(&mut c, "if0", 5, [10, 0, 0, 2]);
         replace_one(
@@ -834,8 +840,11 @@ mod tests {
             },
         )
         .unwrap();
-        let r = c.writer().fw_rules[&slot0];
-        assert_eq!((r.icmp_type, r.icmp_code), (8, 0xffff));
+        assert_eq!(
+            icmp_entries(&c, false),
+            vec![(1, [8, 0], FW_POL_PREFIX_FULL - 8)],
+            "type 8, any code"
+        );
 
         replace_one(
             &mut c,
@@ -847,8 +856,11 @@ mod tests {
             },
         )
         .unwrap();
-        let r6 = c.writer().fw_rules6[&slot0];
-        assert_eq!((r6.icmp_type, r6.icmp_code), (0, 0));
+        assert_eq!(
+            icmp_entries(&c, true),
+            vec![(58, [0, 0], FW_POL_PREFIX_FULL)],
+            "type 0 code 0 is an exact selector, not a wildcard"
+        );
     }
 
     #[test]
@@ -915,12 +927,12 @@ mod tests {
         }
     }
 
-    /// A family over FW_MAX_RULES is a quota refusal, not a transient fault: it must surface as
-    /// ResourceExhausted (clients must not blind-retry it as Internal), and it must be refused
-    /// BEFORE either family is touched — the v4 set is within budget here, yet committing it while
-    /// refusing v6 would leave the interface on half of the new policy.
+    /// A rule list too large for a scope is a quota refusal, not a transient fault: it must surface
+    /// as ResourceExhausted (clients must not blind-retry it as Internal), and it must be refused
+    /// BEFORE anything is written — the v4 half is fine here, yet binding it while refusing v6 would
+    /// leave the interface on half of the new policy.
     #[test]
-    fn replace_interface_firewall_over_cap_is_resource_exhausted_and_commits_nothing() {
+    fn replace_interface_firewall_too_large_is_resource_exhausted_and_commits_nothing() {
         let mut c = core();
         register_iface(&mut c, "if0", 5, [10, 0, 0, 2]);
         replace_interface_firewall(
@@ -931,12 +943,13 @@ mod tests {
             },
         )
         .unwrap();
+        let before = c.writer().fw_bind[&0];
 
         let mut rules = vec![fw_spec("new-v4", "10.0.0.0/8", true)];
-        for i in 0..=flowplane_common::FW_MAX_RULES {
+        for i in 0..=flowplane_common::FW_SCOPE_MAX_CLASSES {
             rules.push(fw_spec(
                 &format!("v6-{i}"),
-                &format!("2001:db8:{i:x}::/48"),
+                &format!("2001:db8:{:x}:{:x}::/64", i >> 8, i & 0xff),
                 true,
             ));
         }
@@ -952,15 +965,8 @@ mod tests {
             tonic::Status::from(err).code(),
             tonic::Code::ResourceExhausted
         );
-
-        let slot0 = flowplane_common::FwRuleKey { ifindex: 0, idx: 0 };
-        let kept = c.writer().fw_rules.get(&slot0).expect("prior v4 rule kept");
-        assert_eq!(
-            kept.action,
-            flowplane_common::FW_ACTION_DROP,
-            "v4 was half-committed"
-        );
-        assert!(c.writer().fw_rules6.is_empty());
+        assert_eq!(c.writer().fw_bind[&0], before, "the old binding stays");
+        assert_eq!(c.writer().fw_scopes.len(), 1, "no new scope was created");
     }
 
     #[test]

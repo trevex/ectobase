@@ -10,7 +10,7 @@
 
 use etherparse::PacketBuilder;
 use flowplane_common::{
-    FwMeta, FwRule6, IfaceValue, LbBackend, LbValue, Local, MaglevKey, PortMeta, UnderlayValue,
+    FwRule6, IfaceValue, LbBackend, LbValue, Local, MaglevKey, PortMeta, UnderlayValue,
     FW_ACTION_ACCEPT, FW_DIR_INGRESS, UNDERLAY_LOCAL_DELIVER,
 };
 use flowplane_core::conntrack::ct_key6;
@@ -45,15 +45,8 @@ fn inner_eth6_frame(dport: u16) -> Vec<u8> {
 
 /// Install an ingress ALLOW rule on `tap` for TCP -> GUEST_IP6:port.
 fn allow_tcp6(node: &mut SimNode, tap: u32, port: u16) {
-    node.maps.fw_meta6.insert(
+    node.maps.add_fw_rule6(
         tap,
-        FwMeta {
-            ingress_count: 1,
-            egress_count: 0,
-        },
-    );
-    node.maps.fw_rules6.insert(
-        (tap, 0),
         FwRule6 {
             src_ip: [0; 16],
             src_mask: [0; 16],
@@ -203,11 +196,11 @@ fn v6_established_flow_refreshes_conntrack6_and_bypasses_firewall_reeval() {
     let out1 = host.host_uplink_v6(&inner, VNI, GUEST_IP6, TAP, GUEST_MAC);
     assert_eq!(out1.action, Action::Redirect(TAP));
 
-    // Remove the firewall entirely (simulating a policy change mid-flow): a NEW flow would now be
-    // denied-by-default, but this is the SAME 5-tuple, so the conntrack6 HIT must bypass the
-    // firewall re-evaluation entirely (mirrors the v4 established-flow behavior).
-    host.maps.fw_meta6.remove(&TAP);
-    host.maps.fw_rules6.remove(&(TAP, 0));
+    // Remove the firewall entirely WITHOUT an epoch bump: a NEW flow would now be denied by
+    // default, but this is the SAME 5-tuple, so the conntrack6 HIT is not re-evaluated (mirrors the
+    // v4 established-flow behavior). The dataplane bumps the epoch on every binding change, which is
+    // what carries a real policy change to established flows — see `ct_epoch_test`.
+    host.maps.fw_rules6.remove(&TAP);
 
     let out2 = host.host_uplink_v6(&inner, VNI, GUEST_IP6, TAP, GUEST_MAC);
     assert_eq!(

@@ -4,7 +4,7 @@
 
 use etherparse::PacketBuilder;
 use flowplane_common::{
-    FwMeta, FwRule, IfaceValue, LbBackend, LbKey, LbValue, Local, MaglevKey, FW_ACTION_ACCEPT,
+    FwRule, IfaceValue, LbBackend, LbKey, LbValue, Local, MaglevKey, FW_ACTION_ACCEPT,
     FW_DIR_INGRESS,
 };
 use flowplane_core::pkt::Action;
@@ -35,15 +35,8 @@ fn local() -> Local {
 /// local-delivery arm's deny-by-default ingress firewall does not drop the forwarded packet
 /// before the behavior under test is observed. Mirrors nat_test.rs / lb_scenario_test.rs precedent.
 fn allow_ingress_all(node: &mut SimNode, tap: u32) {
-    node.maps.fw_meta.insert(
+    node.maps.add_fw_rule(
         tap,
-        FwMeta {
-            ingress_count: 1,
-            egress_count: 0,
-        },
-    );
-    node.maps.fw_rules.insert(
-        (tap, 0),
         FwRule {
             src_ip: [0; 4],
             src_mask: [0; 4],

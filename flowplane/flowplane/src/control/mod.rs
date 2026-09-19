@@ -11,9 +11,9 @@ use flowplane_common::{
 
 use crate::loader;
 use crate::maps::{
-    Conntrack, Conntrack6, DhcpConfigMap, DhcpMetaMap, FloatingIPs, FwMetaMap, FwMetaMap6, FwRules,
-    FwRules6, GeneveIfindexMap, IfaceMetaMap, Interfaces, Interfaces6, Lb, LocalMap, Maglev, Meter,
-    Nat, NatIps, NeighborNat, NeighborNatCount, PortMetaMap, Routes, Routes6,
+    Conntrack, Conntrack6, DhcpConfigMap, DhcpMetaMap, FloatingIPs, GeneveIfindexMap, IfaceMetaMap,
+    Interfaces, Interfaces6, Lb, LocalMap, Maglev, Meter, Nat, NatIps, NeighborNat,
+    NeighborNatCount, PortMetaMap, Routes, Routes6,
 };
 // `Nat`, `NatIps`, `NeighborNat`, `NeighborNatCount` are opened in `bring_up`/the test ctor and
 // moved into `AyaWriter`, which owns them; they are not held on `Inner`.
@@ -232,13 +232,7 @@ impl Control {
     /// The node's firewall epoch (`FW_EPOCH[0]`); 0 if unreadable, which only makes entries look
     /// stale (never current) to the offload manager.
     pub fn fw_epoch(&self) -> u32 {
-        self.inner
-            .lock()
-            .core
-            .writer()
-            .fw_epoch
-            .get()
-            .unwrap_or(0)
+        self.inner.lock().core.writer().fw_epoch.get().unwrap_or(0)
     }
 
     /// Whether `tap`'s `PORT_META` entry is offload-eligible (`offloaded == 1`); `false` if the

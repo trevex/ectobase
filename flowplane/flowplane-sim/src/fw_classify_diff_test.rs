@@ -1,22 +1,23 @@
 //! Differential oracle for the firewall classifier: random rule lists, compiled by
 //! `flowplane_control::fwclass::compile_scope` into scopes and evaluated by the core classifier
-//! (`fw_classify{,6}` — the code the eBPF runs), must give the SAME verdict as the old first-match
-//! evaluator (`fw_eval_dir{,6}` over the `FW_RULES` slots) for every packet, in both directions.
+//! (`fw_classify{,6}` — the code the eBPF runs), must give the SAME verdict as the first-match
+//! reference evaluator (`crate::fw_oracle`, the datapath's evaluator before the classifier) for
+//! every packet, in both directions.
 //!
 //! The universe is small on purpose — a handful of nested and disjoint prefixes, the ports at every
 //! range edge, the ICMP types the rules name — so random lists hit the interesting interactions
 //! (a wider rule under a narrower class, a port inside a range, deny-then-allow on the same peer)
-//! over and over. Lists stay within the old datapath's 16 slots per family, so the old evaluator is
-//! a faithful oracle.
+//! over and over. Lists hold up to [`MAX_RULES`] rules, the old datapath's per-family limit, which
+//! keeps the verdict mix balanced (see `assert_balanced`).
 
+use crate::fw_oracle::{first_match, first_match6};
 use crate::{MemMaps, VecPkt};
-use flowplane_common::{
-    FwBind, FwMeta, FwRule, FwRule6, FW_ACTION_ACCEPT, FW_DIR_EGRESS, FW_DIR_INGRESS, FW_MAX_RULES,
-};
+use flowplane_common::{FwBind, FwRule, FwRule6, FW_ACTION_ACCEPT, FW_DIR_EGRESS, FW_DIR_INGRESS};
 use flowplane_control::fwclass::{compile_scope, Scope};
-use flowplane_core::firewall::{fw_classify, fw_classify6, fw_eval_dir, fw_eval_dir6};
+use flowplane_core::firewall::{fw_classify, fw_classify6};
 
 const IF: u32 = 7;
+const MAX_RULES: u64 = 16;
 
 /// xorshift64*: deterministic, dependency-free.
 struct Rng(u64);
@@ -210,27 +211,11 @@ fn v4_classifier_matches_first_match() {
     let mut r = Rng(0x9e37_79b9_7f4a_7c15);
     let mut verdicts = [0u32; 2]; // [drop, accept]
     for list in 0..600 {
-        let n = 1 + (r.next() % FW_MAX_RULES as u64) as usize;
+        let n = 1 + (r.next() % MAX_RULES) as usize;
         let rules: Vec<FwRule> = (0..n)
             .map(|_| fw_rule4(&gen_rule(&mut r, PREFIXES4.len(), 1)))
             .collect();
         let mut m = MemMaps::default();
-        m.fw_meta.insert(
-            IF,
-            FwMeta {
-                ingress_count: rules
-                    .iter()
-                    .filter(|x| x.direction == FW_DIR_INGRESS)
-                    .count() as u32,
-                egress_count: rules
-                    .iter()
-                    .filter(|x| x.direction == FW_DIR_EGRESS)
-                    .count() as u32,
-            },
-        );
-        for (i, rule) in rules.iter().enumerate() {
-            m.fw_rules.insert((IF, i as u32), *rule);
-        }
         let ingress =
             compile_scope(FW_DIR_INGRESS, rules.iter(), [].iter()).expect("compile ingress");
         let egress = compile_scope(FW_DIR_EGRESS, rules.iter(), [].iter()).expect("compile egress");
@@ -238,7 +223,7 @@ fn v4_classifier_matches_first_match() {
         for _ in 0..150 {
             let p = pkt4(&mut r);
             for dir in [FW_DIR_INGRESS, FW_DIR_EGRESS] {
-                let want = fw_eval_dir(&p, &m, 0, IF, dir);
+                let want = first_match(&p, 0, &rules, dir);
                 verdicts[(want == FW_ACTION_ACCEPT) as usize] += 1;
                 let got = fw_classify(&p, &m, 0, IF, dir);
                 assert_eq!(
@@ -346,7 +331,7 @@ fn v6_classifier_matches_first_match() {
     let mut r = Rng(0xd1b5_4a32_d192_ed03);
     let mut verdicts = [0u32; 2]; // [drop, accept]
     for list in 0..600 {
-        let n = 1 + (r.next() % FW_MAX_RULES as u64) as usize;
+        let n = 1 + (r.next() % MAX_RULES) as usize;
         let rules: Vec<FwRule6> = (0..n)
             .map(|_| {
                 let mut g = gen_rule(&mut r, PREFIXES6.len(), 58);
@@ -358,22 +343,6 @@ fn v6_classifier_matches_first_match() {
             })
             .collect();
         let mut m = MemMaps::default();
-        m.fw_meta6.insert(
-            IF,
-            FwMeta {
-                ingress_count: rules
-                    .iter()
-                    .filter(|x| x.direction == FW_DIR_INGRESS)
-                    .count() as u32,
-                egress_count: rules
-                    .iter()
-                    .filter(|x| x.direction == FW_DIR_EGRESS)
-                    .count() as u32,
-            },
-        );
-        for (i, rule) in rules.iter().enumerate() {
-            m.fw_rules6.insert((IF, i as u32), *rule);
-        }
         let ingress =
             compile_scope(FW_DIR_INGRESS, [].iter(), rules.iter()).expect("compile ingress");
         let egress = compile_scope(FW_DIR_EGRESS, [].iter(), rules.iter()).expect("compile egress");
@@ -381,7 +350,7 @@ fn v6_classifier_matches_first_match() {
         for _ in 0..150 {
             let p = pkt6(&mut r);
             for dir in [FW_DIR_INGRESS, FW_DIR_EGRESS] {
-                let want = fw_eval_dir6(&p, &m, 0, IF, dir);
+                let want = first_match6(&p, 0, &rules, dir);
                 verdicts[(want == FW_ACTION_ACCEPT) as usize] += 1;
                 let got = fw_classify6(&p, &m, 0, IF, dir);
                 assert_eq!(

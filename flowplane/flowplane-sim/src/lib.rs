@@ -42,6 +42,8 @@ mod fw_classify_diff_test;
 #[cfg(test)]
 mod fw_classify_test;
 #[cfg(test)]
+mod fw_oracle;
+#[cfg(test)]
 mod guest_tx_v6_test;
 #[cfg(test)]
 mod icmp_error_relay_test;

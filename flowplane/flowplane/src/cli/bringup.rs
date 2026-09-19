@@ -591,18 +591,10 @@ pub async fn run(args: BringupArgs) -> anyhow::Result<()> {
         let _ = nat_ips_map.set(0, nat_ip);
     }
 
-    // Firewall: each --fw-rule programs a per-interface rule; rules are appended in order
-    // to FW_RULES[(ifindex, slot)] and the per-direction counts to FW_META[ifindex].
-    // Deny-by-default: the datapath always drops on no-match; the control plane materializes
-    // k8s default-allow as explicit allow-all rules for unpolicied directions (Compile()).
-    let mut fw_rules_map = maps::FwRules::open(&mut ebpf)?;
-    let mut fw_meta_map = maps::FwMetaMap::open(&mut ebpf)?;
-    // ifindex -> (ingress_count, egress_count) accumulators while assigning slots.
-    let mut fw_slots: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
-    let mut fw_counts: std::collections::HashMap<u32, (u32, u32)> =
-        std::collections::HashMap::new();
-    // ifindex -> its rules in order, compiled into classifier scopes below (the datapath evaluates
-    // the classifier; the FW_RULES/FW_META slots are the legacy mirror).
+    // Firewall: each --fw-rule appends a rule to its interface's first-match list; the lists are
+    // compiled into classifier scopes and bound below. Deny-by-default: the datapath always drops
+    // on no-match; the control plane materializes k8s default-allow as explicit allow-all rules for
+    // unpolicied directions (Compile()).
     let mut fw_lists: std::collections::HashMap<u32, Vec<flowplane_common::FwRule>> =
         std::collections::HashMap::new();
     let parse_cidr = |s: &str| -> anyhow::Result<([u8; 4], [u8; 4])> {
@@ -654,13 +646,6 @@ pub async fn run(args: BringupArgs) -> anyhow::Result<()> {
             let p: u16 = f[6].parse().context("--fw-rule: bad dport")?;
             (p, p)
         };
-        let slot = fw_slots.entry(ifindex).or_insert(0);
-        anyhow::ensure!(
-            *slot < flowplane_common::FW_MAX_RULES,
-            "--fw-rule: more than {} rules for {}",
-            flowplane_common::FW_MAX_RULES,
-            f[0]
-        );
         let rule = flowplane_common::FwRule {
             src_ip,
             src_mask,
@@ -677,33 +662,10 @@ pub async fn run(args: BringupArgs) -> anyhow::Result<()> {
             direction,
             enabled: 1,
         };
-        fw_rules_map.upsert(
-            flowplane_common::FwRuleKey {
-                ifindex,
-                idx: *slot,
-            },
-            rule,
-        )?;
         fw_lists.entry(ifindex).or_default().push(rule);
-        *slot += 1;
-        let c = fw_counts.entry(ifindex).or_insert((0, 0));
-        if direction == flowplane_common::FW_DIR_EGRESS {
-            c.1 += 1;
-        } else {
-            c.0 += 1;
-        }
     }
-    for (ifindex, (ingress_count, egress_count)) in &fw_counts {
-        fw_meta_map.upsert(
-            *ifindex,
-            flowplane_common::FwMeta {
-                ingress_count: *ingress_count,
-                egress_count: *egress_count,
-            },
-        )?;
-    }
-    // The classifier the datapath evaluates: compile each interface's rules into its ingress and
-    // egress scopes and bind them, as the dataplane does for ReplaceInterfaceFirewall.
+    // Compile each interface's rules into its ingress and egress scopes and bind them, as the
+    // dataplane does for ReplaceInterfaceFirewall.
     if !fw_lists.is_empty() {
         let mut scopes = maps::FwScopes::open(&mut ebpf)?;
         let mut binds = maps::FwBindMap::open(&mut ebpf)?;

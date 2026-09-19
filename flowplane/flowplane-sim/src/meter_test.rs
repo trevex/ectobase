@@ -20,8 +20,8 @@
 
 use etherparse::PacketBuilder;
 use flowplane_common::{
-    FwMeta, FwRule, MeterState, PortMeta, RouteValue, UnderlayValue, FW_ACTION_ACCEPT,
-    FW_DIR_EGRESS, FW_DIR_INGRESS, GENEVE_OVERHEAD,
+    FwRule, MeterState, PortMeta, RouteValue, UnderlayValue, FW_ACTION_ACCEPT, FW_DIR_EGRESS,
+    FW_DIR_INGRESS, GENEVE_OVERHEAD,
 };
 use flowplane_core::pkt::Action;
 
@@ -65,19 +65,8 @@ fn port_meta() -> PortMeta {
 
 /// Install a wildcard ALLOW rule for `dir` on `ifindex`.
 fn allow(node: &mut SimNode, ifindex: u32, dir: u8) {
-    let meta = node.maps.fw_meta.entry(ifindex).or_insert(FwMeta {
-        ingress_count: 0,
-        egress_count: 0,
-    });
-    let idx = if dir == FW_DIR_EGRESS {
-        meta.egress_count += 1;
-        meta.egress_count - 1
-    } else {
-        meta.ingress_count += 1;
-        meta.ingress_count - 1
-    };
-    node.maps.fw_rules.insert(
-        (ifindex, idx),
+    node.maps.add_fw_rule(
+        ifindex,
         FwRule {
             src_ip: [0; 4],
             src_mask: [0; 4],
@@ -516,15 +505,8 @@ fn ingress_inner_frame(sport: u16) -> Vec<u8> {
 
 /// Open an ingress ALLOW rule on INGRESS_TAP (needed so the firewall pass gate doesn't drop).
 fn allow_ingress_tap(node: &mut SimNode) {
-    node.maps.fw_meta.insert(
+    node.maps.add_fw_rule(
         INGRESS_TAP,
-        FwMeta {
-            ingress_count: 1,
-            egress_count: 0,
-        },
-    );
-    node.maps.fw_rules.insert(
-        (INGRESS_TAP, 0),
         FwRule {
             src_ip: [0; 4],
             src_mask: [0; 4],

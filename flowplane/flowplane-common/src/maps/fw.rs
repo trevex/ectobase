@@ -1,28 +1,13 @@
-//! Firewall map key & value types plus the firewall direction/action constants (the `FW_RULES`,
-//! `FW_RULES6`, `FW_META`, `FW_META6` maps).
+//! Firewall rule types plus the firewall direction/action constants.
 //!
-//! The pure match logic (`fw_rule_matches` / `fw_rule6_matches` + the `PacketSelectors` /
-//! `PacketSelectors6` inputs) deliberately lives in `flowplane-core` (`flowplane_core::firewall`),
-//! not here: this is a shared *types* crate, and the datapath firewall evaluator that consumes these
-//! rules already lives in `flowplane-core`. Keeping only the POD rule types here avoids hiding
-//! datapath logic in the types crate (review P1.2).
+//! `FwRule`/`FwRule6` are the dataplane's form of one rule in an interface's first-match list: the
+//! `ReplaceInterfaceFirewall` handler parses the wire rules into them, and the classifier compiler
+//! (`flowplane_control::fwclass`) turns the lists into the scopes the datapath evaluates
+//! (`FwBind`/`FwPolKey`, `fwclass.rs`). They are no longer stored in any map.
 
-/// Max firewall rules per interface PER ADDRESS FAMILY, ingress and egress sharing the budget: the
-/// datapath scans slots `0..FW_MAX_RULES` of `FW_RULES` (v4) or `FW_RULES6` (v6) for every packet,
-/// whatever its direction, so this bounds the evaluator loop.
-pub const FW_MAX_RULES: u32 = 16;
-
-/// Firewall rule slot key: (interface ifindex, slot index 0..FW_MAX_RULES).
-#[repr(C)]
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Default)]
-pub struct FwRuleKey {
-    pub ifindex: u32,
-    pub idx: u32,
-}
-
-/// A single firewall rule (fixed-size POD). Ports are inclusive ranges (0..=65535 = any);
-/// icmp_type/icmp_code 0xffff = any; proto 0 = any; action 1=accept/0=drop; direction
-/// 1=egress/0=ingress; enabled 1 = slot in use.
+/// A single firewall rule. Ports are inclusive ranges (0..=65535 = any); icmp_type/icmp_code
+/// 0xffff = any; proto 0 = any; action 1=accept/0=drop; direction 1=egress/0=ingress; enabled 1 =
+/// the rule is live.
 #[repr(C)]
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Default)]
 pub struct FwRule {
@@ -42,8 +27,7 @@ pub struct FwRule {
     pub enabled: u8,
 }
 
-/// IPv6 firewall rule (fixed-size POD). Identical to `FwRule` but 16-byte addresses/masks.
-/// Programmed into the parallel `FW_RULES6` map; the v4 `FwRule`/`FW_RULES` are untouched.
+/// IPv6 firewall rule. Identical to `FwRule` but 16-byte addresses/masks.
 #[repr(C)]
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Default)]
 pub struct FwRule6 {
@@ -63,29 +47,10 @@ pub struct FwRule6 {
     pub enabled: u8,
 }
 
-/// Per-interface rule counts (so empty-direction => ACCEPT can be decided cheaply).
-#[repr(C)]
-#[derive(Copy, Clone, Eq, PartialEq, Debug, Default)]
-pub struct FwMeta {
-    pub ingress_count: u32,
-    pub egress_count: u32,
-}
-
 pub const FW_DIR_INGRESS: u8 = 0;
 pub const FW_DIR_EGRESS: u8 = 1;
 pub const FW_ACTION_DROP: u8 = 0;
 pub const FW_ACTION_ACCEPT: u8 = 1;
-
-// SAFETY: all `#[repr(C)]` fixed-size POD types with no padding beyond explicit `_pad` fields, so
-// their raw bytes are a valid map key/value ABI shared with the eBPF datapath.
-#[cfg(feature = "user")]
-mod user_impls {
-    use super::*;
-    unsafe impl aya::Pod for FwRuleKey {}
-    unsafe impl aya::Pod for FwRule {}
-    unsafe impl aya::Pod for FwRule6 {}
-    unsafe impl aya::Pod for FwMeta {}
-}
 
 #[cfg(test)]
 mod tests {
@@ -93,25 +58,9 @@ mod tests {
     use core::mem::size_of;
 
     #[test]
-    fn fw_rule_key_word_packed() {
-        assert_eq!(size_of::<FwRuleKey>(), 4 + 4);
-    }
-
-    #[test]
     fn fw_types_layout() {
-        // 4 (ifindex) + 4 (idx) = 8.
-        assert_eq!(size_of::<FwRuleKey>(), 8);
         // 4*4 (ip/mask pairs) + 4*2 (port ranges) + 2+2 (icmp) + 4 (proto/action/dir/enabled) = 32.
         assert_eq!(size_of::<FwRule>(), 32);
-        // 4 (ingress_count) + 4 (egress_count) = 8.
-        assert_eq!(size_of::<FwMeta>(), 8);
-    }
-
-    #[test]
-    fn fw6_types_layout() {
         assert_eq!(size_of::<FwRule6>(), 80);
-        // regression guard: v4 layouts unchanged
-        assert_eq!(size_of::<FwRule>(), 32);
-        assert_eq!(size_of::<FwMeta>(), 8);
     }
 }

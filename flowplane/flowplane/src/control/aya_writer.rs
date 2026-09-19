@@ -5,9 +5,9 @@ use parking_lot::Mutex;
 
 use crate::maps::{
     Conntrack, Conntrack6, DhcpConfigMap, DhcpMetaMap, FloatingIPs, FwBindMap, FwEpochMap,
-    FwMetaMap, FwMetaMap6, FwRules, FwRules6, FwScopes, IfaceMetaMap, Interfaces, Interfaces6, Lb,
-    Maglev, Meter, Nat, Nat6, NatCt6, NatIps, NatIps6, NeighborNat, NeighborNat6,
-    NeighborNat6Count, NeighborNatCount, PortMetaMap, Routes, Routes6, Underlay,
+    FwScopes, IfaceMetaMap, Interfaces, Interfaces6, Lb, Maglev, Meter, Nat, Nat6, NatCt6, NatIps,
+    NatIps6, NeighborNat, NeighborNat6, NeighborNat6Count, NeighborNatCount, PortMetaMap, Routes,
+    Routes6, Underlay,
 };
 use flowplane_common::{
     CtKey, CtKey6, FloatingIPKey, IfaceKey, IfaceKey6, IfaceMetaKey, IfaceMetaVal, IfaceValue,
@@ -37,12 +37,6 @@ pub struct AyaWriter {
     pub lb6: crate::maps::Lb6,
     pub maglev: Maglev,
     pub underlay: Underlay,
-    // FIREWALL domain: per-interface rule slots + per-direction rule counts.
-    pub fw_rules: FwRules,
-    pub fw_meta: FwMetaMap,
-    // IPv6 FIREWALL domain: v6 rule slots + per-direction rule counts (FW_RULES6 / FW_META6).
-    pub fw_rules6: FwRules6,
-    pub fw_meta6: FwMetaMap6,
     // FIREWALL classifier: interface -> scopes binding, the scopes' tries, and the epoch that
     // carries a binding change to established flows.
     pub fw_bind: FwBindMap,
@@ -269,32 +263,6 @@ impl MapWriter for AyaWriter {
     }
     fn underlay_get(&self, k: &[u8; 16]) -> Option<flowplane_common::UnderlayValue> {
         self.underlay.get(k)
-    }
-    fn fw_rules_upsert(
-        &mut self,
-        k: flowplane_common::FwRuleKey,
-        v: flowplane_common::FwRule,
-    ) -> anyhow::Result<()> {
-        self.fw_rules.upsert(k, v)
-    }
-    fn fw_rules_remove(&mut self, k: &flowplane_common::FwRuleKey) -> anyhow::Result<()> {
-        self.fw_rules.remove(k)
-    }
-    fn fw_meta_upsert(&mut self, i: u32, v: flowplane_common::FwMeta) -> anyhow::Result<()> {
-        self.fw_meta.upsert(i, v)
-    }
-    fn fw_rules6_upsert(
-        &mut self,
-        k: flowplane_common::FwRuleKey,
-        v: flowplane_common::FwRule6,
-    ) -> anyhow::Result<()> {
-        self.fw_rules6.upsert(k, v)
-    }
-    fn fw_rules6_remove(&mut self, k: &flowplane_common::FwRuleKey) -> anyhow::Result<()> {
-        self.fw_rules6.remove(k)
-    }
-    fn fw_meta6_upsert(&mut self, i: u32, v: flowplane_common::FwMeta) -> anyhow::Result<()> {
-        self.fw_meta6.upsert(i, v)
     }
     fn fw_scope_create(&mut self, scope: &flowplane_control::fwclass::Scope) -> anyhow::Result<()> {
         self.fw_scopes.create(scope)

@@ -1,7 +1,7 @@
 use flowplane_common::{
-    CtEntry, CtEntry6, CtKey, CtKey6, DhcpConfig, DhcpMeta, DsrLbIP, FwMeta, FwRule, FwRuleKey,
-    IfaceValue, LbBackend, LbKey, LbValue, Local, MaglevKey, MeterState, NatKey, NatKey6, NatValue,
-    NatValue6, PortMeta, RouteValue, UnderlayValue,
+    CtEntry, CtEntry6, CtKey, CtKey6, DhcpConfig, DhcpMeta, DsrLbIP, IfaceValue, LbBackend, LbKey,
+    LbValue, Local, MaglevKey, MeterState, NatKey, NatKey6, NatValue, NatValue6, PortMeta,
+    RouteValue, UnderlayValue,
 };
 
 /// Typed access to the datapath maps the core needs. eBPF impl wraps the `#[map]` statics
@@ -9,8 +9,6 @@ use flowplane_common::{
 pub trait Maps {
     fn local(&self) -> Option<Local>;
     fn underlay_get(&self, addr: &[u8; 16]) -> Option<UnderlayValue>;
-    fn fw_meta(&self, ifindex: u32) -> Option<FwMeta>;
-    fn fw_rule(&self, key: &FwRuleKey) -> Option<FwRule>;
     fn conntrack_get(&self, key: &CtKey) -> Option<CtEntry>;
     fn conntrack_insert(&mut self, key: CtKey, entry: CtEntry);
     /// Remove a conntrack entry (absent is fine). Required: a no-op here would let a refused flow
@@ -43,18 +41,8 @@ pub trait Maps {
     }
     /// IPv6 sibling of [`Self::dsr_insert`] (`DSR6` map). DEFAULT no-op — see [`Self::dsr6_get`].
     fn dsr6_insert(&mut self, _key: CtKey6, _v: DsrLbIP) {}
-    /// IPv6 firewall meta (`FW_META6`). DEFAULT `None` — a backend without v6 fw wiring denies v6 by
-    /// default (see [`crate::firewall::fw_eval_dir6`]). Overridden by the sim `MemMaps`; the eBPF
-    /// `GlobalMaps` gains an override in a later v6-firewall task.
-    fn fw_meta6(&self, _ifindex: u32) -> Option<FwMeta> {
-        None
-    }
-    /// IPv6 firewall rule slot (`FW_RULES6`). DEFAULT `None` — see [`Self::fw_meta6`].
-    fn fw_rule6(&self, _key: &FwRuleKey) -> Option<flowplane_common::FwRule6> {
-        None
-    }
-    /// Firewall classifier binding (`FW_BIND[ifindex]`): the interface's ingress/egress scopes +
-    /// policy generation. DEFAULT `None` — a backend without classifier wiring denies (see
+    /// Firewall classifier binding (`FW_BIND[ifindex]`): the interface's ingress/egress scopes.
+    /// DEFAULT `None` — a backend without classifier wiring denies (see
     /// [`crate::firewall::fw_classify`]).
     fn fw_bind(&self, _ifindex: u32) -> Option<flowplane_common::FwBind> {
         None

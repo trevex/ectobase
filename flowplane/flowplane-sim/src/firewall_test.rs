@@ -1,9 +1,9 @@
 use crate::{MemMaps, VecPkt};
 use etherparse::PacketBuilder;
 use flowplane_common::{
-    FwMeta, FwRule, FwRule6, FW_ACTION_ACCEPT, FW_ACTION_DROP, FW_DIR_EGRESS, FW_DIR_INGRESS,
+    FwRule, FwRule6, FW_ACTION_ACCEPT, FW_ACTION_DROP, FW_DIR_EGRESS, FW_DIR_INGRESS,
 };
-use flowplane_core::firewall::{fw_eval_dir, fw_eval_dir6};
+use flowplane_core::firewall::{fw_classify, fw_classify6};
 use flowplane_core::pkt::Pkt;
 
 pub(crate) fn tcp_v4(src: [u8; 4], dst: [u8; 4], sport: u16, dport: u16) -> Vec<u8> {
@@ -17,15 +17,8 @@ pub(crate) fn tcp_v4(src: [u8; 4], dst: [u8; 4], sport: u16, dport: u16) -> Vec<
 fn ingress_allow_rule_matches() {
     let ifindex = 42u32;
     let mut m = MemMaps::default();
-    m.fw_meta.insert(
+    m.add_fw_rule(
         ifindex,
-        FwMeta {
-            ingress_count: 1,
-            egress_count: 0,
-        },
-    );
-    m.fw_rules.insert(
-        (ifindex, 0),
         FwRule {
             src_ip: [10, 0, 0, 0],
             src_mask: [255, 255, 255, 0],
@@ -47,12 +40,12 @@ fn ingress_allow_rule_matches() {
     let pkt = VecPkt::from_bytes(&tcp_v4([10, 0, 0, 5], [10, 0, 0, 10], 5000, 443));
     assert_eq!(pkt.read_u8(9), Some(6)); // sanity: proto at ip_off+9
     assert_eq!(
-        fw_eval_dir(&pkt, &m, 0, ifindex, FW_DIR_INGRESS),
+        fw_classify(&pkt, &m, 0, ifindex, FW_DIR_INGRESS),
         FW_ACTION_ACCEPT
     );
     let pkt2 = VecPkt::from_bytes(&tcp_v4([10, 0, 0, 5], [10, 0, 0, 10], 5000, 80));
     assert_eq!(
-        fw_eval_dir(&pkt2, &m, 0, ifindex, FW_DIR_INGRESS),
+        fw_classify(&pkt2, &m, 0, ifindex, FW_DIR_INGRESS),
         FW_ACTION_DROP
     );
 }
@@ -67,22 +60,28 @@ fn deny_by_default_when_no_rules() {
     // No fw_meta for the interface at all → DROP.
     let empty = MemMaps::default();
     assert_eq!(
-        fw_eval_dir(&pkt, &empty, 0, ifindex, FW_DIR_INGRESS),
+        fw_classify(&pkt, &empty, 0, ifindex, FW_DIR_INGRESS),
         FW_ACTION_DROP,
         "no firewall meta => deny-by-default"
     );
 
-    // Meta present but zero ingress rules → DROP.
+    // Rules present, but none for ingress → DROP.
     let mut m = MemMaps::default();
-    m.fw_meta.insert(
+    m.add_fw_rule(
         ifindex,
-        FwMeta {
-            ingress_count: 0,
-            egress_count: 0,
+        FwRule {
+            src_port_max: 65535,
+            dst_port_max: 65535,
+            icmp_type: 0xffff,
+            icmp_code: 0xffff,
+            action: FW_ACTION_ACCEPT,
+            direction: FW_DIR_EGRESS,
+            enabled: 1,
+            ..Default::default()
         },
     );
     assert_eq!(
-        fw_eval_dir(&pkt, &m, 0, ifindex, FW_DIR_INGRESS),
+        fw_classify(&pkt, &m, 0, ifindex, FW_DIR_INGRESS),
         FW_ACTION_DROP,
         "zero rules in direction => deny-by-default"
     );
@@ -112,12 +111,20 @@ const V6_DST: [u8; 16] = [
 ];
 
 /// An ingress accept rule matching V6_DST on dport 443 (any src).
+/// Accept TCP/443 from/to the PEER of `direction`: the source on ingress, the destination on egress
+/// (a rule never names the interface's own side).
 fn v6_accept_rule(direction: u8) -> FwRule6 {
+    let (src, dst) = if direction == FW_DIR_EGRESS {
+        ([0; 16], V6_DST)
+    } else {
+        (V6_SRC, [0; 16])
+    };
+    let mask = |a: [u8; 16]| if a == [0; 16] { [0; 16] } else { [0xff; 16] };
     FwRule6 {
-        src_ip: [0; 16],
-        src_mask: [0; 16],
-        dst_ip: V6_DST,
-        dst_mask: [0xff; 16],
+        src_ip: src,
+        src_mask: mask(src),
+        dst_ip: dst,
+        dst_mask: mask(dst),
         src_port_min: 0,
         src_port_max: 65535,
         dst_port_min: 443,
@@ -137,7 +144,7 @@ fn v6_deny_by_default_no_meta() {
     let pkt = VecPkt::from_bytes(&tcp_v6(V6_SRC, V6_DST, 5000, 443));
     assert_eq!(pkt.read_u8(6), Some(6)); // sanity: next-header at ip_off+6
     assert_eq!(
-        fw_eval_dir6(&pkt, &m, 0, 7, FW_DIR_INGRESS),
+        fw_classify6(&pkt, &m, 0, 7, FW_DIR_INGRESS),
         FW_ACTION_DROP,
         "no v6 firewall meta => deny-by-default"
     );
@@ -146,16 +153,10 @@ fn v6_deny_by_default_no_meta() {
 #[test]
 fn v6_zero_rules_in_direction_denies() {
     let mut m = MemMaps::default();
-    m.fw_meta6.insert(
-        7,
-        FwMeta {
-            ingress_count: 0,
-            egress_count: 0,
-        },
-    );
+    m.add_fw_rule6(7, v6_accept_rule(FW_DIR_EGRESS));
     let pkt = VecPkt::from_bytes(&tcp_v6(V6_SRC, V6_DST, 5000, 443));
     assert_eq!(
-        fw_eval_dir6(&pkt, &m, 0, 7, FW_DIR_INGRESS),
+        fw_classify6(&pkt, &m, 0, 7, FW_DIR_INGRESS),
         FW_ACTION_DROP,
         "zero rules in direction => deny-by-default"
     );
@@ -164,23 +165,16 @@ fn v6_zero_rules_in_direction_denies() {
 #[test]
 fn v6_explicit_allow_matches() {
     let mut m = MemMaps::default();
-    m.fw_meta6.insert(
-        7,
-        FwMeta {
-            ingress_count: 1,
-            egress_count: 0,
-        },
-    );
-    m.fw_rules6.insert((7, 0), v6_accept_rule(FW_DIR_INGRESS));
+    m.add_fw_rule6(7, v6_accept_rule(FW_DIR_INGRESS));
     let pkt = VecPkt::from_bytes(&tcp_v6(V6_SRC, V6_DST, 5000, 443));
     assert_eq!(
-        fw_eval_dir6(&pkt, &m, 0, 7, FW_DIR_INGRESS),
+        fw_classify6(&pkt, &m, 0, 7, FW_DIR_INGRESS),
         FW_ACTION_ACCEPT
     );
     // A non-matching dport is denied.
     let pkt2 = VecPkt::from_bytes(&tcp_v6(V6_SRC, V6_DST, 5000, 80));
     assert_eq!(
-        fw_eval_dir6(&pkt2, &m, 0, 7, FW_DIR_INGRESS),
+        fw_classify6(&pkt2, &m, 0, 7, FW_DIR_INGRESS),
         FW_ACTION_DROP
     );
 }
@@ -188,18 +182,11 @@ fn v6_explicit_allow_matches() {
 #[test]
 fn v6_direction_isolation() {
     let mut m = MemMaps::default();
-    m.fw_meta6.insert(
-        7,
-        FwMeta {
-            ingress_count: 1,
-            egress_count: 0,
-        },
-    );
     // An EGRESS accept rule must NOT accept an INGRESS eval.
-    m.fw_rules6.insert((7, 0), v6_accept_rule(FW_DIR_EGRESS));
+    m.add_fw_rule6(7, v6_accept_rule(FW_DIR_EGRESS));
     let pkt = VecPkt::from_bytes(&tcp_v6(V6_SRC, V6_DST, 5000, 443));
     assert_eq!(
-        fw_eval_dir6(&pkt, &m, 0, 7, FW_DIR_INGRESS),
+        fw_classify6(&pkt, &m, 0, 7, FW_DIR_INGRESS),
         FW_ACTION_DROP,
         "egress rule does not match an ingress eval"
     );
@@ -208,21 +195,14 @@ fn v6_direction_isolation() {
 #[test]
 fn v6_prefix_mask_miss_denies() {
     let mut m = MemMaps::default();
-    m.fw_meta6.insert(
-        7,
-        FwMeta {
-            ingress_count: 1,
-            egress_count: 0,
-        },
-    );
-    // Full /128 dst_mask but dst_ip != packet dst => no match => DROP.
+    // Full /128 peer (source) mask but src_ip != packet src => no match => DROP.
     let mut rule = v6_accept_rule(FW_DIR_INGRESS);
-    rule.dst_ip = V6_SRC; // wrong dst
-    m.fw_rules6.insert((7, 0), rule);
+    rule.src_ip = V6_DST; // wrong peer
+    m.add_fw_rule6(7, rule);
     let pkt = VecPkt::from_bytes(&tcp_v6(V6_SRC, V6_DST, 5000, 443));
     assert_eq!(
-        fw_eval_dir6(&pkt, &m, 0, 7, FW_DIR_INGRESS),
+        fw_classify6(&pkt, &m, 0, 7, FW_DIR_INGRESS),
         FW_ACTION_DROP,
-        "masked dst mismatch => deny"
+        "masked peer mismatch => deny"
     );
 }

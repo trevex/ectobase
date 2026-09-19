@@ -27,7 +27,7 @@
 use std::os::fd::{AsFd, AsRawFd, RawFd};
 
 use flowplane_common::{
-    FwMeta, FwRule, IfaceValue, LbBackend, LbKey, LbValue, Local, MaglevKey, FW_ACTION_ACCEPT,
+    FwRule, IfaceValue, LbBackend, LbKey, LbValue, Local, MaglevKey, FW_ACTION_ACCEPT,
     FW_DIR_INGRESS,
 };
 
@@ -170,16 +170,7 @@ fn native_reference(inner: &[u8]) -> (Action, Vec<u8>) {
         backend(),
     );
     // Firewall: one ingress rule on TAP covering IP:443 (enforcement is unconditional).
-    node.maps.fw_meta.insert(
-        TAP,
-        FwMeta {
-            ingress_count: 1,
-            egress_count: 0,
-        },
-    );
-    node.maps
-        .fw_rules
-        .insert((TAP, 0), allow_floating_ip_rule());
+    node.maps.add_fw_rule(TAP, allow_floating_ip_rule());
 
     let l = local();
     let out = node.uplink(inner, VNI, &l);

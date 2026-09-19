@@ -3,7 +3,7 @@
 //! Maglev backend that owns the ORIGINAL client->LB address flow. Faithful rebuild of the pre-P2 eBPF
 //! `lb::lb_select_forward_icmp_error` (recovered from 7a9a962), now in flowplane_core + sim-tested.
 
-use flowplane_common::{FwMeta, FwRule, IfaceValue, LbBackend, LbKey, LbValue, Local, MaglevKey};
+use flowplane_common::{FwRule, IfaceValue, LbBackend, LbKey, LbValue, Local, MaglevKey};
 use flowplane_core::pkt::Action;
 
 use crate::SimNode;
@@ -201,15 +201,8 @@ fn icmp_error_to_lb_ip_relays_to_backend() {
 /// so the default-deny is armed). This does NOT match the relayed ICMP error's OUTER tuple (proto = 1),
 /// so before the PMTUD fix the relayed error was dropped here; after it, the relay arm is exempt.
 fn allow_ingress_tcp_service_port(n: &mut SimNode, tap: u32) {
-    n.maps.fw_meta.insert(
+    n.maps.add_fw_rule(
         tap,
-        FwMeta {
-            ingress_count: 1,
-            egress_count: 0,
-        },
-    );
-    n.maps.fw_rules.insert(
-        (tap, 0),
         FwRule {
             src_ip: [0, 0, 0, 0],
             src_mask: [0, 0, 0, 0],
