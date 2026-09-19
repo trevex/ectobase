@@ -20,7 +20,7 @@ use std::process::Command;
 use aya::maps::lpm_trie::{Key, LpmTrie};
 use aya::maps::{of_maps::HashOfMaps, Array, HashMap as AyaHashMap, MapData};
 use aya::programs::{SchedClassifier, TcAttachType};
-use flowplane_common::{FwBind, FwPolKey, NatOwner, NatOwnerKey};
+use flowplane_common::{FwBind, FwPolKey, NatOwner, NatOwnerKey, NatOwnerKey6};
 
 use super::{hex_encode, Control, IfaceParams};
 use crate::loader::RETIRED_PINNED_MAPS;
@@ -65,25 +65,40 @@ fn scopes_pinned(pin: &Path) -> Vec<u64> {
     ids
 }
 
-fn nat_owners_trie(pin: &Path) -> LpmTrie<MapData, NatOwnerKey, NatOwner> {
-    let map = MapData::from_pin(pin.join("NAT_OWNERS")).expect("reopen pinned NAT_OWNERS");
-    LpmTrie::try_from(aya::maps::Map::LpmTrie(map)).expect("NAT_OWNERS is an LPM trie")
+fn nat_owners_trie<K: aya::Pod>(pin: &Path, name: &str) -> LpmTrie<MapData, K, NatOwner> {
+    let map =
+        MapData::from_pin(pin.join(name)).unwrap_or_else(|e| panic!("reopen pinned {name}: {e}"));
+    LpmTrie::try_from(aya::maps::Map::LpmTrie(map))
+        .unwrap_or_else(|e| panic!("{name} is an LPM trie: {e}"))
 }
 
-/// The pinned NAT_OWNERS trie's entries, sorted by (port, prefix_len).
-fn nat_owners_pinned(pin: &Path) -> Vec<(u32, NatOwnerKey, NatOwner)> {
-    let mut v: Vec<_> = nat_owners_trie(pin)
+/// A pinned NAT owner trie's entries, sorted by (port, prefix_len). A failed walk panics rather
+/// than ending the list early, so an "empty" assertion cannot pass on a read error.
+fn nat_owner_entries<K: aya::Pod>(
+    pin: &Path,
+    name: &str,
+    port: fn(&K) -> [u8; 2],
+) -> Vec<(u32, K, NatOwner)> {
+    let mut v: Vec<_> = nat_owners_trie(pin, name)
         .iter()
-        .filter_map(Result::ok)
+        .map(|r| r.unwrap_or_else(|e| panic!("walk pinned {name}: {e}")))
         .map(|(k, o)| (k.prefix_len(), k.data(), o))
         .collect();
-    v.sort_by_key(|(p, k, _)| (u16::from_be_bytes(k.port), *p));
+    v.sort_by_key(|(p, k, _)| (u16::from_be_bytes(port(k)), *p));
     v
+}
+
+fn nat_owners_pinned(pin: &Path) -> Vec<(u32, NatOwnerKey, NatOwner)> {
+    nat_owner_entries(pin, "NAT_OWNERS", |k: &NatOwnerKey| k.port)
+}
+
+fn nat_owners6_pinned(pin: &Path) -> Vec<(u32, NatOwnerKey6, NatOwner)> {
+    nat_owner_entries(pin, "NAT_OWNERS6", |k: &NatOwnerKey6| k.port)
 }
 
 /// Delete one prefix straight from the pinned NAT_OWNERS trie, behind the control plane's back.
 fn drop_nat_owner_pinned(pin: &Path, (plen, key, _): (u32, NatOwnerKey, NatOwner)) {
-    nat_owners_trie(pin)
+    nat_owners_trie(pin, "NAT_OWNERS")
         .remove(&Key::new(plen, key))
         .expect("remove one NAT_OWNERS prefix");
 }
@@ -238,6 +253,15 @@ fn restart_adopts_pinned_state_and_relinks_guests() {
         owners.len() > 1,
         "an unaligned block is several prefixes: {owners:?}"
     );
+    // Its v6 twin lives in a trie of its own, adopted separately.
+    let nat6_req = pb::AddNeighborNatRequest {
+        nat_ip: "2001:db8:2b::7".into(),
+        ..nat_req.clone()
+    };
+    ctl.with_core(|c| handlers::add_neighbor_nat(c, &nat6_req))
+        .expect("add v6 neighbor NAT");
+    let owners6 = nat_owners6_pinned(pin.path());
+    assert!(!owners6.is_empty(), "the v6 block is programmed");
 
     // The process "exits": every fd and in-memory structure goes, only pins remain.
     drop(ctl);
@@ -267,6 +291,11 @@ fn restart_adopts_pinned_state_and_relinks_guests() {
     );
     assert_eq!(fw_epoch_pinned(pin.path()), 2, "the epoch survives");
     assert_eq!(nat_owners_pinned(pin.path()), owners, "NAT owners survive");
+    assert_eq!(
+        nat_owners6_pinned(pin.path()),
+        owners6,
+        "v6 NAT owners survive"
+    );
 
     // A crash mid-write: one of the block's prefixes never made it into the trie. The rest still
     // name the whole block, so adopt can tell what is missing.
@@ -274,7 +303,24 @@ fn restart_adopts_pinned_state_and_relinks_guests() {
 
     // A node upgraded from an older build still has the maps that build declared and this one does
     // not (the first-match firewall's rule slots, the scanned neighbor-NAT slots) pinned; nothing
-    // reads them any more, and adopt must not leave them holding kernel memory.
+    // reads them any more, and adopt must not leave them holding kernel memory. The stand-ins and
+    // the "gone" check below both read the loader's list, so pin what it must hold: a name dropped
+    // from it would stay pinned on every upgraded node while this test still passed.
+    for name in [
+        "FW_RULES",
+        "FW_META",
+        "FW_RULES6",
+        "FW_META6",
+        "NEIGHBOR_NAT",
+        "NEIGHBOR_NAT_COUNT",
+        "NEIGHBOR_NAT6",
+        "NEIGHBOR_NAT6_COUNT",
+    ] {
+        assert!(
+            RETIRED_PINNED_MAPS.contains(&name),
+            "{name} is no longer retired at load: upgraded nodes would keep it pinned"
+        );
+    }
     for name in RETIRED_PINNED_MAPS {
         let path = pin.path().join(name);
         if !path.exists() {
@@ -382,7 +428,8 @@ fn restart_adopts_pinned_state_and_relinks_guests() {
     );
     // A prefix already gone must not wedge the withdraw (a withdraw retried after a partial
     // failure removes every prefix of its block again): the kernel writer takes the absent prefix
-    // as removed. The in-memory writer cannot tell this ENOENT path from a present key.
+    // as removed. `MemMapWriter`'s remove of an absent prefix never fails, so only a real trie
+    // reaches this path.
     drop_nat_owner_pinned(pin.path(), reowned[reowned.len() - 1]);
     let withdraw = pb::WithdrawNeighborNatRequest {
         vni: 7,
@@ -398,6 +445,24 @@ fn restart_adopts_pinned_state_and_relinks_guests() {
     );
     ctl.with_core(|c| handlers::withdraw_neighbor_nat(c, &withdraw))
         .expect("a repeated withdraw is a no-op");
+
+    // The v6 block came back through adopt too. Its withdraw empties NAT_OWNERS6 only because
+    // adopt listed the block: an unlisted block's withdraw finds nothing to remove.
+    assert_eq!(
+        nat_owners6_pinned(pin.path()),
+        owners6,
+        "the v6 block survives adopt"
+    );
+    let withdraw6 = pb::WithdrawNeighborNatRequest {
+        nat_ip: "2001:db8:2b::7".into(),
+        ..withdraw
+    };
+    ctl.with_core(|c| handlers::withdraw_neighbor_nat(c, &withdraw6))
+        .expect("withdraw the adopted v6 block");
+    assert!(
+        nat_owners6_pinned(pin.path()).is_empty(),
+        "the withdraw removes the adopted v6 block"
+    );
 
     // Unpinning detaches; the netns (and its devices) goes away with this thread.
     drop(ctl);

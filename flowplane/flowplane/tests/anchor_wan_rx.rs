@@ -3,15 +3,17 @@
 //! The sim models the tries; this runs the real bytecode against the kernel's own tries, seeded
 //! through the dataplane's decomposition (`owner_prefixes{4,6}`), and checks relay
 //! (`TC_ACT_REDIRECT`) vs pass-through (`TC_ACT_OK`) at both edges of an unaligned (multi-prefix)
-//! block and on both sides of a prefix boundary inside it, with parity against the native
-//! `SimNode::wan_rx`. A key-layout divergence (address/port byte order, prefix lengths) between the
-//! control plane's writer and the bytecode's lookup shows as a mismatch: the block's edges and
-//! inner boundaries land in the wrong prefix, or in none.
+//! block, on both sides of a prefix boundary inside it and on its single-port prefix, with parity
+//! against the native `SimNode::wan_rx`. A key-layout divergence (address/port byte order, prefix
+//! lengths) between the control plane's writer and the bytecode's lookup shows as a mismatch: the
+//! block's edges and inner boundaries land in the wrong prefix, or in none, and a lookup shorter
+//! than the full key never reaches the single-port prefix.
 //!
 //! The owner's VNI and underlay ride the tunnel key, which test-run cannot observe (the relay
-//! stamps it and redirects to the geneve device, writing no bytes); the sim oracle
-//! (`neighbor_nat_test`) covers owner selection. What is observable here is the verdict and that
-//! the frame leaves unchanged either way.
+//! stamps it and redirects to the geneve device, writing no bytes); the native side asserts the
+//! owner it selects for this fixture, and the sim oracle (`neighbor_nat_test`) covers owner
+//! selection in general. What is observable in the bytecode is the verdict and that the frame
+//! leaves unchanged either way.
 //!
 //! Like `anchor_guest_tx`, `wan_rx` is a `SchedClassifier`, and aya 0.13.1 exposes no tc
 //! `test_run`, so this issues the raw `bpf(BPF_PROG_TEST_RUN, ...)` syscall on the fd of aya's
@@ -29,6 +31,7 @@ use flowplane_common::{
     NAT_OWNER_ADDR_BITS4, NAT_OWNER_ADDR_BITS6,
 };
 use flowplane_control::natowner::{owner_prefixes4, owner_prefixes6};
+use flowplane_core::encap::TunnelEncap;
 use flowplane_core::pkt::Action;
 use flowplane_sim::SimNode;
 
@@ -52,36 +55,40 @@ fn local() -> Local {
     }
 }
 
-/// Neither edge is aligned (20000 is a multiple of 32, 30000 of 16), so the block is ten prefixes
-/// of mixed lengths — a single-prefix block would let a wrong prefix length pass unnoticed.
+/// Neither edge is aligned (20000 is a multiple of 32, the last port 30000 of 16 but not 32), so
+/// the block is eleven prefixes of mixed lengths, ending in a single-port /48 at 30000 — a
+/// single-prefix block would let a wrong prefix length pass unnoticed, and only a full-length
+/// lookup reaches a single-port prefix.
 fn v4_block() -> NeighborNatEntry {
     NeighborNatEntry {
         underlay: OWNER,
         nat_ip: NAT_IP,
         vni: VNI,
         port_min: 20000,
-        port_max: 30000,
+        port_max: 30001,
         enabled: 1,
         _pad: [0; 3],
     }
 }
 
-/// Unaligned on both edges too (1100 is a multiple of 4, 5000 of 8): eleven prefixes.
+/// Unaligned on both edges too (1100 is a multiple of 4, the last port 5000 of 8): twelve
+/// prefixes, ending in a single-port /144 at 5000.
 fn v6_block() -> NeighborNat6Entry {
     NeighborNat6Entry {
         underlay: OWNER,
         nat_ip6: NAT_IP6,
         vni: VNI,
         port_min: 1100,
-        port_max: 5000,
+        port_max: 5001,
         enabled: 1,
         _pad: [0; 3],
     }
 }
 
 /// The port where a prefix inside the block begins, its predecessor ending one port below. Taken
-/// from the middle of the decomposition so both sides are strictly inside the block: only a
-/// correct prefix length on both prefixes relays both probes.
+/// from the middle of the decomposition so both sides are strictly inside the block: probing both
+/// checks that the earlier prefix reaches its last port and that the later one exists at the right
+/// port.
 fn inner_boundary(entries: impl Iterator<Item = (u32, u16)>, addr_bits: u32) -> u16 {
     let mut prefixes: Vec<(u32, u16)> = entries.collect();
     prefixes.sort_by_key(|&(_, port)| port);
@@ -188,6 +195,8 @@ fn bpf_prog_test_run_skb(
         repeat: 1,
         ..Default::default()
     };
+    // SAFETY: `attr` is a valid, fully initialized `union bpf_attr` test arm; every buffer it
+    // points at outlives the call.
     let ret = unsafe {
         libc::syscall(
             libc::SYS_bpf,
@@ -221,8 +230,9 @@ fn nat_return_relay_matches_native_sim() {
         .load(bytes)
         .expect("load compiled eBPF object");
 
-    // `try_wan_rx` bails out (TC_ACT_OK) without LOCAL[0], before it ever reaches the tries — an
-    // unseeded LOCAL would make every "relay" case fail and every "pass" case pass vacuously.
+    // Seed LOCAL as a real edge would — the same value the sim runs with. The relay reads nothing
+    // from it: it redirects to GENEVE_IFINDEX, unset here (0), and bpf_redirect still returns
+    // TC_ACT_REDIRECT.
     {
         let mut l: Array<_, Local> = Array::try_from(ebpf.map_mut("LOCAL").unwrap()).unwrap();
         l.set(0, local(), 0).unwrap();
@@ -233,6 +243,12 @@ fn nat_return_relay_matches_native_sim() {
     assert!(
         entries4.len() > 1,
         "the v4 block must span several prefixes: {entries4:?}"
+    );
+    assert!(
+        entries4
+            .iter()
+            .any(|(p, k, _)| *p == NAT_OWNER_ADDR_BITS4 + 16 && k.port == 30000u16.to_be_bytes()),
+        "the v4 block must end in a single-port prefix at 30000: {entries4:?}"
     );
     {
         let mut t: LpmTrie<_, NatOwnerKey, NatOwner> =
@@ -245,6 +261,12 @@ fn nat_return_relay_matches_native_sim() {
     assert!(
         entries6.len() > 1,
         "the v6 block must span several prefixes: {entries6:?}"
+    );
+    assert!(
+        entries6
+            .iter()
+            .any(|(p, k, _)| *p == NAT_OWNER_ADDR_BITS6 + 16 && k.port == 5000u16.to_be_bytes()),
+        "the v6 block must end in a single-port prefix at 5000: {entries6:?}"
     );
     {
         let mut t: LpmTrie<_, NatOwnerKey6, NatOwner> =
@@ -287,26 +309,33 @@ fn nat_return_relay_matches_native_sim() {
         (frame4(24999), true, "v4: inside".into()),
         (frame4(end4), true, format!("v4: {end4} ends a prefix")),
         (frame4(mid4), true, format!("v4: {mid4} starts the next")),
-        (frame4(29999), true, "v4: last port".into()),
-        (frame4(30000), false, "v4: just past the block".into()),
+        (frame4(29999), true, "v4: just below the single port".into()),
+        (frame4(30000), true, "v4: the single-port prefix".into()),
+        (frame4(30001), false, "v4: just past the block".into()),
         (frame6(1099), false, "v6: just below the block".into()),
         (frame6(1100), true, "v6: first port".into()),
         (frame6(end6), true, format!("v6: {end6} ends a prefix")),
         (frame6(mid6), true, format!("v6: {mid6} starts the next")),
-        (frame6(4999), true, "v6: last port".into()),
-        (frame6(5000), false, "v6: just past the block".into()),
+        (frame6(4999), true, "v6: just below the single port".into()),
+        (frame6(5000), true, "v6: the single-port prefix".into()),
+        (frame6(5001), false, "v6: just past the block".into()),
     ];
     for (frame, relay, what) in &cases {
         let out = bpf_prog_test_run_skb(fd, frame, IFINDEX).expect("BPF_PROG_TEST_RUN on wan_rx");
         let want = if *relay { TC_ACT_REDIRECT } else { TC_ACT_OK };
         assert_eq!(out.retval, want, "{what}: real bytecode");
         let native = sim.wan_rx(frame);
-        let native_want = if *relay {
-            Action::Redirect(UPLINK_IFINDEX)
+        let (native_want, tunnel_want) = if *relay {
+            let owner = TunnelEncap {
+                vni: VNI,
+                remote: OWNER,
+            };
+            (Action::Redirect(UPLINK_IFINDEX), Some(owner))
         } else {
-            Action::Pass
+            (Action::Pass, None)
         };
         assert_eq!(native.action, native_want, "{what}: native sim");
+        assert_eq!(native.tunnel, tunnel_want, "{what}: native sim's owner");
         // The relay stamps the tunnel key and the pass hands the frame on: neither writes a byte.
         assert_eq!(out.data, *frame, "{what}: real bytecode wrote bytes");
         assert_eq!(native.pkt, *frame, "{what}: native sim wrote bytes");
