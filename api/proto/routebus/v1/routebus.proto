@@ -77,6 +77,18 @@ message ServerMsg {
 message Hello {
   string node_id = 1;       // stable per-agent identity (== the reflector's origin key)
   string underlay_ipv6 = 2; // this node's underlay /128 (informational for v1)
+  // Whether this session receives the GLOBAL channel — NAT blocks and public records: the
+  // snapshot on Hello and every later delta. Only a WAN edge consumes it (it relays NAT returns to
+  // their owners and runs Maglev for LB addresses), so a compute node opts out, which removes the
+  // O(records × nodes) fanout. The default, ALL, keeps an older agent working unchanged.
+  GlobalFeed global_feed = 3;
+}
+
+enum GlobalFeed {
+  GLOBAL_FEED_ALL = 0;
+  // No global records. The session still receives EndOfGlobal{record_count: 0}, so a consumer that
+  // waits for the global snapshot (convergence) completes, and prunes against an empty set.
+  GLOBAL_FEED_NONE = 1;
 }
 message Subscribe { uint32 vni = 1; }
 message Unsubscribe { uint32 vni = 1; }

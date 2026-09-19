@@ -129,6 +129,54 @@ func (PublicKind) EnumDescriptor() ([]byte, []int) {
 	return file_routebus_proto_rawDescGZIP(), []int{1}
 }
 
+type GlobalFeed int32
+
+const (
+	GlobalFeed_GLOBAL_FEED_ALL GlobalFeed = 0
+	// No global records. The session still receives EndOfGlobal{record_count: 0}, so a consumer that
+	// waits for the global snapshot (convergence) completes, and prunes against an empty set.
+	GlobalFeed_GLOBAL_FEED_NONE GlobalFeed = 1
+)
+
+// Enum value maps for GlobalFeed.
+var (
+	GlobalFeed_name = map[int32]string{
+		0: "GLOBAL_FEED_ALL",
+		1: "GLOBAL_FEED_NONE",
+	}
+	GlobalFeed_value = map[string]int32{
+		"GLOBAL_FEED_ALL":  0,
+		"GLOBAL_FEED_NONE": 1,
+	}
+)
+
+func (x GlobalFeed) Enum() *GlobalFeed {
+	p := new(GlobalFeed)
+	*p = x
+	return p
+}
+
+func (x GlobalFeed) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (GlobalFeed) Descriptor() protoreflect.EnumDescriptor {
+	return file_routebus_proto_enumTypes[2].Descriptor()
+}
+
+func (GlobalFeed) Type() protoreflect.EnumType {
+	return &file_routebus_proto_enumTypes[2]
+}
+
+func (x GlobalFeed) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use GlobalFeed.Descriptor instead.
+func (GlobalFeed) EnumDescriptor() ([]byte, []int) {
+	return file_routebus_proto_rawDescGZIP(), []int{2}
+}
+
 type FenceRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Prefix        string                 `protobuf:"bytes,1,opt,name=prefix,proto3" json:"prefix,omitempty"` // node /64, e.g. "2001:db8:0:1::/64"
@@ -621,9 +669,14 @@ func (*ServerMsg_PublicUpdate) isServerMsg_Msg() {}
 func (*ServerMsg_EndOfGlobal) isServerMsg_Msg() {}
 
 type Hello struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	NodeId        string                 `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`                   // stable per-agent identity (== the reflector's origin key)
-	UnderlayIpv6  string                 `protobuf:"bytes,2,opt,name=underlay_ipv6,json=underlayIpv6,proto3" json:"underlay_ipv6,omitempty"` // this node's underlay /128 (informational for v1)
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	NodeId       string                 `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`                   // stable per-agent identity (== the reflector's origin key)
+	UnderlayIpv6 string                 `protobuf:"bytes,2,opt,name=underlay_ipv6,json=underlayIpv6,proto3" json:"underlay_ipv6,omitempty"` // this node's underlay /128 (informational for v1)
+	// Whether this session receives the GLOBAL channel — NAT blocks and public records: the
+	// snapshot on Hello and every later delta. Only a WAN edge consumes it (it relays NAT returns to
+	// their owners and runs Maglev for LB addresses), so a compute node opts out, which removes the
+	// O(records × nodes) fanout. The default, ALL, keeps an older agent working unchanged.
+	GlobalFeed    GlobalFeed `protobuf:"varint,3,opt,name=global_feed,json=globalFeed,proto3,enum=routebus.v1.GlobalFeed" json:"global_feed,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -670,6 +723,13 @@ func (x *Hello) GetUnderlayIpv6() string {
 		return x.UnderlayIpv6
 	}
 	return ""
+}
+
+func (x *Hello) GetGlobalFeed() GlobalFeed {
+	if x != nil {
+		return x.GlobalFeed
+	}
+	return GlobalFeed_GLOBAL_FEED_ALL
 }
 
 type Subscribe struct {
@@ -1549,10 +1609,12 @@ const file_routebus_proto_rawDesc = "" +
 	"nat_update\x18\x04 \x01(\v2\x16.routebus.v1.NatUpdateH\x00R\tnatUpdate\x12@\n" +
 	"\rpublic_update\x18\x05 \x01(\v2\x19.routebus.v1.PublicUpdateH\x00R\fpublicUpdate\x12>\n" +
 	"\rend_of_global\x18\x06 \x01(\v2\x18.routebus.v1.EndOfGlobalH\x00R\vendOfGlobalB\x05\n" +
-	"\x03msg\"E\n" +
+	"\x03msg\"\x7f\n" +
 	"\x05Hello\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12#\n" +
-	"\runderlay_ipv6\x18\x02 \x01(\tR\funderlayIpv6\"\x1d\n" +
+	"\runderlay_ipv6\x18\x02 \x01(\tR\funderlayIpv6\x128\n" +
+	"\vglobal_feed\x18\x03 \x01(\x0e2\x17.routebus.v1.GlobalFeedR\n" +
+	"globalFeed\"\x1d\n" +
 	"\tSubscribe\x12\x10\n" +
 	"\x03vni\x18\x01 \x01(\rR\x03vni\"\x1f\n" +
 	"\vUnsubscribe\x12\x10\n" +
@@ -1620,7 +1682,11 @@ const file_routebus_proto_rawDesc = "" +
 	"\x19PUBLIC_KIND_EDGE_UNDERLAY\x10\x01\x12\x16\n" +
 	"\x12PUBLIC_KIND_NAT_IP\x10\x02\x12\x15\n" +
 	"\x11PUBLIC_KIND_LB_IP\x10\x03\x12\x1b\n" +
-	"\x17PUBLIC_KIND_FLOATING_IP\x10\x042I\n" +
+	"\x17PUBLIC_KIND_FLOATING_IP\x10\x04*7\n" +
+	"\n" +
+	"GlobalFeed\x12\x13\n" +
+	"\x0fGLOBAL_FEED_ALL\x10\x00\x12\x14\n" +
+	"\x10GLOBAL_FEED_NONE\x10\x012I\n" +
 	"\bRouteBus\x12=\n" +
 	"\aSession\x12\x16.routebus.v1.ClientMsg\x1a\x16.routebus.v1.ServerMsg(\x010\x012\x91\x01\n" +
 	"\rRouteBusAdmin\x12>\n" +
@@ -1640,65 +1706,67 @@ func file_routebus_proto_rawDescGZIP() []byte {
 	return file_routebus_proto_rawDescData
 }
 
-var file_routebus_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_routebus_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
 var file_routebus_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
 var file_routebus_proto_goTypes = []any{
 	(RouteOp)(0),         // 0: routebus.v1.RouteOp
 	(PublicKind)(0),      // 1: routebus.v1.PublicKind
-	(*FenceRequest)(nil), // 2: routebus.v1.FenceRequest
-	(*FenceReply)(nil),   // 3: routebus.v1.FenceReply
-	(*PortProto)(nil),    // 4: routebus.v1.PortProto
-	(*ClientMsg)(nil),    // 5: routebus.v1.ClientMsg
-	(*ServerMsg)(nil),    // 6: routebus.v1.ServerMsg
-	(*Hello)(nil),        // 7: routebus.v1.Hello
-	(*Subscribe)(nil),    // 8: routebus.v1.Subscribe
-	(*Unsubscribe)(nil),  // 9: routebus.v1.Unsubscribe
-	(*Announce)(nil),     // 10: routebus.v1.Announce
-	(*Withdraw)(nil),     // 11: routebus.v1.Withdraw
-	(*RouteUpdate)(nil),  // 12: routebus.v1.RouteUpdate
-	(*EndOfRIB)(nil),     // 13: routebus.v1.EndOfRIB
-	(*EndOfGlobal)(nil),  // 14: routebus.v1.EndOfGlobal
-	(*KeepAlive)(nil),    // 15: routebus.v1.KeepAlive
-	(*AnnounceNat)(nil),  // 16: routebus.v1.AnnounceNat
-	(*WithdrawNat)(nil),  // 17: routebus.v1.WithdrawNat
-	(*NatUpdate)(nil),    // 18: routebus.v1.NatUpdate
-	(*PublicPrefix)(nil), // 19: routebus.v1.PublicPrefix
-	(*PublicUpdate)(nil), // 20: routebus.v1.PublicUpdate
+	(GlobalFeed)(0),      // 2: routebus.v1.GlobalFeed
+	(*FenceRequest)(nil), // 3: routebus.v1.FenceRequest
+	(*FenceReply)(nil),   // 4: routebus.v1.FenceReply
+	(*PortProto)(nil),    // 5: routebus.v1.PortProto
+	(*ClientMsg)(nil),    // 6: routebus.v1.ClientMsg
+	(*ServerMsg)(nil),    // 7: routebus.v1.ServerMsg
+	(*Hello)(nil),        // 8: routebus.v1.Hello
+	(*Subscribe)(nil),    // 9: routebus.v1.Subscribe
+	(*Unsubscribe)(nil),  // 10: routebus.v1.Unsubscribe
+	(*Announce)(nil),     // 11: routebus.v1.Announce
+	(*Withdraw)(nil),     // 12: routebus.v1.Withdraw
+	(*RouteUpdate)(nil),  // 13: routebus.v1.RouteUpdate
+	(*EndOfRIB)(nil),     // 14: routebus.v1.EndOfRIB
+	(*EndOfGlobal)(nil),  // 15: routebus.v1.EndOfGlobal
+	(*KeepAlive)(nil),    // 16: routebus.v1.KeepAlive
+	(*AnnounceNat)(nil),  // 17: routebus.v1.AnnounceNat
+	(*WithdrawNat)(nil),  // 18: routebus.v1.WithdrawNat
+	(*NatUpdate)(nil),    // 19: routebus.v1.NatUpdate
+	(*PublicPrefix)(nil), // 20: routebus.v1.PublicPrefix
+	(*PublicUpdate)(nil), // 21: routebus.v1.PublicUpdate
 }
 var file_routebus_proto_depIdxs = []int32{
-	7,  // 0: routebus.v1.ClientMsg.hello:type_name -> routebus.v1.Hello
-	8,  // 1: routebus.v1.ClientMsg.subscribe:type_name -> routebus.v1.Subscribe
-	9,  // 2: routebus.v1.ClientMsg.unsubscribe:type_name -> routebus.v1.Unsubscribe
-	10, // 3: routebus.v1.ClientMsg.announce:type_name -> routebus.v1.Announce
-	11, // 4: routebus.v1.ClientMsg.withdraw:type_name -> routebus.v1.Withdraw
-	15, // 5: routebus.v1.ClientMsg.keep_alive:type_name -> routebus.v1.KeepAlive
-	16, // 6: routebus.v1.ClientMsg.announce_nat:type_name -> routebus.v1.AnnounceNat
-	17, // 7: routebus.v1.ClientMsg.withdraw_nat:type_name -> routebus.v1.WithdrawNat
-	19, // 8: routebus.v1.ClientMsg.announce_public:type_name -> routebus.v1.PublicPrefix
-	19, // 9: routebus.v1.ClientMsg.withdraw_public:type_name -> routebus.v1.PublicPrefix
-	12, // 10: routebus.v1.ServerMsg.route_update:type_name -> routebus.v1.RouteUpdate
-	13, // 11: routebus.v1.ServerMsg.end_of_rib:type_name -> routebus.v1.EndOfRIB
-	15, // 12: routebus.v1.ServerMsg.keep_alive:type_name -> routebus.v1.KeepAlive
-	18, // 13: routebus.v1.ServerMsg.nat_update:type_name -> routebus.v1.NatUpdate
-	20, // 14: routebus.v1.ServerMsg.public_update:type_name -> routebus.v1.PublicUpdate
-	14, // 15: routebus.v1.ServerMsg.end_of_global:type_name -> routebus.v1.EndOfGlobal
-	0,  // 16: routebus.v1.RouteUpdate.op:type_name -> routebus.v1.RouteOp
-	0,  // 17: routebus.v1.NatUpdate.op:type_name -> routebus.v1.RouteOp
-	1,  // 18: routebus.v1.PublicPrefix.kind:type_name -> routebus.v1.PublicKind
-	4,  // 19: routebus.v1.PublicPrefix.ports:type_name -> routebus.v1.PortProto
-	19, // 20: routebus.v1.PublicUpdate.prefix:type_name -> routebus.v1.PublicPrefix
-	0,  // 21: routebus.v1.PublicUpdate.op:type_name -> routebus.v1.RouteOp
-	5,  // 22: routebus.v1.RouteBus.Session:input_type -> routebus.v1.ClientMsg
-	2,  // 23: routebus.v1.RouteBusAdmin.SetFence:input_type -> routebus.v1.FenceRequest
-	2,  // 24: routebus.v1.RouteBusAdmin.ClearFence:input_type -> routebus.v1.FenceRequest
-	6,  // 25: routebus.v1.RouteBus.Session:output_type -> routebus.v1.ServerMsg
-	3,  // 26: routebus.v1.RouteBusAdmin.SetFence:output_type -> routebus.v1.FenceReply
-	3,  // 27: routebus.v1.RouteBusAdmin.ClearFence:output_type -> routebus.v1.FenceReply
-	25, // [25:28] is the sub-list for method output_type
-	22, // [22:25] is the sub-list for method input_type
-	22, // [22:22] is the sub-list for extension type_name
-	22, // [22:22] is the sub-list for extension extendee
-	0,  // [0:22] is the sub-list for field type_name
+	8,  // 0: routebus.v1.ClientMsg.hello:type_name -> routebus.v1.Hello
+	9,  // 1: routebus.v1.ClientMsg.subscribe:type_name -> routebus.v1.Subscribe
+	10, // 2: routebus.v1.ClientMsg.unsubscribe:type_name -> routebus.v1.Unsubscribe
+	11, // 3: routebus.v1.ClientMsg.announce:type_name -> routebus.v1.Announce
+	12, // 4: routebus.v1.ClientMsg.withdraw:type_name -> routebus.v1.Withdraw
+	16, // 5: routebus.v1.ClientMsg.keep_alive:type_name -> routebus.v1.KeepAlive
+	17, // 6: routebus.v1.ClientMsg.announce_nat:type_name -> routebus.v1.AnnounceNat
+	18, // 7: routebus.v1.ClientMsg.withdraw_nat:type_name -> routebus.v1.WithdrawNat
+	20, // 8: routebus.v1.ClientMsg.announce_public:type_name -> routebus.v1.PublicPrefix
+	20, // 9: routebus.v1.ClientMsg.withdraw_public:type_name -> routebus.v1.PublicPrefix
+	13, // 10: routebus.v1.ServerMsg.route_update:type_name -> routebus.v1.RouteUpdate
+	14, // 11: routebus.v1.ServerMsg.end_of_rib:type_name -> routebus.v1.EndOfRIB
+	16, // 12: routebus.v1.ServerMsg.keep_alive:type_name -> routebus.v1.KeepAlive
+	19, // 13: routebus.v1.ServerMsg.nat_update:type_name -> routebus.v1.NatUpdate
+	21, // 14: routebus.v1.ServerMsg.public_update:type_name -> routebus.v1.PublicUpdate
+	15, // 15: routebus.v1.ServerMsg.end_of_global:type_name -> routebus.v1.EndOfGlobal
+	2,  // 16: routebus.v1.Hello.global_feed:type_name -> routebus.v1.GlobalFeed
+	0,  // 17: routebus.v1.RouteUpdate.op:type_name -> routebus.v1.RouteOp
+	0,  // 18: routebus.v1.NatUpdate.op:type_name -> routebus.v1.RouteOp
+	1,  // 19: routebus.v1.PublicPrefix.kind:type_name -> routebus.v1.PublicKind
+	5,  // 20: routebus.v1.PublicPrefix.ports:type_name -> routebus.v1.PortProto
+	20, // 21: routebus.v1.PublicUpdate.prefix:type_name -> routebus.v1.PublicPrefix
+	0,  // 22: routebus.v1.PublicUpdate.op:type_name -> routebus.v1.RouteOp
+	6,  // 23: routebus.v1.RouteBus.Session:input_type -> routebus.v1.ClientMsg
+	3,  // 24: routebus.v1.RouteBusAdmin.SetFence:input_type -> routebus.v1.FenceRequest
+	3,  // 25: routebus.v1.RouteBusAdmin.ClearFence:input_type -> routebus.v1.FenceRequest
+	7,  // 26: routebus.v1.RouteBus.Session:output_type -> routebus.v1.ServerMsg
+	4,  // 27: routebus.v1.RouteBusAdmin.SetFence:output_type -> routebus.v1.FenceReply
+	4,  // 28: routebus.v1.RouteBusAdmin.ClearFence:output_type -> routebus.v1.FenceReply
+	26, // [26:29] is the sub-list for method output_type
+	23, // [23:26] is the sub-list for method input_type
+	23, // [23:23] is the sub-list for extension type_name
+	23, // [23:23] is the sub-list for extension extendee
+	0,  // [0:23] is the sub-list for field type_name
 }
 
 func init() { file_routebus_proto_init() }
@@ -1731,7 +1799,7 @@ func file_routebus_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_routebus_proto_rawDesc), len(file_routebus_proto_rawDesc)),
-			NumEnums:      2,
+			NumEnums:      3,
 			NumMessages:   19,
 			NumExtensions: 0,
 			NumServices:   2,
