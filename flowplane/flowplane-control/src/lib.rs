@@ -35,7 +35,8 @@ pub struct ControlCore<W: MapWriter> {
     pub(crate) neigh_nats: Vec<flowplane_common::NeighborNatEntry>,
     // NAT66 neighbor-NAT blocks — v6 sibling of `neigh_nats`, stored in NAT_OWNERS6.
     pub(crate) neigh_nats6: Vec<flowplane_common::NeighborNat6Entry>,
-    // Prefixes each NAT owner trie holds (the capacity check reads these).
+    // Sum of the listed blocks' prefix counts, per family (the capacity check reads these). Equal
+    // to the trie's size while list and trie agree; after a failed write it reads high, never low.
     pub(crate) nat_owner_count4: usize,
     pub(crate) nat_owner_count6: usize,
     // FIREWALL classifier: each interface's current binding (mirrors `FW_BIND`) and how many

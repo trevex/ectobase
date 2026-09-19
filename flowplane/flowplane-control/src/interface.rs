@@ -619,6 +619,7 @@ mod tests {
         assert!(c.w.nat_owners.is_empty());
         assert!(c.neigh_nats6.is_empty());
         assert!(c.w.nat_owners6.is_empty());
+        assert_eq!((c.nat_owner_count4, c.nat_owner_count6), (0, 0));
         // LB addresses (both directions) purged
         assert!(c
             .w

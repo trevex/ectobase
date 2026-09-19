@@ -7,6 +7,14 @@ use flowplane_common::{
 };
 use std::collections::{HashMap, HashSet};
 
+/// Test knob: fail the upsert or the remove of exactly one `NAT_OWNERS{,6}` prefix, as a kernel
+/// map write can. The default fails nothing.
+#[derive(Default, Clone, Copy)]
+pub struct NatOwnerFault<K> {
+    pub upsert: Option<(u32, K)>,
+    pub remove: Option<(u32, K)>,
+}
+
 #[derive(Default)]
 pub struct MemMapWriter {
     pub routes: HashMap<(u32, [u8; 4], u32), RouteValue>,
@@ -18,6 +26,8 @@ pub struct MemMapWriter {
     pub nat6: HashMap<NatKey6, NatValue6>,
     pub nat_ips6: HashSet<(u32, [u8; 16])>,
     pub nat_owners6: HashMap<(u32, NatOwnerKey6), NatOwner>,
+    pub nat_owner_fault: NatOwnerFault<NatOwnerKey>,
+    pub nat_owner6_fault: NatOwnerFault<NatOwnerKey6>,
     pub lb: HashMap<LbKey, LbValue>,
     pub lb6: HashMap<LbKey6, LbValue>,
     pub maglev: HashMap<MaglevKey, LbBackend>,
@@ -92,10 +102,16 @@ impl MapWriter for MemMapWriter {
         Ok(())
     }
     fn nat_owner_upsert(&mut self, p: u32, k: NatOwnerKey, v: NatOwner) -> anyhow::Result<()> {
+        if self.nat_owner_fault.upsert == Some((p, k)) {
+            anyhow::bail!("injected NAT_OWNERS upsert failure");
+        }
         self.nat_owners.insert((p, k), v);
         Ok(())
     }
     fn nat_owner_remove(&mut self, p: u32, k: &NatOwnerKey) -> anyhow::Result<()> {
+        if self.nat_owner_fault.remove == Some((p, *k)) {
+            anyhow::bail!("injected NAT_OWNERS remove failure");
+        }
         self.nat_owners.remove(&(p, *k));
         Ok(())
     }
@@ -125,10 +141,16 @@ impl MapWriter for MemMapWriter {
         Ok(())
     }
     fn nat_owner6_upsert(&mut self, p: u32, k: NatOwnerKey6, v: NatOwner) -> anyhow::Result<()> {
+        if self.nat_owner6_fault.upsert == Some((p, k)) {
+            anyhow::bail!("injected NAT_OWNERS6 upsert failure");
+        }
         self.nat_owners6.insert((p, k), v);
         Ok(())
     }
     fn nat_owner6_remove(&mut self, p: u32, k: &NatOwnerKey6) -> anyhow::Result<()> {
+        if self.nat_owner6_fault.remove == Some((p, *k)) {
+            anyhow::bail!("injected NAT_OWNERS6 remove failure");
+        }
         self.nat_owners6.remove(&(p, *k));
         Ok(())
     }

@@ -73,14 +73,17 @@ pub enum NeighborNatError {
 impl fmt::Display for NeighborNatError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            NeighborNatError::EmptyRange => f.write_str("neighbor NAT block has an empty port range"),
+            NeighborNatError::EmptyRange => {
+                f.write_str("neighbor NAT block has an empty port range")
+            }
             // The "ALREADY_EXISTS:" prefix predates this type; callers grep for it.
             NeighborNatError::Overlap => f.write_str(
                 "ALREADY_EXISTS: neighbor NAT block overlaps an existing block on this nat_ip",
             ),
             NeighborNatError::Full { needed, max } => write!(
                 f,
-                "neighbor NAT table full: the block needs {needed} more prefixes (max {max} per family)"
+                "neighbor NAT table full: the block needs {needed} prefixes and the table holds \
+                 at most {max} per family"
             ),
             NeighborNatError::Map(e) => write!(f, "{e:#}"),
         }

@@ -53,13 +53,15 @@ pub trait MapWriter {
     fn nat_ips_set(&mut self, vni: u32, nat_ip: [u8; 4]) -> anyhow::Result<()>;
     fn nat_ips_remove(&mut self, vni: u32, nat_ip: [u8; 4]) -> anyhow::Result<()>;
     /// Neighbor-NAT owner prefixes (`NAT_OWNERS`): one trie entry per aligned port prefix of a
-    /// block — see `natowner::owner_prefixes4`.
+    /// block — see [`natowner::owner_prefixes4`](crate::natowner::owner_prefixes4).
     fn nat_owner_upsert(
         &mut self,
         prefix_len: u32,
         key: NatOwnerKey,
         val: NatOwner,
     ) -> anyhow::Result<()>;
+    /// Removing an absent prefix must succeed: a withdraw retried after a partial failure removes
+    /// every prefix of its block again.
     fn nat_owner_remove(&mut self, prefix_len: u32, key: &NatOwnerKey) -> anyhow::Result<()>;
     /// Adopt: every `(prefix_len, key, owner)` that survived a restart in the pinned trie.
     fn nat_owner_entries(&self) -> Vec<(u32, NatOwnerKey, NatOwner)>;
@@ -76,6 +78,7 @@ pub trait MapWriter {
         key: NatOwnerKey6,
         val: NatOwner,
     ) -> anyhow::Result<()>;
+    /// Same contract as `nat_owner_remove`: removing an absent prefix must succeed.
     fn nat_owner6_remove(&mut self, prefix_len: u32, key: &NatOwnerKey6) -> anyhow::Result<()>;
     fn nat_owner6_entries(&self) -> Vec<(u32, NatOwnerKey6, NatOwner)>;
     fn lb_upsert(&mut self, key: LbKey, val: LbValue) -> anyhow::Result<()>;
