@@ -99,6 +99,29 @@ func TestQueueTakeFreesTheDeltaCap(t *testing.T) {
 	wantOrder(t, got, []*pb.ServerMsg{d})
 }
 
+// A drop episode is a single stretch of a session being at the cap; take() (which frees the cap)
+// ends it. A second episode after the queue has caught up must be recognized as NEW — not folded
+// silently into the first because a lifetime counter is already non-zero — so it logs too.
+func TestQueueDropEpisodeEndsOnTakeAndReopensOnTheNextOverflow(t *testing.T) {
+	q := newSessionQueue("n")
+	for i := 0; i < maxPendingDeltas+5; i++ {
+		q.Send(msg(i))
+	}
+	if !q.dropping {
+		t.Fatal("want a drop episode active once the cap is exceeded")
+	}
+	q.take()
+	if q.dropping {
+		t.Fatal("want take() to end the drop episode: it just freed the cap")
+	}
+	for i := 0; i < maxPendingDeltas+5; i++ {
+		q.Send(msg(1_000_000 + i))
+	}
+	if !q.dropping {
+		t.Fatal("want a second drop episode once the freed cap fills again")
+	}
+}
+
 // After close the drain still gets what was queued, then learns the queue is done; later sends
 // are ignored.
 func TestQueueFlushesThenEndsAfterClose(t *testing.T) {

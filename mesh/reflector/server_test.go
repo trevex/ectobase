@@ -179,7 +179,7 @@ func TestSessionDeliversAWholeGlobalSnapshot(t *testing.T) {
 			OwnerUnderlay: "fd00::a",
 		})
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	st, err := cl.Session(ctx)
 	if err != nil {
@@ -213,7 +213,7 @@ func TestSessionDeliversAWholeVNISnapshot(t *testing.T) {
 	for i := 0; i < bigSnapshot; i++ {
 		rib.Announce("seed", 100, fmt.Sprintf("10.1.%d.%d/32", i>>8, i&0xff), []string{"fd00::a"}, false)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	st, err := cl.Session(ctx)
 	if err != nil {
