@@ -13,6 +13,9 @@ pub trait Maps {
     fn fw_rule(&self, key: &FwRuleKey) -> Option<FwRule>;
     fn conntrack_get(&self, key: &CtKey) -> Option<CtEntry>;
     fn conntrack_insert(&mut self, key: CtKey, entry: CtEntry);
+    /// Remove a conntrack entry (absent is fine). Required: a no-op here would let a refused flow
+    /// keep the entries it created (see [`crate::conntrack::ct_forget_default`]).
+    fn conntrack_remove(&mut self, key: &CtKey);
     /// Firewall-only IPv6 conntrack lookup (`CONNTRACK6` map). DEFAULT `None`: the eBPF `GlobalMaps`
     /// has not wired the v6 firewall datapath yet, so v6 conntrack is simply absent there. The sim
     /// `MemMaps` overrides this with a real `HashMap`-backed store.
@@ -21,6 +24,9 @@ pub trait Maps {
     }
     /// Firewall-only IPv6 conntrack insert (`CONNTRACK6` map). DEFAULT no-op — see [`Self::conntrack6_get`].
     fn conntrack6_insert(&mut self, _key: CtKey6, _entry: CtEntry) {}
+    /// Firewall-only IPv6 conntrack remove (`CONNTRACK6` map). DEFAULT no-op, like the other v6
+    /// conntrack defaults; every backend that stores v6 entries must override it.
+    fn conntrack6_remove(&mut self, _key: &CtKey6) {}
     /// DSR reverse-LB address lookup (`DSR` map, B7b): keyed on the guest-reply 5-tuple
     /// (`invert_key(ct_key(forwarded))`). Holds the LB address a backend's reply must be reverse-SNAT'd to.
     /// Split out of `CONNTRACK`/`CtEntry` into its own compact LRU map so the DSR-create path does

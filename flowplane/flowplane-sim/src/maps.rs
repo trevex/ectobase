@@ -235,6 +235,12 @@ impl Maps for MemMaps {
     fn conntrack_insert(&mut self, key: CtKey, entry: CtEntry) {
         self.conntrack.insert(key, entry);
     }
+    fn conntrack_remove(&mut self, key: &CtKey) {
+        self.conntrack.remove(key);
+    }
+    fn conntrack6_remove(&mut self, key: &CtKey6) {
+        self.conntrack6.remove(key);
+    }
     fn conntrack6_get(&self, key: &CtKey6) -> Option<CtEntry> {
         self.conntrack6.get(key).copied()
     }

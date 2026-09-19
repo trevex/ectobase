@@ -37,6 +37,10 @@ impl Maps for GlobalMaps {
         let _ = crate::maps::CONNTRACK.insert(&key, &entry, 0);
     }
     #[inline(always)]
+    fn conntrack_remove(&mut self, key: &CtKey) {
+        let _ = crate::maps::CONNTRACK.remove(key);
+    }
+    #[inline(always)]
     fn fw_meta6(&self, ifindex: u32) -> Option<FwMeta> {
         unsafe { crate::maps::FW_META6.get(&ifindex).copied() }
     }
@@ -79,6 +83,10 @@ impl Maps for GlobalMaps {
     #[inline(always)]
     fn conntrack6_insert(&mut self, key: flowplane_common::CtKey6, entry: CtEntry) {
         let _ = crate::maps::CONNTRACK6.insert(&key, &entry, 0);
+    }
+    #[inline(always)]
+    fn conntrack6_remove(&mut self, key: &flowplane_common::CtKey6) {
+        let _ = crate::maps::CONNTRACK6.remove(key);
     }
     #[inline(always)]
     fn dsr_get(&self, key: &CtKey) -> Option<DsrLbIP> {

@@ -161,6 +161,9 @@ pub fn forward_decision_v4(
                     flowplane_common::FW_DIR_INGRESS,
                 ) == flowplane_common::FW_ACTION_DROP
             {
+                // The flow's entries already exist (created after the egress check); drop them so
+                // the next packet is new again and meets this check, not a conntrack bypass.
+                egress_ct_forget_v4(data, data_end, meta.vni);
                 return EgressVerdict::Drop;
             }
             EgressVerdict::Local {
@@ -185,6 +188,31 @@ pub fn forward_decision_v4(
 /// map-lookup-plus-rewrite its OWN out-of-line subprogram keeps its locals (`CtKey`, the transient
 /// `CtEntry`) off that already-tight combined frame; the call is sequential (runs once, returns
 /// before the caller continues into LB address/route/NAT below), so it does not nest with anything else.
+/// Remove the conntrack entries a refused same-node flow created (core `ct_forget_default`).
+/// Out-of-line for the same stack reason as [`dsr_reverse_snat_v4`]: its CtKey pair stays off
+/// `tc_guest_tx`'s combined frame.
+#[inline(never)]
+fn egress_ct_forget_v4(data: usize, data_end: usize, vni: u32) {
+    flowplane_core::conntrack::ct_forget_default(
+        &crate::coreimpl::RawPkt::new(data, data_end),
+        &mut crate::coreimpl::GlobalMaps,
+        ETH_LEN,
+        vni,
+    );
+}
+
+/// IPv6 sibling of [`egress_ct_forget_v4`] (core `ct_forget_default6`), a sequential frame of
+/// `forward_decision_v6`.
+#[inline(never)]
+fn egress_ct_forget_v6(data: usize, data_end: usize, vni: u32) {
+    flowplane_core::conntrack::ct_forget_default6(
+        &crate::coreimpl::RawPkt::new(data, data_end),
+        &mut crate::coreimpl::GlobalMaps,
+        ETH_LEN,
+        vni,
+    );
+}
+
 #[inline(never)]
 fn dsr_reverse_snat_v4(data: usize, data_end: usize, vni: u32) -> bool {
     let mut pkt = crate::coreimpl::RawPkt::new(data, data_end);
@@ -391,6 +419,8 @@ pub fn forward_decision_v6(
                 flowplane_common::FW_DIR_INGRESS,
             )
         {
+            // As in the v4 Local arm: forget the refused flow's entries (stage 1c created them).
+            egress_ct_forget_v6(data, data_end, meta.vni);
             return EgressVerdict::Drop;
         }
     }

@@ -433,6 +433,44 @@ pub fn ct_create_default<P: Pkt, M: Maps>(
     }
 }
 
+/// Undo [`ct_create_default`] for a flow a later check refused: remove its forward entry and the
+/// reverse entry it pre-seeded. The same-node path creates the entries after the SOURCE's egress
+/// firewall but before the DESTINATION's ingress check; left behind, they would carry every later
+/// packet of the refused flow past both firewalls, and the destination's own traffic back along
+/// the reverse entry. A reverse entry that is not a plain default entry (e.g. NAT's) is kept — the
+/// refused flow did not create it.
+#[inline(always)]
+pub fn ct_forget_default<P: Pkt, M: Maps>(pkt: &P, maps: &mut M, ip_off: usize, vni: u32) {
+    let Some(key) = ct_key(pkt, ip_off, vni) else {
+        return;
+    };
+    maps.conntrack_remove(&key);
+    let rev = invert_key(&key);
+    if maps
+        .conntrack_get(&rev)
+        .is_some_and(|e| e.flags == CT_F_DEFAULT)
+    {
+        maps.conntrack_remove(&rev);
+    }
+}
+
+/// IPv6 sibling of [`ct_forget_default`] (the firewall-only `CONNTRACK6` entries of
+/// [`ct_create_default6`]).
+#[inline(always)]
+pub fn ct_forget_default6<P: Pkt, M: Maps>(pkt: &P, maps: &mut M, ip_off: usize, vni: u32) {
+    let Some(key) = ct_key6(pkt, ip_off, vni) else {
+        return;
+    };
+    maps.conntrack6_remove(&key);
+    let rev = invert_key6(&key);
+    if maps
+        .conntrack6_get(&rev)
+        .is_some_and(|e| e.flags == CT_F_DEFAULT)
+    {
+        maps.conntrack6_remove(&rev);
+    }
+}
+
 /// Read the TCP flags byte for an IPv6 packet at `ip_off`, or None if the next header is not TCP /
 /// out of bounds. v6 mirror of [`tcp_flags`]: the IPv6 header is a fixed 40 bytes (no options in the
 /// firewall path), so the L4 offset is the constant `ip_off + 40`; TCP flags are at TCP-header

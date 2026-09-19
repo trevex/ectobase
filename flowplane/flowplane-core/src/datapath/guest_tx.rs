@@ -231,6 +231,9 @@ pub fn process_guest_tx<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &GuestT
             if was_new
                 && fw_classify(&*pkt, &*maps, ip_off, tap_ifindex, FW_DIR_INGRESS) == FW_ACTION_DROP
             {
+                // The flow's entries were created after the egress check (step 4); drop them so the
+                // next packet is new again and meets this check instead of a conntrack bypass.
+                crate::conntrack::ct_forget_default(&*pkt, maps, ip_off, in_.meta.vni);
                 return GuestTxOut {
                     action: Action::Drop,
                     edt_tstamp,
@@ -378,6 +381,8 @@ pub fn process_guest_tx_v6<P: Pkt, M: Maps>(
                 && crate::firewall::fw_classify6(&*pkt, &*maps, ip_off, tap_ifindex, FW_DIR_INGRESS)
                     == FW_ACTION_DROP
             {
+                // As in the v4 Local arm: forget the refused flow's entries (stage 1 created them).
+                crate::conntrack::ct_forget_default6(&*pkt, maps, ip_off, in_.meta.vni);
                 return GuestTxOut {
                     action: Action::Drop,
                     edt_tstamp,
