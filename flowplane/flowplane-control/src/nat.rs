@@ -1193,6 +1193,12 @@ mod neighbor_nat_tests {
             c.replace_neighbor_nats(&[], &v6_overlap),
             Err(NeighborNatError::Overlap)
         ));
+        // A block overlaps itself, so a set listing one twice is refused like any other overlap.
+        let twice = [block(IP, 7, 20000, 30000, 3); 2];
+        assert!(matches!(
+            c.replace_neighbor_nats(&twice, &[]),
+            Err(NeighborNatError::Overlap)
+        ));
         // 2185 worst-case blocks ([1, 65535) is 30 prefixes) need 65,550 > 65,536 prefixes.
         let ip = |i: u32| [10, (i >> 16) as u8, (i >> 8) as u8, i as u8];
         let too_many: Vec<_> = (0..2185).map(|i| block(ip(i), 7, 1, 65535, 1)).collect();
@@ -1262,6 +1268,7 @@ mod neighbor_nat_tests {
             c.replace_neighbor_nats(&apart, &[]).unwrap(),
             counts(3, 0, 0)
         );
+        assert_counted(&c);
         let before = state(&c);
         let overlapping = [
             block(IP, 7, 1024, 2048, 3),
@@ -1273,5 +1280,80 @@ mod neighbor_nat_tests {
             Err(NeighborNatError::Overlap)
         ));
         assert_eq!(state(&c), before);
+    }
+
+    // A map failure part way through a replace stops it: removals it got to are done, nothing from
+    // the set is written, and the block it could not remove is still listed, so every trie prefix
+    // still belongs to a listed block. The same call retried once the map works finishes the job.
+    #[test]
+    fn replace_that_fails_midway_leaves_the_set_for_a_retry() {
+        let mut c = ControlCore::new(MemMapWriter::default());
+        let stale = block(IP, 7, 20000, 30000, 3);
+        add(&mut c, stale);
+        c.w.nat_owner_fault.remove = Some(nth(&stale, 0));
+
+        let new = block([198, 51, 100, 1], 9, 4096, 5000, 4);
+        assert!(matches!(
+            c.replace_neighbor_nats(&[new], &[]),
+            Err(NeighborNatError::Map(_))
+        ));
+        assert_eq!(
+            state(&c),
+            State {
+                tries: (vec![owner_prefixes4(&stale)[0]], Vec::new()),
+                blocks: (vec![stale], Vec::new()),
+                counts: (owner_prefixes4(&stale).len(), 0),
+            },
+            "the stale block stays listed and counted; nothing of the set was written"
+        );
+
+        c.w.nat_owner_fault = Default::default();
+        assert_eq!(
+            c.replace_neighbor_nats(&[new], &[]).unwrap(),
+            counts(1, 0, 1)
+        );
+        assert_eq!(stored(&c), prefixes(&[new]));
+        assert_counted(&c);
+    }
+
+    // v6 sibling of `replace_moves_a_block_to_its_new_owner`: the owner is part of a v6 block's
+    // identity too, so a re-announce under a new one is a remove plus an add, not a keep.
+    #[test]
+    fn replace_moves_a_v6_block_to_its_new_owner() {
+        let mut c = ControlCore::new(MemMapWriter::default());
+        c.add_neighbor_nat6(7, IP6, 20000, 30000, [3; 16]).unwrap();
+        let moved = block6(IP6, 7, 20000, 30000, 4);
+        assert_eq!(
+            c.replace_neighbor_nats(&[], &[moved]).unwrap(),
+            counts(1, 0, 1)
+        );
+        assert_eq!(stored6(&c), prefixes6(&[moved]));
+        assert_counted(&c);
+    }
+
+    // The VNI is part of a block's identity in both families: the same nat_ip and range under a new
+    // VNI is a different block — its trie entries carry the VNI the datapath delivers with.
+    #[test]
+    fn replace_tells_two_vnis_apart() {
+        let mut c = ControlCore::new(MemMapWriter::default());
+        let (keep, keep6) = (block(IP, 7, 1024, 2048, 3), block6(IP6, 7, 1024, 2048, 3));
+        add(&mut c, keep);
+        add(&mut c, block(IP, 8, 20000, 30000, 3));
+        c.add_neighbor_nat6(7, IP6, 1024, 2048, [3; 16]).unwrap();
+        c.add_neighbor_nat6(8, IP6, 20000, 30000, [3; 16]).unwrap();
+
+        // Only the second block of each family moves VNI; the first is untouched.
+        let (revni, revni6) = (
+            block(IP, 9, 20000, 30000, 3),
+            block6(IP6, 9, 20000, 30000, 3),
+        );
+        assert_eq!(
+            c.replace_neighbor_nats(&[keep, revni], &[keep6, revni6])
+                .unwrap(),
+            counts(2, 2, 2)
+        );
+        assert_eq!(stored(&c), prefixes(&[keep, revni]));
+        assert_eq!(stored6(&c), prefixes6(&[keep6, revni6]));
+        assert_counted(&c);
     }
 }

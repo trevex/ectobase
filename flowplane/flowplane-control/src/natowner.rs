@@ -83,7 +83,7 @@ impl fmt::Display for NeighborNatError {
             ),
             NeighborNatError::Full { needed, max } => write!(
                 f,
-                "neighbor NAT table full: {needed} prefixes needed and the table holds at most \
+                "neighbor NAT table full: {needed} prefixes do not fit; the table holds at most \
                  {max} per family"
             ),
             NeighborNatError::Map(e) => write!(f, "{e:#}"),
