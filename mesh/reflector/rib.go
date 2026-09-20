@@ -66,8 +66,9 @@ func equalStrs(a, b []string) bool {
 }
 
 // OwnerPermit reports whether the session asking may act on a record owned by `ownerUnderlay` —
-// the session certificate's check (see underlayGuard.permits). A nil permit allows everything:
-// mTLS-off dev mode, and tests that are not about the certificate.
+// the session certificate's check (see underlayGuard.permits). A nil permit allows everything: a
+// TEST-only shorthand for "skip the certificate check". mTLS-off dev mode never passes nil for
+// this — it calls through guard.permits with enforce=false, which allows everything itself.
 type OwnerPermit func(ownerUnderlay string) bool
 
 func (p OwnerPermit) allows(ownerUnderlay string) bool {
@@ -267,11 +268,12 @@ func (r *RIB) withdrawRouteOrigin(k routeKey, origin string) {
 	}
 }
 
-// DropOrigin withdraws every route a node originated and clears its
-// subscriptions (called when the node's session ends / liveness is lost).
-func (r *RIB) DropOrigin(origin string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+// dropOriginLocked withdraws every route, NAT block and public record a node originated, and
+// clears its VNI subscriptions. Caller holds r.mu — ClaimOrigin and ReleaseOrigin both call this
+// from inside the SAME critical section that decides whether this session still owns nodeID, so a
+// decide-then-teardown split can never straddle a window where a successor claims, registers and
+// announces before its predecessor's now-stale teardown runs and wipes it anyway.
+func (r *RIB) dropOriginLocked(origin string) {
 	owned := r.byOrigin[origin]
 	delete(r.byOrigin, origin)
 	for k := range owned {
@@ -287,39 +289,52 @@ func (r *RIB) DropOrigin(origin string) {
 	r.dropOriginPublic(origin)
 }
 
+// dropOrigin is the locking wrapper over dropOriginLocked, for callers outside a session's
+// claim/release lifecycle (tests exercising the RIB's bookkeeping directly). A live session's
+// teardown goes through ReleaseOrigin, the one entry point for a session actually ending.
+func (r *RIB) dropOrigin(origin string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.dropOriginLocked(origin)
+}
+
 // ClaimOrigin makes this session the live one for nodeID and returns its token. A node that
 // reconnects while its previous session is still being timed out claims the id again: whatever
-// that session left is dropped here — the agent re-announces its whole desired set on reconnect
-// but never withdraws what it no longer wants, so a route it has since dropped would linger for
-// good — and the old session's own cleanup then becomes a no-op (see ReleaseOrigin).
+// that session left is dropped IN THIS SAME lock acquisition — installing the new token and
+// tearing down the old session's state must be one critical section, or a successor that claims,
+// registers a sink and announces before the predecessor's separately-locked cleanup runs gets
+// wiped by it anyway. The sink delete also covers a predecessor that opted out of the global feed
+// and so never registered one: deleting an absent key is a harmless no-op.
 func (r *RIB) ClaimOrigin(nodeID string) uint64 {
 	r.mu.Lock()
+	defer r.mu.Unlock()
 	_, superseded := r.origins[nodeID]
 	r.nextToken++
 	token := r.nextToken
 	r.origins[nodeID] = token
-	r.mu.Unlock()
 	if superseded {
-		r.DropOrigin(nodeID)
+		delete(r.sinks, nodeID)
+		r.dropOriginLocked(nodeID)
 	}
 	return token
 }
 
 // ReleaseOrigin ends a session: it unregisters the sink and fast-withdraws everything the node
 // announced — unless a newer session has already claimed the id, in which case this one has
-// nothing left to tear down and must not touch its successor's state.
+// nothing left to tear down and must not touch its successor's state. The token check, the sink
+// removal and the teardown all happen in ONE critical section for the same reason ClaimOrigin's
+// does: split across separate lock acquisitions, a reconnect landing in the gap would be undone by
+// its own predecessor's cleanup.
 func (r *RIB) ReleaseOrigin(nodeID string, token uint64) {
 	r.mu.Lock()
-	live := r.origins[nodeID] == token
-	if live {
-		delete(r.origins, nodeID)
-	}
-	r.mu.Unlock()
-	if !live {
+	defer r.mu.Unlock()
+	cur, ok := r.origins[nodeID]
+	if !ok || cur != token {
 		return
 	}
-	r.UnregisterSink(nodeID)
-	r.DropOrigin(nodeID)
+	delete(r.origins, nodeID)
+	delete(r.sinks, nodeID)
+	r.dropOriginLocked(nodeID)
 }
 
 // fanout sends an update to all subscribers of k.vni except origin. Caller holds r.mu.

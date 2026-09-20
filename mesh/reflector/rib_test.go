@@ -115,7 +115,7 @@ func TestDropOriginWithdrawsAllItsRoutes(t *testing.T) {
 	r.Announce("nodeA", 100, "10.0.0.1/32", []string{"fd00::a"}, false)
 	r.Announce("nodeA", 100, "10.0.0.2/32", []string{"fd00::a"}, false)
 
-	r.DropOrigin("nodeA")
+	r.dropOrigin("nodeA")
 
 	var withdraws int
 	for _, ru := range updates(sub) {
@@ -154,10 +154,12 @@ func TestAReconnectSurvivesItsStaleSessionsCleanup(t *testing.T) {
 	if len(natUpdates(fresh)) == 0 {
 		t.Fatal("the reconnect must still be registered for the global feed")
 	}
-	other := &fakeSink{id: "nodeB"}
-	r.Subscribe(100, other)
-	r.Announce("nodeA", 100, "10.0.0.3/32", []string{"fd00::a"}, false)
-	if len(updates(other)) == 0 {
+	// fanout skips the announcing origin, so proving fresh is still subscribed needs an announce
+	// from someone ELSE — nodeA announcing its own route would tell us nothing (fanout would skip
+	// it regardless of whether it is even still subscribed).
+	beforeRoute := len(updates(fresh))
+	r.Announce("nodeB", 100, "10.0.0.3/32", []string{"fd00::b"}, false)
+	if len(updates(fresh)) <= beforeRoute {
 		t.Fatal("the reconnect must still be subscribed to its VNI")
 	}
 
@@ -165,6 +167,12 @@ func TestAReconnectSurvivesItsStaleSessionsCleanup(t *testing.T) {
 	r.ReleaseOrigin("nodeA", live)
 	if r.HasRoute(100, "10.0.0.2/32") {
 		t.Fatal("releasing the live session must withdraw its routes")
+	}
+	// ReleaseOrigin unregisters the sink too: fresh must not go on receiving global fanout.
+	beforeNat := len(natUpdates(fresh))
+	r.AnnounceNat("nodeC", natBlock(100, "10.0.0.10", "1.2.3.5", 1024, 2048, "fd00::c"))
+	if len(natUpdates(fresh)) != beforeNat {
+		t.Fatal("releasing the live session must unregister its sink from the global feed")
 	}
 }
 

@@ -49,7 +49,7 @@ func (rec PublicRecord) key() publicKey {
 
 // AnnouncePublic records a global public prefix owned by origin and broadcasts
 // an ADD to ALL sinks (including the origin, so the owner learns its canonical
-// record). Keyed by (kind, prefix, owner_underlay); re-announce is idempotent.
+// record). Keyed by (kind, prefix, owner_underlay, overlay_ip); re-announce is idempotent.
 func (r *RIB) AnnouncePublic(origin string, rec PublicRecord) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -71,7 +71,8 @@ func (r *RIB) AnnouncePublic(origin string, rec PublicRecord) {
 
 // WithdrawPublic removes a global public prefix and broadcasts a WITHDRAW to all sinks — but only
 // if the record is the caller's to withdraw: announced by THIS origin, and with an owner underlay
-// the session's certificate speaks for. The record is matched by (kind, prefix, owner_underlay).
+// the session's certificate speaks for. The record is matched by (kind, prefix, owner_underlay,
+// overlay_ip).
 func (r *RIB) WithdrawPublic(origin string, rec PublicRecord, permit OwnerPermit) WithdrawOutcome {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -95,6 +96,12 @@ func (r *RIB) dropOriginPublic(origin string) {
 	owned := r.publicByOrigin[origin]
 	delete(r.publicByOrigin, origin)
 	for k := range owned {
+		// Defense in depth: publicByOrigin says origin once held k, but the reverse index is the
+		// authority on who holds it NOW. A future bug that leaves a stale entry in the wrong
+		// origin's set must be a no-op here, not a withdraw of whoever actually owns k.
+		if r.publicOrigin[k] != origin {
+			continue
+		}
 		if rec, ok := r.public[k]; ok {
 			delete(r.public, k)
 			delete(r.publicOrigin, k)

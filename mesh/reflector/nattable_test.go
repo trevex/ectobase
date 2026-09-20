@@ -82,7 +82,7 @@ func TestDropOriginWithdrawsNatBlocks(t *testing.T) {
 	r.AnnounceNat("nodeA", natBlock(100, "10.0.0.1", "1.2.3.4", 1024, 2048, "fd00::a"))
 	r.AnnounceNat("nodeA", natBlock(100, "10.0.0.2", "1.2.3.4", 2048, 3072, "fd00::a"))
 
-	r.DropOrigin("nodeA")
+	r.dropOrigin("nodeA")
 
 	var withdraws int
 	for _, nu := range natUpdates(b) {
@@ -141,7 +141,7 @@ func TestAnnounceNatMovesTheBlockToItsNewOrigin(t *testing.T) {
 	r.AnnounceNat("nodeC", natBlock(100, "10.0.0.9", "1.2.3.4", 1024, 2048, "fd00::c"))
 
 	// nodeA disconnects: it no longer owns the block, so nothing is withdrawn.
-	r.DropOrigin("nodeA")
+	r.dropOrigin("nodeA")
 	if us := natUpdates(s); us[len(us)-1].Op == pb.RouteOp_ROUTE_OP_WITHDRAW {
 		t.Fatalf("the previous origin's disconnect must not withdraw the new owner's block: %+v", us)
 	}
@@ -151,11 +151,35 @@ func TestAnnounceNatMovesTheBlockToItsNewOrigin(t *testing.T) {
 	}
 }
 
+// WithdrawNat must remove k from THIS origin's natByOrigin set too, not just from the RIB: an
+// origin that once announced a key and later withdrew it must not still "own" it for cleanup
+// purposes once someone else has taken it over. Skipping that delete leaves a stale entry in the
+// ORIGINAL owner's set, so its later disconnect silently withdraws the CURRENT owner's block.
+func TestWithdrawNatThenReannounceSurvivesTheOriginalOwnersDisconnect(t *testing.T) {
+	r := NewRIB()
+	s := &fakeSink{id: "sub"}
+	r.RegisterSink(s)
+	r.AnnounceNat("nodeA", natBlock(100, "10.0.0.1", "1.2.3.4", 1024, 2048, "fd00::a"))
+	if got := r.WithdrawNat("nodeA", "1.2.3.4", 1024, 2048, nil); got != WithdrawApplied {
+		t.Fatalf("nodeA must be able to withdraw its own block, got %v", got)
+	}
+	r.AnnounceNat("nodeC", natBlock(100, "10.0.0.9", "1.2.3.4", 1024, 2048, "fd00::c"))
+
+	// nodeA disconnects: it withdrew this key itself long ago and no longer owns it.
+	r.dropOrigin("nodeA")
+	if us := natUpdates(s); us[len(us)-1].Op == pb.RouteOp_ROUTE_OP_WITHDRAW {
+		t.Fatalf("the ORIGINAL owner's disconnect must not withdraw the CURRENT owner's block: %+v", us)
+	}
+	if got := r.WithdrawNat("nodeC", "1.2.3.4", 1024, 2048, nil); got != WithdrawApplied {
+		t.Fatalf("nodeC must still own the block it announced after nodeA withdrew, got %v", got)
+	}
+}
+
 func TestUnregisterSinkStopsNatFanout(t *testing.T) {
 	r := NewRIB()
 	b := &fakeSink{id: "nodeB"}
 	r.RegisterSink(b)
-	r.UnregisterSink(b.ID())
+	r.unregisterSink(b.ID())
 	r.AnnounceNat("nodeA", natBlock(100, "10.0.0.1", "1.2.3.4", 1024, 2048, "fd00::a"))
 	if us := natUpdates(b); len(us) != 0 {
 		t.Fatalf("unregistered sink must not receive NAT updates, got %+v", us)

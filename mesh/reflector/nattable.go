@@ -49,9 +49,10 @@ func (r *RIB) RegisterSink(s Sink) {
 	s.SendSnapshot(snap)
 }
 
-// UnregisterSink removes s from the global sink set (on disconnect). Its NAT
-// blocks are withdrawn separately via DropOrigin.
-func (r *RIB) UnregisterSink(sinkID string) {
+// unregisterSink removes s from the global sink set. A live session's teardown goes through
+// ReleaseOrigin, which removes it from r.sinks itself inside its own critical section; this
+// locking form exists for callers exercising the global-feed bookkeeping directly.
+func (r *RIB) unregisterSink(sinkID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	delete(r.sinks, sinkID)
@@ -106,6 +107,12 @@ func (r *RIB) dropOriginNat(origin string) {
 	owned := r.natByOrigin[origin]
 	delete(r.natByOrigin, origin)
 	for k := range owned {
+		// Defense in depth: natByOrigin says origin once held k, but the reverse index is the
+		// authority on who holds it NOW. A future bug that leaves a stale entry in the wrong
+		// origin's set must be a no-op here, not a withdraw of whoever actually owns k.
+		if r.natOrigin[k] != origin {
+			continue
+		}
 		if b, ok := r.nat[k]; ok {
 			delete(r.nat, k)
 			delete(r.natOrigin, k)
