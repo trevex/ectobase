@@ -21,6 +21,7 @@ pub use writer::{CtFlushScope, CtFlushScope6, MapWriter};
 
 /// A neighbor-NAT block's place in the index: its nat_ip and the port its range starts at.
 pub(crate) type BlockKey4 = ([u8; 4], u16);
+/// v6 sibling of [`BlockKey4`], over a nat_ip6.
 pub(crate) type BlockKey6 = ([u8; 16], u16);
 
 /// Backend-agnostic control-plane state + programming, generic over the map write surface.

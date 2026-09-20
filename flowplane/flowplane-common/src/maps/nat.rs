@@ -1,5 +1,6 @@
-//! NAT / NAT66 config map key & value types plus the neighbor-NAT entries (the `NAT_CONFIG`,
-//! `NAT_CONFIG6`, `NAT_OWNERS`, `NAT_OWNERS6` maps).
+//! NAT / NAT66 map key & value types: the `NAT_CONFIG{,6}` guest config and the `NAT_OWNERS{,6}`
+//! trie key and owner. The neighbor-NAT block records at the end are the control plane's own, not
+//! map types — a block reaches the datapath as the owner prefixes that cover its port range.
 
 /// NAT-GW config key: (vni, local guest IPv4).
 #[repr(C)]
@@ -89,7 +90,8 @@ pub struct NeighborNatEntry {
 
 /// A neighbor-NAT block: v6 sibling of [`NeighborNatEntry`]. A remote node owns
 /// `(vni, nat_ip6, [port_min, port_max))`; return traffic to that nat_ip6:port is re-forwarded to
-/// `underlay`. Stored in the datapath as `NAT_OWNERS6` prefixes (see [`NatOwnerKey6`]).
+/// `underlay`. Not a map value — the datapath stores a block as `NAT_OWNERS6` prefixes carrying
+/// [`NatOwner`] (see [`NatOwnerKey6`]), so this type has no ABI to hold to.
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Default)]
 pub struct NeighborNat6Entry {
     pub underlay: [u8; 16],

@@ -264,7 +264,9 @@ impl<W: MapWriter> ControlCore<W> {
     }
 
     /// Write a block its caller has checked (non-empty, overlapping nothing listed); the capacity
-    /// check and the failure contract are [`Self::add_neighbor_nat`]'s.
+    /// check and the failure contract are [`Self::add_neighbor_nat`]'s. Listing it never displaces
+    /// a block: one already at this `(nat_ip, port_min)` would have failed the overlap check, and
+    /// its prefix count would be stranded in the counter — the `debug_assert`s hold that premise.
     fn store_block4(&mut self, b: NeighborNatEntry) -> Result<(), NeighborNatError> {
         let entries = owner_prefixes4(&b);
         if self.nat_owner_count4 + entries.len() > NAT_OWNERS_MAX as usize {
@@ -281,13 +283,15 @@ impl<W: MapWriter> ControlCore<W> {
                 }
                 if stranded {
                     self.nat_owner_count4 += entries.len();
-                    self.neigh_nats.insert((b.nat_ip, b.port_min), b);
+                    let prev = self.neigh_nats.insert((b.nat_ip, b.port_min), b);
+                    debug_assert!(prev.is_none(), "a stranded block displaced a listed one");
                 }
                 return Err(e.into());
             }
         }
         self.nat_owner_count4 += entries.len();
-        self.neigh_nats.insert((b.nat_ip, b.port_min), b);
+        let prev = self.neigh_nats.insert((b.nat_ip, b.port_min), b);
+        debug_assert!(prev.is_none(), "a stored block displaced a listed one");
         Ok(())
     }
 
@@ -515,13 +519,15 @@ impl<W: MapWriter> ControlCore<W> {
                 }
                 if stranded {
                     self.nat_owner_count6 += entries.len();
-                    self.neigh_nats6.insert((b.nat_ip6, b.port_min), b);
+                    let prev = self.neigh_nats6.insert((b.nat_ip6, b.port_min), b);
+                    debug_assert!(prev.is_none(), "a stranded block displaced a listed one");
                 }
                 return Err(e.into());
             }
         }
         self.nat_owner_count6 += entries.len();
-        self.neigh_nats6.insert((b.nat_ip6, b.port_min), b);
+        let prev = self.neigh_nats6.insert((b.nat_ip6, b.port_min), b);
+        debug_assert!(prev.is_none(), "a stored block displaced a listed one");
         Ok(())
     }
 
@@ -620,7 +626,7 @@ impl<W: MapWriter> ControlCore<W> {
         }
 
         // Every block still listed is in the set, and the set overlaps nothing in itself, so the
-        // overlap scan add_neighbor_nat makes would find nothing: store directly.
+        // overlap check add_neighbor_nat makes would find nothing: store directly.
         let have4: HashSet<BlockId4> = self.neigh_nats.values().map(id4).collect();
         for b in v4 {
             if have4.contains(&id4(b)) {
