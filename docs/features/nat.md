@@ -116,11 +116,16 @@ still applied incrementally, one block at a time.
     snapshot replaces the whole block set declaratively, so the stranded block is removed
     and its successor admitted in the same call.
 
-    Upgrading a node from the old 64-slot neighbor-NAT table does not convert its
-    existing blocks — the loader unpins the old maps without reading them, so an edge's
-    already-announced remote NAT blocks go unrelayed until they are re-announced.
-    Workaround: restart the edge's mesh agent after the dataplane upgrade — its next
-    reflector reconnect replays every remote NAT block from the control plane's snapshot.
+    Upgrading a node from the old 64-slot neighbor-NAT table converts its blocks: adopt
+    reads the retired maps before the loader unpins them and installs what they held, so
+    an edge's already-announced remote NAT blocks keep relaying across the upgrade. Only
+    the slots below the old table's count are taken — it was rewritten in place and never
+    cleared above its count, so a slot above it is a withdrawn block, and reading it back
+    would relay that public IP to a node that no longer owns it. A table that cannot be
+    read is logged and skipped, which is no worse than before: those blocks come back on
+    the agent's next reflector replay. The conversion is one-shot, since the loader unpins
+    the old maps either way — so running the debug `flowplane bringup --pin-dir` against a
+    production pin directory before `serve` discards them.
 
 ### ICMP errors
 
