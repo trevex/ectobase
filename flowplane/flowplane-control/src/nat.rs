@@ -1549,6 +1549,37 @@ mod neighbor_nat_tests {
         assert_counted(&c);
     }
 
+    // v6 sibling of the test above: the v6 index is its own pair of lookups, and the one that
+    // finds a block starting inside the new range is only reached by the shapes the lookup behind
+    // it misses.
+    #[test]
+    fn the_v6_index_catches_every_overlap_shape() {
+        let mut c = ControlCore::new(MemMapWriter::default());
+        c.add_neighbor_nat6(7, IP6, 20000, 30000, [3; 16]).unwrap();
+        for (lo, hi) in [
+            (15000, 20001),
+            (25000, 26000),
+            (20000, 30000),
+            (29999, 40000),
+            (10000, 40000),
+        ] {
+            assert!(
+                matches!(
+                    c.add_neighbor_nat6(7, IP6, lo, hi, [4; 16]),
+                    Err(NeighborNatError::Overlap)
+                ),
+                "{lo}..{hi} overlaps the listed block"
+            );
+        }
+        let mut other = IP6;
+        other[15] = 1;
+        c.add_neighbor_nat6(7, IP6, 10000, 20000, [4; 16]).unwrap();
+        c.add_neighbor_nat6(7, IP6, 30000, 40000, [4; 16]).unwrap();
+        c.add_neighbor_nat6(7, other, 20000, 30000, [4; 16])
+            .unwrap();
+        assert_counted(&c);
+    }
+
     // A re-announce refreshes a block that is already there — the agent replays one on every
     // reconnect. Rewriting its prefixes in place keeps the return path programmed throughout; the
     // old delete-then-add left up to 30 prefixes missing in between.
@@ -1592,6 +1623,20 @@ mod neighbor_nat_tests {
             Err(NeighborNatError::Overlap)
         ));
         assert_counted(&c);
+
+        // A block that starts where a listed one does but ends elsewhere is a different block, so
+        // it is an add too — and the add overlaps. Refreshing it in place instead would leave the
+        // prefixes outside the new range in the trie, owned by nothing listed.
+        let before = state(&c);
+        assert!(matches!(
+            c.upsert_neighbor_nat(7, IP, 20000, 25000, [9; 16]),
+            Err(NeighborNatError::Overlap)
+        ));
+        assert!(matches!(
+            c.upsert_neighbor_nat6(7, IP6, 20000, 25000, [9; 16]),
+            Err(NeighborNatError::Overlap)
+        ));
+        assert_eq!(state(&c), before, "nothing written");
     }
 
     // Adopt rebuilds the blocks from the trie and repairs them — and now also removes what no
@@ -1718,6 +1763,28 @@ mod neighbor_nat_tests {
         assert_eq!(stored(&c), prefixes(&[block(IP, 7, 20000, 30000, 3)]));
         assert!(c.del_neighbor_nat(7, IP, 20000, 30000).unwrap());
         assert!(stored(&c).is_empty());
+        assert_counted(&c);
+    }
+
+    #[test]
+    fn a_v6_delete_only_matches_the_whole_block() {
+        let mut c = ControlCore::new(MemMapWriter::default());
+        c.add_neighbor_nat6(7, IP6, 20000, 30000, [3; 16]).unwrap();
+        assert!(
+            !c.del_neighbor_nat6(8, IP6, 20000, 30000).unwrap(),
+            "another VNI"
+        );
+        assert!(
+            !c.del_neighbor_nat6(7, IP6, 20000, 29000).unwrap(),
+            "another end"
+        );
+        assert!(
+            !c.del_neighbor_nat6(7, IP6, 21000, 30000).unwrap(),
+            "another start"
+        );
+        assert_eq!(stored6(&c), prefixes6(&[block6(IP6, 7, 20000, 30000, 3)]));
+        assert!(c.del_neighbor_nat6(7, IP6, 20000, 30000).unwrap());
+        assert!(stored6(&c).is_empty());
         assert_counted(&c);
     }
 }
