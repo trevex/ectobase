@@ -116,7 +116,7 @@ func TestLbDistributeSmoke(t *testing.T) {
 		{beContainer, overlayVNI, backend.IdentityAddr},
 	} {
 		mustGRPC(t, ctx, r.container, "AddLoadBalancer", fmt.Sprintf(
-			`{"id":"lb","vni":%d,"lbIP":%q,"lb_underlay":%q,"ports":[{"port":80,"proto":6}]}`, r.vni, lbIP, r.lbUnder))
+			`{"id":"lb","vni":%d,"ip":%q,"lb_underlay":%q,"ports":[{"port":80,"proto":6}]}`, r.vni, lbIP, r.lbUnder))
 		mustGRPC(t, ctx, r.container, "AddLbBackend", fmt.Sprintf(
 			`{"id":"lb","backend_underlay":%q,"backend_overlay_ip":%q,"backend_vni":%d}`, bul, lbBackendIP6, overlayVNI))
 		c := r.container
@@ -226,7 +226,7 @@ func TestLbDistributeSmokeV4(t *testing.T) {
 		{beContainer, overlayVNI, backend.IdentityAddr},
 	} {
 		mustGRPC(t, ctx, r.container, "AddLoadBalancer", fmt.Sprintf(
-			`{"id":"lb4","vni":%d,"lbIP":%q,"lb_underlay":%q,"ports":[{"port":80,"proto":6}]}`, r.vni, lbIP4, r.lbUnder))
+			`{"id":"lb4","vni":%d,"ip":%q,"lb_underlay":%q,"ports":[{"port":80,"proto":6}]}`, r.vni, lbIP4, r.lbUnder))
 		mustGRPC(t, ctx, r.container, "AddLbBackend", fmt.Sprintf(
 			`{"id":"lb4","backend_underlay":%q,"backend_overlay_ip":%q,"backend_vni":%d}`, bul, lbBackendIP4, overlayVNI))
 		c := r.container

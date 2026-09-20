@@ -28,7 +28,9 @@ func TestDesiredAnnouncesOnlyLocalCompiledNicNat(t *testing.T) {
 	localC.Spec = compiledv1.CompiledNICSpec{
 		VNI:        100,
 		OverlayIPs: []string{"10.0.0.1"},
-		NAT:        []compiledv1.CompiledNATSource{{SourceIP: "10.0.0.1", NATIP: "1.2.3.4", PortMin: 1024, PortMax: 2048}},
+		// PortMax inclusive, as the central allocator writes it: a 1024-port block at 1024 ends
+		// at 2047, and the agent converts to the dataplane's exclusive bound.
+		NAT: []compiledv1.CompiledNATSource{{SourceIP: "10.0.0.1", NATIP: "1.2.3.4", PortMin: 1024, PortMax: 2047}},
 	}
 
 	// remoteC: NOT locally attached (10.0.0.2 absent from dp.ifaces); must be skipped.
@@ -38,7 +40,7 @@ func TestDesiredAnnouncesOnlyLocalCompiledNicNat(t *testing.T) {
 	remoteC.Spec = compiledv1.CompiledNICSpec{
 		VNI:        100,
 		OverlayIPs: []string{"10.0.0.2"},
-		NAT:        []compiledv1.CompiledNATSource{{SourceIP: "10.0.0.2", NATIP: "1.2.3.4", PortMin: 2048, PortMax: 3072}},
+		NAT:        []compiledv1.CompiledNATSource{{SourceIP: "10.0.0.2", NATIP: "1.2.3.4", PortMin: 2048, PortMax: 3071}},
 	}
 
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(localC, remoteC).Build()

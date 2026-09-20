@@ -202,8 +202,15 @@ func (r *Reconciler) Desired(ctx context.Context) (subs []uint32, announce []Rou
 			if !ok || k.vni == 0 {
 				continue // source not attached locally yet; skip until ListInterfaces reports it
 			}
+			// The central allocator writes PortMax INCLUSIVE (portMin + size - 1, see
+			// mesh/allocator/portblock.go) and CompiledNATSource documents it that way; the
+			// dataplane's port_max and every route-bus NAT block are EXCLUSIVE. This is the one
+			// place the two meet, so convert here rather than changing either contract. Passing it
+			// through lost the block's top port, and made a one-port block an empty range the
+			// dataplane refuses outright.
+			portMaxExcl := uint32(src.PortMax) + 1
 			if r.dp != nil {
-				if err := r.dp.AddNatSource(ctx, k.vni, src.SourceIP, src.NATIP, uint32(src.PortMin), uint32(src.PortMax)); err != nil {
+				if err := r.dp.AddNatSource(ctx, k.vni, src.SourceIP, src.NATIP, uint32(src.PortMin), portMaxExcl); err != nil {
 					// Don't advertise a NAT block the local dataplane failed to
 					// program: peers would learn a return route to a node with no
 					// matching SNAT state and misroute the reply. Retried next tick.
@@ -213,7 +220,7 @@ func (r *Reconciler) Desired(ctx context.Context) (subs []uint32, announce []Rou
 			}
 			announceNat = append(announceNat, NatBlock{
 				Vni: k.vni, SourceIP: src.SourceIP, NatIP: src.NATIP,
-				PortMin: uint32(src.PortMin), PortMax: uint32(src.PortMax), OwnerUnderlay: owner,
+				PortMin: uint32(src.PortMin), PortMax: portMaxExcl, OwnerUnderlay: owner,
 			})
 		}
 	}

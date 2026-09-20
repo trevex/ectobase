@@ -189,6 +189,34 @@ datapath return: neighbor-NAT lookup at the edge → encap toward owner VTEP →
 - Compiler → agent → dataplane. The agent programs the `NAT` map and announces the
   block (owner = the node VTEP) on the route bus, so return traffic finds the owning node.
 
+!!! warning "The port block's upper bound changes meaning at the agent"
+
+    `NATGateway.Status.Allocations[].PortMax` and `CompiledNIC.Spec.NAT[].PortMax` are
+    **inclusive** — the allocator writes `portMin + size - 1`. The dataplane's `port_max`
+    and every route-bus `NatBlock` are **exclusive**. The agent is the single place the
+    two conventions meet and converts there (`portMaxExcl := src.PortMax + 1`). Passing
+    the inclusive bound straight through loses the block's top port, and turns a one-port
+    block into an empty range the dataplane refuses outright.
+
+## Live coverage
+
+`TestNatFromIntent` (`test/lab/livetest/natintent_test.go`) drives this whole chain from
+intent alone on the lab fabric: a `NATGateway` and a `Container` are the entire input, and
+a Pod on the overlay reaches an HTTP server in the WAN namespace and back. It issues no
+dataplane gRPC of its own — the CNI's attach, triggered by scheduling the Pod, is the only
+call into the dataplane anywhere in the flow.
+
+It asserts in stages so a failure localizes: the central allocation in
+`NATGateway.Status`, the compiled twin's `CompiledNIC.Spec.NAT` in the pool cluster, the
+block in **both** edges' `NAT_OWNERS` tries (decoded from the pinned map, so a
+half-programmed edge fails loudly rather than becoming an intermittent blackhole), and
+finally the bidirectional flow. The trie assertion is also what pins the inclusive →
+exclusive conversion above: it requires the exclusive bound in the edge's `NatOwner`.
+
+This complements `TestNatEgressSmoke{,6}` and `TestNatEgressReturn6`, which hand the
+dataplane exactly the arguments the agent would have produced and so isolate the datapath
+tier; everything above the gRPC boundary had no live coverage before.
+
 ## Related
 
 - [North-South WAN edge](ns-edge.md) — where return traffic enters and neighbor-NAT runs.
