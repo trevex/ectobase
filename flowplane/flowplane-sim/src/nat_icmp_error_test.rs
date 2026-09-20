@@ -295,8 +295,6 @@ fn edge_relays_the_icmp_error_to_the_port_block_owner() {
         vni: VNI,
         port_min: 1024,
         port_max: 2048,
-        enabled: 1,
-        _pad: [0; 3],
     });
 
     let frame = icmp_error_to_nat_ip(ICMP_DEST_UNREACH, ICMP_FRAG_NEEDED, 6);
@@ -324,8 +322,6 @@ fn edge_drops_an_icmp_error_for_an_unowned_port() {
         vni: VNI,
         port_min: 40000,
         port_max: 41000,
-        enabled: 1,
-        _pad: [0; 3],
     });
 
     let frame = icmp_error_to_nat_ip(ICMP_DEST_UNREACH, ICMP_FRAG_NEEDED, 6);

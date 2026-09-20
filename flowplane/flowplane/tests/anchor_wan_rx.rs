@@ -66,8 +66,6 @@ fn v4_block() -> NeighborNatEntry {
         vni: VNI,
         port_min: 20000,
         port_max: 30001,
-        enabled: 1,
-        _pad: [0; 3],
     }
 }
 
@@ -80,8 +78,6 @@ fn v6_block() -> NeighborNat6Entry {
         vni: VNI,
         port_min: 1100,
         port_max: 5001,
-        enabled: 1,
-        _pad: [0; 3],
     }
 }
 

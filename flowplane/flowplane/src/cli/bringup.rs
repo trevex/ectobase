@@ -844,8 +844,6 @@ fn parse_neigh_nats(specs: &[String]) -> anyhow::Result<Vec<flowplane_common::Ne
             vni,
             port_min,
             port_max,
-            enabled: 1,
-            _pad: [0; 3],
         });
     }
     Ok(blocks)

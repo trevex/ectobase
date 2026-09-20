@@ -10,8 +10,8 @@ use flowplane_common::{
 };
 
 /// The trie entries `(prefix_len, key, owner)` that store block `b`: one per aligned port prefix of
-/// `[port_min, port_max)`. Empty for an empty range. `enabled` is not consulted: a written block is
-/// live.
+/// `[port_min, port_max)`. Empty for an empty range. A block in the trie is live — there is no
+/// disabled state to consult.
 pub fn owner_prefixes4(b: &NeighborNatEntry) -> Vec<(u32, NatOwnerKey, NatOwner)> {
     if b.port_min >= b.port_max {
         return Vec::new();
@@ -129,8 +129,6 @@ mod tests {
             vni: 42,
             port_min,
             port_max,
-            enabled: 1,
-            _pad: [0; 3],
         }
     }
 
@@ -141,8 +139,6 @@ mod tests {
             vni: 42,
             port_min,
             port_max,
-            enabled: 1,
-            _pad: [0; 3],
         }
     }
 

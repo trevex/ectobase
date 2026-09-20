@@ -15,8 +15,6 @@ fn block(nat_ip: [u8; 4], vni: u32, lo: u16, hi: u16, owner: u8) -> NeighborNatE
         vni,
         port_min: lo,
         port_max: hi,
-        enabled: 1,
-        _pad: [0; 3],
     }
 }
 
@@ -96,8 +94,6 @@ fn v6_blocks_resolve_at_their_edges() {
             vni: 9,
             port_min: lo,
             port_max: lo + 300,
-            enabled: 1,
-            _pad: [0; 3],
         };
         m.add_neighbor_nat6(b);
         blocks.push(b);

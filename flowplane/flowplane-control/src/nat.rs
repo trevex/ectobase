@@ -205,8 +205,6 @@ impl<W: MapWriter> ControlCore<W> {
             vni,
             port_min,
             port_max,
-            enabled: 1,
-            _pad: [0; 3],
         })
     }
 
@@ -240,8 +238,6 @@ impl<W: MapWriter> ControlCore<W> {
             vni,
             port_min,
             port_max,
-            enabled: 1,
-            _pad: [0; 3],
         };
         for (plen, k, owner) in owner_prefixes4(&b) {
             self.w.nat_owner_upsert(plen, k, owner)?;
@@ -453,8 +449,6 @@ impl<W: MapWriter> ControlCore<W> {
             vni,
             port_min,
             port_max,
-            enabled: 1,
-            _pad: [0; 3],
         })
     }
 
@@ -481,8 +475,6 @@ impl<W: MapWriter> ControlCore<W> {
             vni,
             port_min,
             port_max,
-            enabled: 1,
-            _pad: [0; 3],
         };
         for (plen, k, owner) in owner_prefixes6(&b) {
             self.w.nat_owner6_upsert(plen, k, owner)?;
@@ -668,8 +660,6 @@ impl<W: MapWriter> ControlCore<W> {
                 vni: o.vni,
                 port_min: o.port_min,
                 port_max: o.port_max,
-                enabled: 1,
-                _pad: [0; 3],
             };
             v4.insert((b.nat_ip, b.port_min), b);
         }
@@ -706,8 +696,6 @@ impl<W: MapWriter> ControlCore<W> {
                 vni: o.vni,
                 port_min: o.port_min,
                 port_max: o.port_max,
-                enabled: 1,
-                _pad: [0; 3],
             };
             v6.insert((b.nat_ip6, b.port_min), b);
         }
@@ -833,8 +821,6 @@ mod neighbor_nat_tests {
             vni,
             port_min: lo,
             port_max: hi,
-            enabled: 1,
-            _pad: [0; 3],
         }
     }
 
@@ -845,8 +831,6 @@ mod neighbor_nat_tests {
             vni,
             port_min: lo,
             port_max: hi,
-            enabled: 1,
-            _pad: [0; 3],
         }
     }
 

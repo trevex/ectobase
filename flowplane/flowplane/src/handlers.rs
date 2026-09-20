@@ -206,8 +206,6 @@ pub fn replace_neighbor_nats<W: MapWriter>(
                 vni: b.vni,
                 port_min,
                 port_max,
-                enabled: 1,
-                _pad: [0; 3],
             }),
             IpAddr::V6(n) => v6.push(NeighborNat6Entry {
                 underlay,
@@ -215,8 +213,6 @@ pub fn replace_neighbor_nats<W: MapWriter>(
                 vni: b.vni,
                 port_min,
                 port_max,
-                enabled: 1,
-                _pad: [0; 3],
             }),
         }
     }
@@ -733,8 +729,6 @@ mod tests {
             vni: 100,
             port_min,
             port_max,
-            enabled: 1,
-            ..Default::default()
         })
     }
 
@@ -755,8 +749,6 @@ mod tests {
             vni: 100,
             port_min,
             port_max,
-            enabled: 1,
-            ..Default::default()
         })
     }
 

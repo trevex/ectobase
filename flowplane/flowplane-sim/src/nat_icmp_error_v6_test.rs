@@ -279,8 +279,6 @@ fn edge_relays_the_icmpv6_error_to_the_port_block_owner() {
         vni: VNI,
         port_min: 1024,
         port_max: 2048,
-        enabled: 1,
-        _pad: [0; 3],
     });
 
     let frame = icmpv6_error_to_nat_ip(ICMPV6_PACKET_TOO_BIG, 6);
