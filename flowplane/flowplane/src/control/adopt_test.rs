@@ -23,6 +23,7 @@ use aya::programs::{SchedClassifier, TcAttachType};
 use flowplane_common::{FwBind, FwPolKey, NatOwner, NatOwnerKey, NatOwnerKey6};
 
 use super::{hex_encode, Control, IfaceParams};
+use crate::legacy_nat::{LegacyNeighborNat, LegacyNeighborNat6};
 use crate::loader::RETIRED_PINNED_MAPS;
 use crate::{handlers, pb};
 
@@ -526,6 +527,105 @@ fn restart_adopts_pinned_state_and_relinks_guests() {
             .all(|(_, k, o)| k.nat_ip == [198, 51, 100, 9] && o.port_min == 25000 && o.vni == 8),
         "only the successor's prefixes remain: {successor:?}"
     );
+
+    // Incarnation 4: an upgrade from the retired 64-slot tables. The old control plane rewrote
+    // slots 0..count on every change and never cleared the ones above, so a slot at or above the
+    // count is a withdrawn block's corpse — pin one live block and one corpse per family and check
+    // that adopt converts exactly the live ones. Both families, because `take4`/`take6` differ only
+    // in the map names they reach for.
+    drop(ctl);
+    let migrated_ip = [203, 0, 113, 9];
+    let migrated_ip6 = [0x20, 1, 0xd, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 9];
+    let owner = [0xfd, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2];
+    {
+        let slot = |nat_ip: [u8; 4]| LegacyNeighborNat {
+            underlay: owner,
+            nat_ip,
+            vni,
+            port_min: 20000,
+            port_max: 21024,
+            enabled: 1,
+            _pad: [0; 3],
+        };
+        let mut slots = AyaHashMap::<MapData, u32, LegacyNeighborNat>::create(64, 0)
+            .expect("create legacy NEIGHBOR_NAT");
+        slots.insert(0, slot(migrated_ip), 0).expect("live slot");
+        slots
+            .insert(1, slot([203, 0, 113, 10]), 0)
+            .expect("corpse above the count");
+        // `pin` takes self by value, so it has to be the last use of the map.
+        slots
+            .pin(pin.path().join("NEIGHBOR_NAT"))
+            .expect("pin legacy NEIGHBOR_NAT");
+
+        let slot6 = |nat_ip6: [u8; 16]| LegacyNeighborNat6 {
+            underlay: owner,
+            nat_ip6,
+            vni,
+            port_min: 20000,
+            port_max: 21024,
+            enabled: 1,
+            _pad: [0; 3],
+        };
+        let mut slots6 = AyaHashMap::<MapData, u32, LegacyNeighborNat6>::create(64, 0)
+            .expect("create legacy NEIGHBOR_NAT6");
+        slots6.insert(0, slot6(migrated_ip6), 0).expect("live slot");
+        let mut corpse6 = migrated_ip6;
+        corpse6[15] = 10;
+        slots6
+            .insert(1, slot6(corpse6), 0)
+            .expect("corpse above the count");
+        slots6
+            .pin(pin.path().join("NEIGHBOR_NAT6"))
+            .expect("pin legacy NEIGHBOR_NAT6");
+
+        for name in ["NEIGHBOR_NAT_COUNT", "NEIGHBOR_NAT6_COUNT"] {
+            let mut count = Array::<MapData, u32>::create(1, 0).expect("create legacy count");
+            count.set(0, 1, 0).expect("one live slot");
+            count
+                .pin(pin.path().join(name))
+                .unwrap_or_else(|e| panic!("pin {name}: {e}"));
+        }
+    }
+    let before = nat_owners_pinned(pin.path());
+    let before6 = nat_owners6_pinned(pin.path());
+    let ctl = bring_up(pin.path(), true);
+
+    let after = nat_owners_pinned(pin.path());
+    let migrated: Vec<_> = after.iter().filter(|e| !before.contains(e)).collect();
+    assert!(
+        !migrated.is_empty(),
+        "the retired slot table's live block must land in NAT_OWNERS"
+    );
+    for (_, key, o) in &migrated {
+        assert_eq!(key.nat_ip, migrated_ip, "only the live slot migrates");
+        assert_eq!((o.port_min, o.port_max, o.vni), (20000, 21024, vni));
+        assert_eq!(o.underlay, owner, "the block keeps its owner");
+    }
+    assert!(
+        before.iter().all(|e| after.contains(e)),
+        "the blocks adopt rebuilt survive the migration"
+    );
+
+    let after6 = nat_owners6_pinned(pin.path());
+    let migrated6: Vec<_> = after6.iter().filter(|e| !before6.contains(e)).collect();
+    assert!(
+        !migrated6.is_empty(),
+        "the retired v6 slot table's live block must land in NAT_OWNERS6"
+    );
+    for (_, key, o) in &migrated6 {
+        assert_eq!(key.nat_ip6, migrated_ip6, "only the live v6 slot migrates");
+        assert_eq!((o.port_min, o.port_max, o.vni), (20000, 21024, vni));
+    }
+
+    // The loader's sweep runs on every load, so the migration is one-shot: the next upgrade finds
+    // nothing to convert.
+    for name in RETIRED_PINNED_MAPS {
+        assert!(
+            !pin.path().join(name).exists(),
+            "retired map {name} still pinned after the migration"
+        );
+    }
 
     // Unpinning detaches; the netns (and its devices) goes away with this thread.
     drop(ctl);
