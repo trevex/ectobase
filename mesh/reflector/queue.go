@@ -20,10 +20,16 @@ const maxPendingDeltas = 1024
 // be pruned against nor ever report converged. Only live deltas are dropped, past
 // maxPendingDeltas.
 //
-// maxPendingDeltas is not the queue's real memory bound: snapshots are not capped — each is
-// bounded by the RIB, but every Subscribe queues another whole VNI replay, so a client that
-// re-subscribes without reading grows the queue without limit. Acceptable because agents are
-// mTLS-authenticated and subscribe only on a desired-set change, not at will.
+// maxPendingDeltas is not the queue's real memory bound: snapshots are not capped. What bounds
+// them is that a session gets at most one replay per thing it holds — the global feed once, and
+// each VNI once, since a Subscribe for a VNI the session already holds no longer replays — so a
+// consumer that never drains holds about one copy of the RIB, not an unbounded pile. The global
+// replay is shared between every session on the feed (see RIB.globalSnapshotLocked), so it costs
+// one pointer per record here rather than a message; the messages themselves stay alive in the
+// RIB's cache until the next global mutation, which is the part the drain's incremental nil-ing
+// cannot reclaim. A client that alternates Unsubscribe/Subscribe without reading can still grow
+// the queue; bounding that needs a cap keyed to the RIB's size, and an authenticated peer doing it
+// deliberately is a different problem from the accidental case this covers.
 type sessionQueue struct {
 	id   string
 	wake chan struct{} // capacity 1: something was queued, or the queue closed
