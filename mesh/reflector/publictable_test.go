@@ -152,6 +152,34 @@ func TestAnnouncePublicMovesTheRecordToItsNewOrigin(t *testing.T) {
 	}
 }
 
+// The public twin of TestWithdrawNatThenReannounceSurvivesTheOriginalOwnersDisconnect: WithdrawPublic
+// must remove k from THIS origin's publicByOrigin set too, not just from the RIB. Skipping that
+// delete leaves a stale entry in the ORIGINAL owner's set, so its later disconnect silently
+// withdraws the record its successor re-announced under the same key.
+func TestWithdrawPublicThenReannounceSurvivesTheOriginalOwnersDisconnect(t *testing.T) {
+	r := NewRIB()
+	s := &fakeSink{id: "sub"}
+	r.RegisterSink(s)
+	rec := PublicRecord{
+		Kind: pb.PublicKind_PUBLIC_KIND_LB_IP, Prefix: "203.0.113.50/32",
+		OwnerUnderlay: "fd00::a", OverlayIP: "10.0.0.1", Vni: 100,
+	}
+	r.AnnouncePublic("nodeA", rec)
+	if got := r.WithdrawPublic("nodeA", rec, nil); got != WithdrawApplied {
+		t.Fatalf("nodeA must be able to withdraw its own record, got %v", got)
+	}
+	r.AnnouncePublic("nodeC", rec)
+
+	// nodeA disconnects: it withdrew this key itself long ago and no longer owns it.
+	r.dropOrigin("nodeA")
+	if us := publicUpdates(s); us[len(us)-1].Op == pb.RouteOp_ROUTE_OP_WITHDRAW {
+		t.Fatalf("the ORIGINAL owner's disconnect must not withdraw the CURRENT owner's record: %+v", us)
+	}
+	if got := r.WithdrawPublic("nodeC", rec, nil); got != WithdrawApplied {
+		t.Fatalf("nodeC must still own the record it announced after nodeA withdrew, got %v", got)
+	}
+}
+
 func TestAnnouncePublicIsIdempotent(t *testing.T) {
 	r := NewRIB()
 	rec := publicRecord(pb.PublicKind_PUBLIC_KIND_EDGE_UNDERLAY, "fd00:db8:0:9::e/128", "fd00:db8:0:9::1", 0, 0, 0)

@@ -1,6 +1,7 @@
 package reflector
 
 import (
+	"sync"
 	"testing"
 
 	pb "github.com/trevex/ectobase/mesh/gen/routebusv1"
@@ -186,6 +187,76 @@ func TestClaimingAnOriginDropsWhatTheLastSessionLeft(t *testing.T) {
 	r.ClaimOrigin("nodeA")
 	if r.HasRoute(100, "10.0.0.1/32") {
 		t.Fatal("a new session's claim must drop the previous session's routes")
+	}
+}
+
+// The critical-section fix (ClaimOrigin/ReleaseOrigin deciding-and-tearing-down under one lock) is
+// what makes the stale-session-wipes-the-reconnect race IMPOSSIBLE, not merely unlikely — so the
+// only honest assertion here is zero violations over many repetitions, run fresh each time since
+// the outcome depends on how the scheduler interleaves the two goroutines. No sleeps: the run time
+// is bounded purely by the iteration count.
+func TestClaimReleaseRaceNeverLosesAReconnect(t *testing.T) {
+	const iterations = 5000
+	var lost int
+	for i := 0; i < iterations; i++ {
+		r := NewRIB()
+		stale := r.ClaimOrigin("nodeA")
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			r.ReleaseOrigin("nodeA", stale)
+		}()
+		go func() {
+			defer wg.Done()
+			r.ClaimOrigin("nodeA")
+			r.Announce("nodeA", 100, "10.0.0.2/32", []string{"fd00::a"}, false)
+		}()
+		wg.Wait()
+
+		if !r.HasRoute(100, "10.0.0.2/32") {
+			lost++
+		}
+	}
+	if lost != 0 {
+		t.Fatalf("the stale session's release wiped the reconnect's route in %d/%d iterations", lost, iterations)
+	}
+}
+
+// ClaimOrigin's delete(r.sinks, nodeID) on supersede has to run even when the NEW session opts out
+// of the global feed and so never calls RegisterSink itself: otherwise the predecessor's sink is
+// still in r.sinks and keeps receiving broadcast NAT/public updates for a node that, as far as the
+// fabric is concerned, no longer has a registered global-feed sink at all.
+func TestClaimOriginRemovesTheOldSinkEvenWhenTheSuccessorOptsOutOfTheGlobalFeed(t *testing.T) {
+	r := NewRIB()
+	r.ClaimOrigin("nodeA")
+	old := &fakeSink{id: "nodeA"}
+	r.RegisterSink(old)
+
+	// The node reconnects, but the NEW session opted out of the global feed: it never registers a
+	// replacement sink for nodeA.
+	r.ClaimOrigin("nodeA")
+
+	r.AnnounceNat("nodeB", natBlock(100, "10.0.0.9", "1.2.3.4", 1024, 2048, "fd00::b"))
+	if len(natUpdates(old)) != 0 {
+		t.Fatalf("the superseded session's sink must be gone from the global feed, got %+v", old.msgs)
+	}
+}
+
+// ReleaseOrigin's `cur, ok := r.origins[nodeID]` guard exists because a bare map lookup for an
+// ABSENT node id returns the zero value: comparing that zero value against a zero-valued token
+// (e.g. one that was never assigned because the caller never actually claimed) would read as "this
+// IS the live session" and tear down state that has nothing to do with the claim/release lifecycle
+// at all — for instance a route announced directly, the way many tests in this package do.
+func TestReleaseOriginWithAZeroTokenOnAnUnclaimedIDIsANoOp(t *testing.T) {
+	r := NewRIB()
+	r.Announce("nodeA", 100, "10.0.0.1/32", []string{"fd00::a"}, false) // never went through ClaimOrigin
+
+	r.ReleaseOrigin("nodeA", 0)
+
+	if !r.HasRoute(100, "10.0.0.1/32") {
+		t.Fatal("releasing an unclaimed id with a zero token must not tear down its state")
 	}
 }
 
