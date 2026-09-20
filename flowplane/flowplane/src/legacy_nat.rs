@@ -12,7 +12,9 @@
 //! this module improves on.
 
 use std::collections::HashMap;
+use std::path::Path;
 
+use aya::maps::{Array, HashMap as AyaHashMap, MapData};
 use flowplane_common::{NeighborNat6Entry, NeighborNatEntry};
 
 /// The retired `NEIGHBOR_NAT` value, byte for byte as the build that pinned it wrote it. The live
@@ -48,6 +50,92 @@ pub(crate) struct LegacyNeighborNat6 {
 // their raw bytes are the map value ABI the retired build wrote.
 unsafe impl aya::Pod for LegacyNeighborNat {}
 unsafe impl aya::Pod for LegacyNeighborNat6 {}
+
+/// The live blocks a retired table held, in slot order.
+#[derive(Default, Debug)]
+pub(crate) struct LegacyBlocks {
+    pub v4: Vec<NeighborNatEntry>,
+    pub v6: Vec<NeighborNat6Entry>,
+}
+
+impl LegacyBlocks {
+    pub fn is_empty(&self) -> bool {
+        self.v4.is_empty() && self.v6.is_empty()
+    }
+}
+
+/// Read the retired tables' live blocks. Call BEFORE [`crate::loader::load_ebpf`], which unpins
+/// them. A table that is absent (the normal case — this node has already migrated, or was never
+/// on the old build), unreadable, or not the shape the old build pinned yields no blocks and a
+/// log; bring-up continues either way.
+pub(crate) fn take(pin_dir: &Path) -> LegacyBlocks {
+    LegacyBlocks {
+        v4: take4(pin_dir),
+        v6: take6(pin_dir),
+    }
+}
+
+fn take4(pin_dir: &Path) -> Vec<NeighborNatEntry> {
+    let Some(count) = legacy_count(pin_dir, "NEIGHBOR_NAT_COUNT") else {
+        return Vec::new();
+    };
+    let Some(slots) = legacy_slots::<LegacyNeighborNat>(pin_dir, "NEIGHBOR_NAT") else {
+        return Vec::new();
+    };
+    blocks4(count, &slots)
+}
+
+/// IPv6 sibling of [`take4`].
+fn take6(pin_dir: &Path) -> Vec<NeighborNat6Entry> {
+    let Some(count) = legacy_count(pin_dir, "NEIGHBOR_NAT6_COUNT") else {
+        return Vec::new();
+    };
+    let Some(slots) = legacy_slots::<LegacyNeighborNat6>(pin_dir, "NEIGHBOR_NAT6") else {
+        return Vec::new();
+    };
+    blocks6(count, &slots)
+}
+
+/// The count a retired table's array holds at index 0, or `None` if there is no readable count.
+/// Without it there is no way to tell a live slot from a withdrawn one, so the whole table is
+/// skipped rather than guessed at.
+fn legacy_count(pin_dir: &Path, name: &str) -> Option<u32> {
+    let path = pin_dir.join(name);
+    if !path.exists() {
+        return None;
+    }
+    let map = MapData::from_pin(&path)
+        .map_err(|e| eprintln!("migrate: reopen pinned {name}: {e}"))
+        .ok()?;
+    let map: Array<_, u32> = Array::try_from(aya::maps::Map::Array(map))
+        .map_err(|e| eprintln!("migrate: {name} is not the retired count array: {e}"))
+        .ok()?;
+    map.get(&0, 0)
+        .map_err(|e| eprintln!("migrate: read {name}[0]: {e}"))
+        .ok()
+}
+
+/// A retired slot table's slots, keyed by slot index, or `None` if there is no table here this
+/// migration can read — which includes a map of another shape entirely: nothing guarantees the
+/// pin under this name is the one the old build wrote, so the key/value sizes are what decides.
+fn legacy_slots<V: aya::Pod>(pin_dir: &Path, name: &str) -> Option<HashMap<u32, V>> {
+    let path = pin_dir.join(name);
+    if !path.exists() {
+        return None;
+    }
+    let map = MapData::from_pin(&path)
+        .map_err(|e| eprintln!("migrate: reopen pinned {name}: {e}"))
+        .ok()?;
+    let map: AyaHashMap<_, u32, V> = AyaHashMap::try_from(aya::maps::Map::HashMap(map))
+        .map_err(|e| eprintln!("migrate: {name} is not the retired slot table: {e}"))
+        .ok()?;
+    // A slot that fails to read is one block lost, not a reason to drop the rest.
+    Some(
+        map.iter()
+            .filter_map(|r| r.map_err(|e| eprintln!("migrate: walk {name}: {e}")).ok())
+            .collect(),
+    )
+}
 
 /// The live blocks in a slot table. The old control plane rewrote slots `0..count` on every change
 /// and never cleared the ones above, so a slot at or above `count` is a withdrawn block's corpse —
