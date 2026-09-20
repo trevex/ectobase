@@ -258,3 +258,135 @@ func TestRegisterSinkReplaysOneSnapshotEndingInEndOfGlobal(t *testing.T) {
 		t.Fatalf("want 3 records then EndOfGlobal{3}, got %d messages ending in %+v", len(snap), snap[len(snap)-1].Msg)
 	}
 }
+
+// Two sessions registered without a mutation between them must receive the SAME messages, not two
+// copies: after a reflector restart every edge reconnects at once, and a copy per session made the
+// peak sessions x records.
+func TestGlobalSnapshotIsSharedBetweenSessions(t *testing.T) {
+	r := NewRIB()
+	r.AnnounceNat("nodeA", natBlock(100, "10.0.0.1", "1.2.3.4", 1024, 2048, "fd00::a"))
+	r.AnnouncePublic("nodeA", publicRecord(pb.PublicKind_PUBLIC_KIND_LB_IP, "203.0.113.50/32", "fd00::a", 100, 0, 0))
+
+	a, b := &fakeSink{id: "edgeA"}, &fakeSink{id: "edgeB"}
+	r.RegisterSink(a)
+	r.RegisterSink(b)
+
+	if len(a.snapshots) != 1 || len(b.snapshots) != 1 {
+		t.Fatalf("want one snapshot each, got %d and %d", len(a.snapshots), len(b.snapshots))
+	}
+	sa, sb := a.snapshots[0], b.snapshots[0]
+	if len(sa) != 3 { // one NAT record, one public record, one EndOfGlobal
+		t.Fatalf("want 3 messages in the replay, got %d", len(sa))
+	}
+	if len(sa) != len(sb) {
+		t.Fatalf("replays differ in length: %d vs %d", len(sa), len(sb))
+	}
+	for i := range sa {
+		if sa[i] != sb[i] {
+			t.Fatalf("message %d is not shared: %p vs %p", i, sa[i], sb[i])
+		}
+	}
+}
+
+// A session copies the pointers it is handed, so one session's drain — which nils each message as
+// it sends it, so a huge snapshot can be GC'd as it goes — must not blank another session's copy
+// of the shared replay.
+func TestDrainingOneSessionLeavesTheSharedSnapshotIntact(t *testing.T) {
+	r := NewRIB()
+	r.AnnounceNat("nodeA", natBlock(100, "10.0.0.1", "1.2.3.4", 1024, 2048, "fd00::a"))
+
+	a, b := newSessionQueue("edgeA"), newSessionQueue("edgeB")
+	r.RegisterSink(a)
+	r.RegisterSink(b)
+
+	batch, ok := a.take()
+	if !ok {
+		t.Fatal("edgeA should have a batch")
+	}
+	for i := range batch { // exactly what the drain in server.go does
+		batch[i] = nil
+	}
+
+	other, ok := b.take()
+	if !ok {
+		t.Fatal("edgeB should have a batch")
+	}
+	for i, m := range other {
+		if m == nil {
+			t.Fatalf("edgeB's message %d was blanked by edgeA's drain", i)
+		}
+	}
+}
+
+// Every mutation of the global tables must be visible to a session that registers after it. The
+// shared snapshot is cached, so a mutation that forgets to drop it would serve a stale replay to
+// every session that connects next — the one way this optimisation can go wrong.
+func TestEveryGlobalMutationIsVisibleToALaterSession(t *testing.T) {
+	rec := publicRecord(pb.PublicKind_PUBLIC_KIND_LB_IP, "203.0.113.50/32", "fd00::a", 100, 0, 0)
+	for _, tc := range []struct {
+		name  string
+		setup func(r *RIB)
+		apply func(r *RIB)
+		want  int // records (not counting EndOfGlobal) a session registering afterwards sees
+	}{
+		{
+			name:  "announce nat",
+			setup: func(r *RIB) {},
+			apply: func(r *RIB) {
+				r.AnnounceNat("nodeA", natBlock(100, "10.0.0.1", "1.2.3.4", 1024, 2048, "fd00::a"))
+			},
+			want: 1,
+		},
+		{
+			name: "withdraw nat",
+			setup: func(r *RIB) {
+				r.AnnounceNat("nodeA", natBlock(100, "10.0.0.1", "1.2.3.4", 1024, 2048, "fd00::a"))
+			},
+			apply: func(r *RIB) { r.WithdrawNat("nodeA", "1.2.3.4", 1024, 2048, nil) },
+			want:  0,
+		},
+		{
+			name: "drop a nat origin",
+			setup: func(r *RIB) {
+				r.AnnounceNat("nodeA", natBlock(100, "10.0.0.1", "1.2.3.4", 1024, 2048, "fd00::a"))
+			},
+			apply: func(r *RIB) { r.dropOrigin("nodeA") },
+			want:  0,
+		},
+		{
+			name:  "announce public",
+			setup: func(r *RIB) {},
+			apply: func(r *RIB) { r.AnnouncePublic("nodeA", rec) },
+			want:  1,
+		},
+		{
+			name:  "withdraw public",
+			setup: func(r *RIB) { r.AnnouncePublic("nodeA", rec) },
+			apply: func(r *RIB) { r.WithdrawPublic("nodeA", rec, nil) },
+			want:  0,
+		},
+		{
+			name:  "drop a public origin",
+			setup: func(r *RIB) { r.AnnouncePublic("nodeA", rec) },
+			apply: func(r *RIB) { r.dropOrigin("nodeA") },
+			want:  0,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := NewRIB()
+			tc.setup(r)
+			// An early session forces the snapshot to be built and cached.
+			r.RegisterSink(&fakeSink{id: "early"})
+			tc.apply(r)
+
+			late := &fakeSink{id: "late"}
+			r.RegisterSink(late)
+			if len(late.snapshots) != 1 {
+				t.Fatalf("want one snapshot, got %d", len(late.snapshots))
+			}
+			if got := len(late.snapshots[0]) - 1; got != tc.want {
+				t.Fatalf("a session registering after the mutation saw %d record(s), want %d", got, tc.want)
+			}
+		})
+	}
+}

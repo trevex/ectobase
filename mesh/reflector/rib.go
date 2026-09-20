@@ -125,6 +125,13 @@ type RIB struct {
 	// records. A session that opted out is never added, so it costs the fanout nothing.
 	sinks map[string]Sink
 
+	// globalSnap is the NAT + public replay every session on the global feed receives, built once
+	// and handed to all of them. The messages are immutable once built and a sink copies the
+	// pointers it is given (sessionQueue appends them into its own pending), so sharing is free —
+	// and it turns the peak after a reflector restart, when every edge reconnects at once, from
+	// sessions x records into one copy. nil means "rebuild on the next registration".
+	globalSnap []*pb.ServerMsg
+
 	// fenced blocks nexthops inside a node /64 (Tier-2 failover): announces whose
 	// nexthop falls inside a fenced prefix are rejected, and stored matching routes
 	// are withdrawn. Keyed by the /64 CIDR string.

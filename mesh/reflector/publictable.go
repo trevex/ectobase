@@ -113,6 +113,11 @@ func (r *RIB) dropOriginPublic(origin string) {
 // publicFanout sends a PublicUpdate to ALL sinks. Caller holds r.mu. Sink.Send
 // is non-blocking, so holding the lock is safe.
 func (r *RIB) publicFanout(rec PublicRecord, op pb.RouteOp) {
+	// The table just changed, so the shared replay is stale. This is the one place every write to
+	// r.public passes through under r.mu (announce, withdraw and each key of a dropped origin),
+	// which is why the invalidation lives here rather than at each mutation site. A fanout without
+	// a mutation would only cost one rebuild.
+	r.globalSnap = nil
 	m := publicUpdate(rec, op)
 	for _, s := range r.sinks {
 		s.Send(m)
