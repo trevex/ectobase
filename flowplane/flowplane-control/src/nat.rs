@@ -1349,6 +1349,12 @@ mod neighbor_nat_tests {
             c.replace_neighbor_nats(&empty, &[]),
             Err(NeighborNatError::EmptyRange)
         ));
+        // A block ending at port 0 is the empty range the capacity count cannot be taken of: it
+        // counts `port_max - 1` prefixes, so the range has to be refused before the count.
+        assert!(matches!(
+            c.replace_neighbor_nats(&[block(IP, 7, 0, 0, 3)], &[]),
+            Err(NeighborNatError::EmptyRange)
+        ));
         let v6_overlap = [block6(IP6, 7, 100, 200, 3), block6(IP6, 7, 150, 250, 3)];
         assert!(matches!(
             c.replace_neighbor_nats(&[], &v6_overlap),
@@ -1740,6 +1746,63 @@ mod neighbor_nat_tests {
             ),
             "an add inside the surviving block is still refused"
         );
+    }
+
+    // Two prefixes of one (nat_ip, port_min) can disagree about the rest of their block — a
+    // rewrite a crash cut in half. Only one block can be listed at that key, so adopt keeps
+    // whichever the walk hands it last and sweeps what the other owned; which one that is nobody
+    // should rely on, so pin only what holds either way: one block, and a trie that is exactly its
+    // prefixes.
+    #[test]
+    fn adopt_collapses_two_owners_of_one_range_to_one_block() {
+        let mut before = ControlCore::new(MemMapWriter::default());
+        add(&mut before, block(IP, 7, 20000, 30000, 3));
+        let (plen, key, _) = owner_prefixes4(&block(IP, 7, 20000, 30000, 3))[0];
+        before
+            .w
+            .nat_owner_upsert(
+                plen,
+                key,
+                NatOwner {
+                    underlay: [9; 16],
+                    vni: 9,
+                    port_min: 20000,
+                    port_max: 28000,
+                },
+            )
+            .unwrap();
+
+        let mut c = ControlCore::new(before.w);
+        c.adopt_nat_owners();
+        let b = *c.neigh_nats.values().next().unwrap();
+        assert_eq!(c.neigh_nats.len(), 1);
+        assert_eq!(stored(&c), prefixes(&[b]));
+        assert_counted(&c);
+    }
+
+    // The counterpart of `replace_refuses_a_set_it_cannot_store_and_changes_nothing`: a set the
+    // trie holds exactly must be taken. The capacity check counts a block's prefixes instead of
+    // building them, and a count that read high would refuse sets that fit.
+    #[test]
+    fn replace_takes_a_set_that_exactly_fills_the_trie() {
+        let mut c = ControlCore::new(MemMapWriter::default());
+        let ip = |i: u32| [10, (i >> 16) as u8, (i >> 8) as u8, i as u8];
+        let mut set: Vec<_> = (0..2184).map(|i| block(ip(i), 7, 1, 65535, 1)).collect();
+        set.extend((2184..2200).map(|i| block(ip(i), 7, 1024, 2048, 1)));
+        let want: usize = set
+            .iter()
+            .map(|b| crate::ports::port_prefix_count(b.port_min, b.port_max - 1))
+            .sum();
+        assert_eq!(
+            want, NAT_OWNERS_MAX as usize,
+            "the set fills the trie exactly"
+        );
+        assert_eq!(
+            c.replace_neighbor_nats(&set, &[]).unwrap(),
+            counts(set.len() as u32, 0, 0)
+        );
+        assert_eq!(c.w.nat_owners.len(), NAT_OWNERS_MAX as usize);
+        assert_counted(&c);
     }
 
     // Deleting names the block by (vni, nat_ip, range): a different VNI or a different end is a
