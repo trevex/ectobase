@@ -128,6 +128,12 @@ type RIB struct {
 	// nexthop falls inside a fenced prefix are rejected, and stored matching routes
 	// are withdrawn. Keyed by the /64 CIDR string.
 	fenced map[string]*net.IPNet
+
+	// origins names the session that currently speaks for each node id, so a session that has
+	// been superseded cannot tear down its successor's state (everything else here is keyed by
+	// node id alone). Tokens come from nextToken and are never reused.
+	origins   map[string]uint64
+	nextToken uint64
 }
 
 func NewRIB() *RIB {
@@ -143,6 +149,7 @@ func NewRIB() *RIB {
 		publicOrigin:   map[publicKey]string{},
 		sinks:          map[string]Sink{},
 		fenced:         map[string]*net.IPNet{},
+		origins:        map[string]uint64{},
 	}
 }
 
@@ -278,6 +285,41 @@ func (r *RIB) DropOrigin(origin string) {
 	}
 	r.dropOriginNat(origin)
 	r.dropOriginPublic(origin)
+}
+
+// ClaimOrigin makes this session the live one for nodeID and returns its token. A node that
+// reconnects while its previous session is still being timed out claims the id again: whatever
+// that session left is dropped here — the agent re-announces its whole desired set on reconnect
+// but never withdraws what it no longer wants, so a route it has since dropped would linger for
+// good — and the old session's own cleanup then becomes a no-op (see ReleaseOrigin).
+func (r *RIB) ClaimOrigin(nodeID string) uint64 {
+	r.mu.Lock()
+	_, superseded := r.origins[nodeID]
+	r.nextToken++
+	token := r.nextToken
+	r.origins[nodeID] = token
+	r.mu.Unlock()
+	if superseded {
+		r.DropOrigin(nodeID)
+	}
+	return token
+}
+
+// ReleaseOrigin ends a session: it unregisters the sink and fast-withdraws everything the node
+// announced — unless a newer session has already claimed the id, in which case this one has
+// nothing left to tear down and must not touch its successor's state.
+func (r *RIB) ReleaseOrigin(nodeID string, token uint64) {
+	r.mu.Lock()
+	live := r.origins[nodeID] == token
+	if live {
+		delete(r.origins, nodeID)
+	}
+	r.mu.Unlock()
+	if !live {
+		return
+	}
+	r.UnregisterSink(nodeID)
+	r.DropOrigin(nodeID)
 }
 
 // fanout sends an update to all subscribers of k.vni except origin. Caller holds r.mu.

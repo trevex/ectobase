@@ -31,6 +31,10 @@ func (s *Server) Session(stream pb.RouteBus_SessionServer) error {
 	// IP SANs (the node's underlay /128). No-op when mTLS is off (no verified cert).
 	guard := newUnderlayGuard(stream.Context())
 
+	// Claim the node id for THIS session: a reconnect that beat its predecessor's timeout drops
+	// what that session left, and the predecessor's cleanup will not touch this one's state.
+	token := s.rib.ClaimOrigin(h.NodeId)
+
 	sink := newSessionQueue(h.NodeId)
 	if h.GetGlobalFeed() == pb.GlobalFeed_GLOBAL_FEED_NONE {
 		// Opted out of the global channel (a compute node): never registered for NAT + public
@@ -62,8 +66,7 @@ func (s *Server) Session(stream pb.RouteBus_SessionServer) error {
 		}
 	}()
 	defer func() {
-		s.rib.UnregisterSink(sink.id) // stop broadcasting NAT/public updates to this dead session
-		s.rib.DropOrigin(sink.id)     // fast-withdraw this node's routes AND NAT/public records on disconnect
+		s.rib.ReleaseOrigin(sink.id, token) // unregister + fast-withdraw, unless superseded
 		sink.close()
 		wg.Wait()
 	}()

@@ -128,6 +128,59 @@ func TestDropOriginWithdrawsAllItsRoutes(t *testing.T) {
 	}
 }
 
+// A node whose path went quiet reconnects before the reflector's keepalive (2 s ping + 3 s
+// timeout) kills the old session. Everything is keyed by node id, so the old session's cleanup
+// used to unregister the NEW session's sink, drop its subscriptions and withdraw its freshly
+// announced state fabric-wide — leaving it connected but deaf until it reconnected again.
+func TestAReconnectSurvivesItsStaleSessionsCleanup(t *testing.T) {
+	r := NewRIB()
+	stale := r.ClaimOrigin("nodeA")
+	r.Announce("nodeA", 100, "10.0.0.1/32", []string{"fd00::a"}, false)
+
+	// The node reconnects and re-announces on the new session.
+	live := r.ClaimOrigin("nodeA")
+	fresh := &fakeSink{id: "nodeA"}
+	r.RegisterSink(fresh)
+	r.Subscribe(100, fresh)
+	r.Announce("nodeA", 100, "10.0.0.2/32", []string{"fd00::a"}, false)
+
+	// Only now does the old session's cleanup run.
+	r.ReleaseOrigin("nodeA", stale)
+
+	if !r.HasRoute(100, "10.0.0.2/32") {
+		t.Fatal("the reconnect's route must survive its stale session's cleanup")
+	}
+	r.AnnounceNat("nodeB", natBlock(100, "10.0.0.9", "1.2.3.4", 1024, 2048, "fd00::b"))
+	if len(natUpdates(fresh)) == 0 {
+		t.Fatal("the reconnect must still be registered for the global feed")
+	}
+	other := &fakeSink{id: "nodeB"}
+	r.Subscribe(100, other)
+	r.Announce("nodeA", 100, "10.0.0.3/32", []string{"fd00::a"}, false)
+	if len(updates(other)) == 0 {
+		t.Fatal("the reconnect must still be subscribed to its VNI")
+	}
+
+	// And the live session's own release does tear its state down.
+	r.ReleaseOrigin("nodeA", live)
+	if r.HasRoute(100, "10.0.0.2/32") {
+		t.Fatal("releasing the live session must withdraw its routes")
+	}
+}
+
+// Claiming the id is also what clears what the previous session left: the agent re-announces its
+// whole desired set on reconnect but never withdraws what it no longer wants, so a route the node
+// has dropped would otherwise linger in the RIB for good.
+func TestClaimingAnOriginDropsWhatTheLastSessionLeft(t *testing.T) {
+	r := NewRIB()
+	r.ClaimOrigin("nodeA")
+	r.Announce("nodeA", 100, "10.0.0.1/32", []string{"fd00::a"}, false)
+	r.ClaimOrigin("nodeA")
+	if r.HasRoute(100, "10.0.0.1/32") {
+		t.Fatal("a new session's claim must drop the previous session's routes")
+	}
+}
+
 // A VNI's replay reaches the sink as ONE snapshot ending in its marker, never as deltas: a sink
 // may drop deltas, and a replay missing records or its EndOfRIB never converges.
 func TestSubscribeReplaysOneSnapshotEndingInEndOfRIB(t *testing.T) {
