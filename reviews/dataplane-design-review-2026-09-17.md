@@ -40,7 +40,7 @@ asymmetries plus doc drift.
 |---|---|---|
 | §1 Correctness (P0) | all seven (`0e2e601f`) | — |
 | §2 Scale ceilings | firewall rule cap (firewall redesign, `acd0d55b` + `ec23ad68`); neighbor-NAT keyed tries (NAT return scaling Inc. 1, `f681d367`); NAT/public broadcast (NAT return scaling Inc. 3, `04d1fe52`) | map ceilings, conntrack pressure, IPAM + peering list costs, sizing doc |
-| §3 Control-plane resilience | NAT/public prune (`a334ef8`), route-prune guard (`cb4188e6`), fence completeness (`a4dd915`), dispatch-controller leader election (`54dda54c`), lossless route-bus snapshots (NAT return scaling Inc. 2, `545ae93a`), NAT/public record ownership + reconnect session identity (NAT return scaling Inc. 4, branch `routebus/ownership`) | edge `/readyz` not consumed, `replicas: 1` everywhere, `GenerationApplied`, broker sync ordering |
+| §3 Control-plane resilience | NAT/public prune (`a334ef8`), route-prune guard (`cb4188e6`), fence completeness (`a4dd915`), dispatch-controller leader election (`54dda54c`), lossless route-bus snapshots (NAT return scaling Inc. 2, `545ae93a`), NAT/public record ownership + reconnect session identity (NAT return scaling Inc. 4, `572335b2`) | edge `/readyz` not consumed, `replicas: 1` everywhere, `GenerationApplied`, broker sync ordering |
 | §4 Policy model | priorities, `defaultPolicy`, FirewallPolicy validation, revocation (`b19cbb3`, `99d3880`, `acd0d55b`) | Route intent, source selectors, remaining validation, peering-overlap warning |
 | §5 Symmetry | — | all items |
 | §6 Doc drift | overlay MTU, NAT return wording | the rest of the list |
@@ -234,7 +234,7 @@ firewalls. v4 and v6, sim and eBPF. The refusal now removes the entries the flow
    it out of the old origin's set, so the old origin's disconnect later withdraws the new owner's
    block. `Hello.node_id` is also self-asserted and not bound to the certificate. Planned (all but
    the node_id binding): NAT return scaling, Increment 4.
-   **RESOLVED** (NAT return scaling Increment 4, branch `routebus/ownership`): `WithdrawNat` and
+   **RESOLVED** (NAT return scaling Increment 4, merged in `572335b2`): `WithdrawNat` and
    `WithdrawPublic` now apply a record only if it was announced by the caller's origin AND the
    caller's certificate speaks for the record's owner underlay, checked against the STORED record
    since the withdraw messages carry no owner; and `AnnounceNat`/`AnnouncePublic` now move a
@@ -267,7 +267,7 @@ firewalls. v4 and v6, sim and eBPF. The refusal now removes the entries the flow
    session is left connected but deaf, its announced state withdrawn; the agent sends only
    changes, so it re-announces nothing until its next reconnect.
    Related to the self-asserted `node_id` (4b). **RESOLVED** (NAT return scaling Increment 4,
-   branch `routebus/ownership`): every session now claims its node id at `Hello` and holds a token
+   merged in `572335b2`): every session now claims its node id at `Hello` and holds a token
    for as long as it lives (`RIB.ClaimOrigin`/`ReleaseOrigin`); claiming drops whatever the
    previous session left, in the same critical section, and a session's cleanup tears state down
    only if it still holds the token — so a predecessor timing out its keepalive window can no
@@ -406,7 +406,7 @@ get mirrored, and each gap is individually "known" but the set is growing.
 - `attach/mod.rs:44-45` — stale "fails ... until B.4 lands" comment on the *default* container
   path (B.4 landed); would misdirect an incident.
 - ~~`mesh/reflector/admin.go:19-21` — stale `TODO(authz)`; CN-gating is implemented.~~ **FIXED**
-  (branch `routebus/ownership`): the comment is deleted.
+  (`572335b2`): the comment is deleted.
 - Broker `main.go:6-7,180` — says "filtered by spec.clusterName"; it's namespace-scoped.
 - `docs/features/nat.md` — ~~v4-only return wording~~ **FIXED** (`a3f5089a`: the return path
   now covers both families over `NEIGHBOR_NAT`/`NEIGHBOR_NAT6`); still open: `:159` says NAT64
