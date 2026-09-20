@@ -103,7 +103,10 @@ func (s *Server) Session(stream pb.RouteBus_SessionServer) error {
 			})
 		case *pb.ClientMsg_WithdrawNat:
 			w := m.WithdrawNat
-			s.rib.WithdrawNat(sink.id, w.NatIp, w.PortMin, w.PortMax)
+			if out := s.rib.WithdrawNat(sink.id, w.NatIp, w.PortMin, w.PortMax, guard.permits); out == WithdrawRefused {
+				log.Printf("reflector: reject WithdrawNat from %s: %s:[%d,%d) is not its block, or its certificate does not speak for the owner",
+					sink.id, w.NatIp, w.PortMin, w.PortMax)
+			}
 		case *pb.ClientMsg_AnnouncePublic:
 			p := m.AnnouncePublic
 			if !guard.permits(p.OwnerUnderlay) {
@@ -113,7 +116,11 @@ func (s *Server) Session(stream pb.RouteBus_SessionServer) error {
 			s.rib.AnnouncePublic(sink.id, publicRecordFromPB(p))
 		case *pb.ClientMsg_WithdrawPublic:
 			p := m.WithdrawPublic
-			s.rib.WithdrawPublic(sink.id, publicRecordFromPB(p))
+			rec := publicRecordFromPB(p)
+			if out := s.rib.WithdrawPublic(sink.id, rec, guard.permits); out == WithdrawRefused {
+				log.Printf("reflector: reject WithdrawPublic from %s: %s %s is not its record, or its certificate does not speak for the owner",
+					sink.id, rec.Kind, rec.Prefix)
+			}
 		case *pb.ClientMsg_KeepAlive, *pb.ClientMsg_Hello:
 			// keepalive: transport-level for v1; duplicate hello ignored.
 		}

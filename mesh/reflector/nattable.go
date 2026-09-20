@@ -63,7 +63,14 @@ func (r *RIB) AnnounceNat(origin string, b NatBlock) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	k := natKey{b.NatIP, b.PortMin}
+	// A block moves when its owner drains and another node takes the range over. Move the key to
+	// the new origin: left in the old one's set, that origin's disconnect would withdraw the NEW
+	// owner's block.
+	if prev, ok := r.natOrigin[k]; ok && prev != origin {
+		delete(r.natByOrigin[prev], k)
+	}
 	r.nat[k] = b
+	r.natOrigin[k] = origin
 	if r.natByOrigin[origin] == nil {
 		r.natByOrigin[origin] = map[natKey]struct{}{}
 	}
@@ -71,20 +78,27 @@ func (r *RIB) AnnounceNat(origin string, b NatBlock) {
 	r.natFanout(b, pb.RouteOp_ROUTE_OP_ADD)
 }
 
-// WithdrawNat removes a global NAT block and broadcasts a WITHDRAW to all sinks.
-func (r *RIB) WithdrawNat(origin, natIP string, portMin, portMax uint32) {
+// WithdrawNat removes a global NAT block and broadcasts a WITHDRAW to every session that takes
+// the global feed — but only if the block is the caller's to withdraw: announced by THIS origin,
+// and with an owner underlay the session's certificate speaks for. Both matter: `node_id` is
+// self-asserted, so the origin check alone falls to anyone who claims a node's id, and the
+// certificate is what actually binds the record to the node that holds its address.
+func (r *RIB) WithdrawNat(origin, natIP string, portMin, portMax uint32, permit OwnerPermit) WithdrawOutcome {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	k := natKey{natIP, portMin}
 	b, ok := r.nat[k]
 	if !ok {
-		return
+		return WithdrawAbsent
+	}
+	if r.natOrigin[k] != origin || !permit.allows(b.OwnerUnderlay) {
+		return WithdrawRefused
 	}
 	delete(r.nat, k)
-	if m := r.natByOrigin[origin]; m != nil {
-		delete(m, k)
-	}
+	delete(r.natOrigin, k)
+	delete(r.natByOrigin[origin], k)
 	r.natFanout(b, pb.RouteOp_ROUTE_OP_WITHDRAW)
+	return WithdrawApplied
 }
 
 // dropOriginNat withdraws every NAT block a node originated. Caller holds r.mu.
@@ -94,6 +108,7 @@ func (r *RIB) dropOriginNat(origin string) {
 	for k := range owned {
 		if b, ok := r.nat[k]; ok {
 			delete(r.nat, k)
+			delete(r.natOrigin, k)
 			r.natFanout(b, pb.RouteOp_ROUTE_OP_WITHDRAW)
 		}
 	}

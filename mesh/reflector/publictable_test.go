@@ -84,11 +84,35 @@ func TestWithdrawPublicFansOut(t *testing.T) {
 	r.RegisterSink(b)
 	rec := publicRecord(pb.PublicKind_PUBLIC_KIND_EDGE_UNDERLAY, "fd00:db8:0:9::e/128", "fd00:db8:0:9::1", 0, 0, 0)
 	r.AnnouncePublic("nodeA", rec)
-	r.WithdrawPublic("nodeA", rec)
+	r.WithdrawPublic("nodeA", rec, nil)
 
 	us := publicUpdates(b)
 	if len(us) != 2 || us[1].Op != pb.RouteOp_ROUTE_OP_WITHDRAW {
 		t.Fatalf("want ADD then WITHDRAW, got %+v", us)
+	}
+}
+
+// The public channel gets the same ownership rule as NAT: only the announcing origin, and only a
+// certificate that speaks for the record's owner, may withdraw it.
+func TestWithdrawPublicIsRefusedUnlessTheRecordIsYours(t *testing.T) {
+	r := NewRIB()
+	s := &fakeSink{id: "sub"}
+	r.RegisterSink(s)
+	rec := PublicRecord{
+		Kind: pb.PublicKind_PUBLIC_KIND_LB_IP, Prefix: "203.0.113.50/32",
+		OwnerUnderlay: "fd00::a", OverlayIP: "10.0.0.1", Vni: 100,
+	}
+	r.AnnouncePublic("nodeA", rec)
+
+	if got := r.WithdrawPublic("nodeC", rec, nil); got != WithdrawRefused {
+		t.Fatalf("a foreign origin must be refused, got %v", got)
+	}
+	deny := OwnerPermit(func(owner string) bool { return owner == "fd00::impostor" })
+	if got := r.WithdrawPublic("nodeA", rec, deny); got != WithdrawRefused {
+		t.Fatalf("a certificate that does not speak for the owner must be refused, got %v", got)
+	}
+	if got := r.WithdrawPublic("nodeA", rec, nil); got != WithdrawApplied {
+		t.Fatalf("the announcing origin must be able to withdraw its record, got %v", got)
 	}
 }
 
@@ -156,7 +180,7 @@ func TestSameNodeLBBackendsDistinctOverlayCoexistAndWithdrawIndependently(t *tes
 	}
 
 	// Withdraw recA only: recB must survive.
-	r.WithdrawPublic("nodeA", recA)
+	r.WithdrawPublic("nodeA", recA, nil)
 	afterWithdraw := &fakeSink{id: "nodeD"}
 	r.RegisterSink(afterWithdraw)
 	us2 := publicUpdates(afterWithdraw)

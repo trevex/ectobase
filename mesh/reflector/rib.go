@@ -65,6 +65,37 @@ func equalStrs(a, b []string) bool {
 	return true
 }
 
+// OwnerPermit reports whether the session asking may act on a record owned by `ownerUnderlay` —
+// the session certificate's check (see underlayGuard.permits). A nil permit allows everything:
+// mTLS-off dev mode, and tests that are not about the certificate.
+type OwnerPermit func(ownerUnderlay string) bool
+
+func (p OwnerPermit) allows(ownerUnderlay string) bool {
+	return p == nil || p(ownerUnderlay)
+}
+
+// WithdrawOutcome distinguishes a withdraw that changed nothing because the record was already
+// gone (routine — agents withdraw idempotently) from one that was refused, so only the latter is
+// worth logging.
+type WithdrawOutcome int
+
+const (
+	WithdrawApplied WithdrawOutcome = iota
+	WithdrawAbsent
+	WithdrawRefused
+)
+
+func (o WithdrawOutcome) String() string {
+	switch o {
+	case WithdrawApplied:
+		return "applied"
+	case WithdrawAbsent:
+		return "absent"
+	default:
+		return "refused"
+	}
+}
+
 // RIB is the reflector's global route table. Safe for concurrent use. It also
 // holds the GLOBAL NAT table (nattable.go): per-VNI routes are fanned out to
 // VNI subscribers, whereas NAT blocks broadcast to every session registered for the global feed
@@ -82,6 +113,11 @@ type RIB struct {
 	// Global PublicPrefix state (publictable.go), broadcast to all sinks.
 	public         map[publicKey]PublicRecord
 	publicByOrigin map[string]map[publicKey]struct{}
+
+	// natOrigin/publicOrigin name the origin that announced each record, so ownership is one
+	// lookup and a takeover moves the key out of the previous origin's set in O(1).
+	natOrigin    map[natKey]string
+	publicOrigin map[publicKey]string
 
 	// sinks is the global fanout set, keyed by node id: the connected sessions that ASKED for the
 	// global feed on Hello, which is only the WAN edges — nothing else consumes NAT or public
@@ -103,6 +139,8 @@ func NewRIB() *RIB {
 		natByOrigin:    map[string]map[natKey]struct{}{},
 		public:         map[publicKey]PublicRecord{},
 		publicByOrigin: map[string]map[publicKey]struct{}{},
+		natOrigin:      map[natKey]string{},
+		publicOrigin:   map[publicKey]string{},
 		sinks:          map[string]Sink{},
 		fenced:         map[string]*net.IPNet{},
 	}
