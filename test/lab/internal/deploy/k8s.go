@@ -17,9 +17,13 @@ import (
 
 // Cilium chart pin (installed by the cluster action).
 const (
-	CiliumRepo    = "https://helm.cilium.io"
-	CiliumChart   = "cilium"
-	CiliumVersion = "1.20.0"
+	CiliumRepo  = "https://helm.cilium.io"
+	CiliumChart = "cilium"
+	// 1.20.0 fatals at startup on recent kernels: its unconditional helper probe builds a
+	// CGroupSock program calling bpf_set_retval with the context in R1, which the verifier now
+	// rejects ("R1 is not a scalar"), and cilium treats any non-ErrNotSupported probe error as
+	// fatal — so the DaemonSet never becomes Available and `lab up` dies waiting for it.
+	CiliumVersion = "1.20.2"
 )
 
 // WaitAPIServer blocks until the Kubernetes API server answers /readyz via
