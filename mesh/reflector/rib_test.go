@@ -278,3 +278,84 @@ func TestSubscribeReplaysOneSnapshotEndingInEndOfRIB(t *testing.T) {
 		t.Fatalf("want 3 routes then EndOfRIB{vni 100, count 3}, got %d messages ending in %+v", len(snap), snap[len(snap)-1].Msg)
 	}
 }
+
+// A second Subscribe for a VNI the session already holds must not replay it again: the only way to
+// accumulate replays is a consumer that is not draining, and each one is a whole VNI table.
+func TestResubscribingToAHeldVNIDoesNotReplayAgain(t *testing.T) {
+	r := NewRIB()
+	r.Announce("nodeA", 100, "10.0.0.1/32", []string{"fd00::a"}, false)
+
+	s := &fakeSink{id: "nodeB"}
+	r.Subscribe(100, s)
+	first := len(s.msgs)
+	if first != 2 { // one route, one EndOfRIB
+		t.Fatalf("want 2 messages in the first replay, got %d", first)
+	}
+
+	r.Subscribe(100, s)
+	if len(s.msgs) != first {
+		t.Fatalf("a repeated Subscribe queued %d more message(s)", len(s.msgs)-first)
+	}
+	if len(s.snapshots) != 1 {
+		t.Fatalf("want one snapshot, got %d", len(s.snapshots))
+	}
+}
+
+// Unsubscribing gives up the table, so subscribing again is a genuine new subscription and must
+// replay — that is how a client asks for a fresh copy.
+func TestSubscribingAfterUnsubscribeReplaysAgain(t *testing.T) {
+	r := NewRIB()
+	r.Announce("nodeA", 100, "10.0.0.1/32", []string{"fd00::a"}, false)
+
+	s := &fakeSink{id: "nodeB"}
+	r.Subscribe(100, s)
+	r.Unsubscribe(100, s.id)
+	r.Subscribe(100, s)
+
+	if len(s.snapshots) != 2 {
+		t.Fatalf("want two replays, got %d", len(s.snapshots))
+	}
+}
+
+// The fanout still reaches a session that subscribed twice: the no-op must not drop it from the
+// subscriber set.
+func TestAResubscribedSessionStillGetsUpdates(t *testing.T) {
+	r := NewRIB()
+	s := &fakeSink{id: "nodeB"}
+	r.Subscribe(100, s)
+	r.Subscribe(100, s)
+	before := len(s.msgs)
+
+	r.Announce("nodeA", 100, "10.0.0.1/32", []string{"fd00::a"}, false)
+	if len(s.msgs) != before+1 {
+		t.Fatalf("want one update after the announce, got %d", len(s.msgs)-before)
+	}
+}
+
+// Subscriptions are keyed by node id, so a reconnect's Subscribe can find its own PREDECESSOR's
+// sink under its key — the predecessor's recv loop is still live and may re-subscribe after
+// ClaimOrigin cleared it. "Already held" therefore has to mean this very session, not this node
+// id: a reconnect that was skipped as a duplicate would inherit a dead queue, never be replayed to
+// and never converge, and nothing would ever evict the stale sink (its owner's ReleaseOrigin
+// returns early on the token check).
+func TestAReconnectIsReplayedEvenIfItsPredecessorStillHoldsTheVNI(t *testing.T) {
+	r := NewRIB()
+	r.Announce("nodeA", 100, "10.0.0.1/32", []string{"fd00::a"}, false)
+	stale := &fakeSink{id: "nodeB"}
+	r.Subscribe(100, stale)
+
+	fresh := &fakeSink{id: "nodeB"}
+	r.Subscribe(100, fresh)
+	if len(fresh.snapshots) != 1 {
+		t.Fatalf("the reconnected session must get its own replay, got %d snapshots", len(fresh.snapshots))
+	}
+
+	// And the fanout now goes to the live session, not the one it replaced.
+	r.Announce("nodeA", 100, "10.0.0.2/32", []string{"fd00::a"}, false)
+	if got := len(updates(fresh)); got != 2 {
+		t.Fatalf("the reconnected session must receive the fanout, got %d route updates", got)
+	}
+	if got := len(updates(stale)); got != 1 {
+		t.Fatalf("the replaced session must be off the subscriber set, got %d route updates", got)
+	}
+}

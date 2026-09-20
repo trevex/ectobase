@@ -732,6 +732,14 @@ func (x *Hello) GetGlobalFeed() GlobalFeed {
 	return GlobalFeed_GLOBAL_FEED_ALL
 }
 
+// Subscribe joins this session to a VNI's table: the reflector replays the table and closes the
+// replay with EndOfRIB.
+//
+// Subscribing to a VNI this session already holds is a NO-OP: no replay, no EndOfRIB. The session
+// keeps the table and every update since, so a second copy would only cost memory on a consumer
+// that is not draining. A client that wants a fresh replay must Unsubscribe first — and one that
+// resets its own convergence bookkeeping before each Subscribe (as the agent does) would otherwise
+// wait forever for an EndOfRIB that is not coming.
 type Subscribe struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Vni           uint32                 `protobuf:"varint,1,opt,name=vni,proto3" json:"vni,omitempty"`

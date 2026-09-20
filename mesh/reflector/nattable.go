@@ -29,10 +29,23 @@ type natKey struct {
 // exactly what the consumer receives before it. The consumer still checks that count before it
 // prunes (see the EndOfGlobal doc in routebus.proto): an older reflector dropped snapshot
 // records, and pruning against a lossy snapshot would withdraw live state.
+//
+// The replay itself is shared with every other session on the feed (see globalSnapshotLocked), so
+// registering costs the messages only once no matter how many edges reconnect at the same time.
 func (r *RIB) RegisterSink(s Sink) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.sinks[s.ID()] = s
+	s.SendSnapshot(r.globalSnapshotLocked())
+}
+
+// globalSnapshotLocked returns the shared NAT + public replay and its EndOfGlobal marker,
+// rebuilding it if a mutation dropped the last one. Caller holds r.mu. The returned slice is
+// shared with every other session on the feed and must never be mutated by a caller.
+func (r *RIB) globalSnapshotLocked() []*pb.ServerMsg {
+	if r.globalSnap != nil {
+		return r.globalSnap
+	}
 	snap := make([]*pb.ServerMsg, 0, len(r.nat)+len(r.public)+1)
 	var n uint32
 	for k := range r.nat {
@@ -46,7 +59,8 @@ func (r *RIB) RegisterSink(s Sink) {
 	snap = append(snap, &pb.ServerMsg{Msg: &pb.ServerMsg_EndOfGlobal{
 		EndOfGlobal: &pb.EndOfGlobal{RecordCount: n},
 	}})
-	s.SendSnapshot(snap)
+	r.globalSnap = snap
+	return snap
 }
 
 // unregisterSink removes s from the global sink set. A live session's teardown goes through
@@ -124,6 +138,11 @@ func (r *RIB) dropOriginNat(origin string) {
 // natFanout sends a NatUpdate to ALL sinks. Caller holds r.mu. Sink.Send is
 // non-blocking, so holding the lock is safe.
 func (r *RIB) natFanout(b NatBlock, op pb.RouteOp) {
+	// The table just changed, so the shared replay is stale. This is the one place every write to
+	// r.nat passes through under r.mu (announce, withdraw and each key of a dropped origin), which
+	// is why the invalidation lives here rather than at each mutation site. A fanout without a
+	// mutation would only cost one rebuild.
+	r.globalSnap = nil
 	m := natUpdate(b, op)
 	for _, s := range r.sinks {
 		s.Send(m)

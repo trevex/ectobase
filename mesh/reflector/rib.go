@@ -3,6 +3,7 @@
 package reflector
 
 import (
+	"log"
 	"net"
 	"sort"
 	"sync"
@@ -125,6 +126,13 @@ type RIB struct {
 	// records. A session that opted out is never added, so it costs the fanout nothing.
 	sinks map[string]Sink
 
+	// globalSnap is the NAT + public replay every session on the global feed receives, built once
+	// and handed to all of them. The messages are immutable once built and a sink copies the
+	// pointers it is given (sessionQueue appends them into its own pending), so sharing is free —
+	// and it turns the peak after a reflector restart, when every edge reconnects at once, from
+	// sessions x records into one copy. nil means "rebuild on the next registration".
+	globalSnap []*pb.ServerMsg
+
 	// fenced blocks nexthops inside a node /64 (Tier-2 failover): announces whose
 	// nexthop falls inside a fenced prefix are rejected, and stored matching routes
 	// are withdrawn. Keyed by the /64 CIDR string.
@@ -169,6 +177,20 @@ func (r *RIB) Subscribe(vni uint32, s Sink) {
 	if subs == nil {
 		subs = map[string]Sink{}
 		r.subscribers[vni] = subs
+	}
+	if held, ok := subs[s.ID()]; ok && held == s {
+		// THIS session already has this VNI's table and every update since; replaying it would
+		// queue another whole copy, and the only way to pile them up is a consumer that is not
+		// draining. The agent diffs its desired set (mesh/agent/desired.go diffDesired), so it
+		// never re-subscribes on a live session — and it resets its EndOfRIB epoch before each
+		// Subscribe it sends, so one that got no replay would never converge. A client that wants
+		// a fresh copy unsubscribes first.
+		//
+		// The sink identity, not just the node id, is what makes this a duplicate: the map is
+		// keyed by node id, so a reconnect can find its predecessor's sink here and must replace
+		// it and be replayed to like any new subscriber.
+		log.Printf("reflector: session %s re-subscribed to VNI %d it already holds; not replaying", s.ID(), vni)
+		return
 	}
 	subs[s.ID()] = s
 
