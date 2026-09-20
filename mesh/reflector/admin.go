@@ -15,10 +15,6 @@ import (
 
 // AdminServer implements RouteBusAdmin over a RIB: central sets/clears per-/64 route
 // fences to suppress a lost pool's overlay routes (the network half of Tier-2 fencing).
-//
-// TODO(authz): admin RPCs are higher-privilege than the RouteBus Session service and
-// should be gated by per-RPC authz (a separate cert/SPIFFE ID or an interceptor); they
-// currently inherit only the server's transport mTLS.
 type AdminServer struct {
 	pb.UnimplementedRouteBusAdminServer
 	rib *RIB
