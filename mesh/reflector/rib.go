@@ -3,6 +3,7 @@
 package reflector
 
 import (
+	"log"
 	"net"
 	"sort"
 	"sync"
@@ -176,6 +177,20 @@ func (r *RIB) Subscribe(vni uint32, s Sink) {
 	if subs == nil {
 		subs = map[string]Sink{}
 		r.subscribers[vni] = subs
+	}
+	if held, ok := subs[s.ID()]; ok && held == s {
+		// THIS session already has this VNI's table and every update since; replaying it would
+		// queue another whole copy, and the only way to pile them up is a consumer that is not
+		// draining. The agent diffs its desired set (mesh/agent/desired.go diffDesired), so it
+		// never re-subscribes on a live session — and it resets its EndOfRIB epoch before each
+		// Subscribe it sends, so one that got no replay would never converge. A client that wants
+		// a fresh copy unsubscribes first.
+		//
+		// The sink identity, not just the node id, is what makes this a duplicate: the map is
+		// keyed by node id, so a reconnect can find its predecessor's sink here and must replace
+		// it and be replayed to like any new subscriber.
+		log.Printf("reflector: session %s re-subscribed to VNI %d it already holds; not replaying", s.ID(), vni)
+		return
 	}
 	subs[s.ID()] = s
 
