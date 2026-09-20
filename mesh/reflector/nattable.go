@@ -49,9 +49,10 @@ func (r *RIB) RegisterSink(s Sink) {
 	s.SendSnapshot(snap)
 }
 
-// UnregisterSink removes s from the global sink set (on disconnect). Its NAT
-// blocks are withdrawn separately via DropOrigin.
-func (r *RIB) UnregisterSink(sinkID string) {
+// unregisterSink removes s from the global sink set. A live session's teardown goes through
+// ReleaseOrigin, which removes it from r.sinks itself inside its own critical section; this
+// locking form exists for callers exercising the global-feed bookkeeping directly.
+func (r *RIB) unregisterSink(sinkID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	delete(r.sinks, sinkID)
@@ -63,7 +64,14 @@ func (r *RIB) AnnounceNat(origin string, b NatBlock) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	k := natKey{b.NatIP, b.PortMin}
+	// A block moves when its owner drains and another node takes the range over. Move the key to
+	// the new origin: left in the old one's set, that origin's disconnect would withdraw the NEW
+	// owner's block.
+	if prev, ok := r.natOrigin[k]; ok && prev != origin {
+		delete(r.natByOrigin[prev], k)
+	}
 	r.nat[k] = b
+	r.natOrigin[k] = origin
 	if r.natByOrigin[origin] == nil {
 		r.natByOrigin[origin] = map[natKey]struct{}{}
 	}
@@ -71,20 +79,27 @@ func (r *RIB) AnnounceNat(origin string, b NatBlock) {
 	r.natFanout(b, pb.RouteOp_ROUTE_OP_ADD)
 }
 
-// WithdrawNat removes a global NAT block and broadcasts a WITHDRAW to all sinks.
-func (r *RIB) WithdrawNat(origin, natIP string, portMin, portMax uint32) {
+// WithdrawNat removes a global NAT block and broadcasts a WITHDRAW to every session that takes
+// the global feed — but only if the block is the caller's to withdraw: announced by THIS origin,
+// and with an owner underlay the session's certificate speaks for. Both matter: `node_id` is
+// self-asserted, so the origin check alone falls to anyone who claims a node's id, and the
+// certificate is what actually binds the record to the node that holds its address.
+func (r *RIB) WithdrawNat(origin, natIP string, portMin, portMax uint32, permit OwnerPermit) WithdrawOutcome {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	k := natKey{natIP, portMin}
 	b, ok := r.nat[k]
 	if !ok {
-		return
+		return WithdrawAbsent
+	}
+	if r.natOrigin[k] != origin || !permit.allows(b.OwnerUnderlay) {
+		return WithdrawRefused
 	}
 	delete(r.nat, k)
-	if m := r.natByOrigin[origin]; m != nil {
-		delete(m, k)
-	}
+	delete(r.natOrigin, k)
+	delete(r.natByOrigin[origin], k)
 	r.natFanout(b, pb.RouteOp_ROUTE_OP_WITHDRAW)
+	return WithdrawApplied
 }
 
 // dropOriginNat withdraws every NAT block a node originated. Caller holds r.mu.
@@ -92,8 +107,15 @@ func (r *RIB) dropOriginNat(origin string) {
 	owned := r.natByOrigin[origin]
 	delete(r.natByOrigin, origin)
 	for k := range owned {
+		// Defense in depth: natByOrigin says origin once held k, but the reverse index is the
+		// authority on who holds it NOW. A future bug that leaves a stale entry in the wrong
+		// origin's set must be a no-op here, not a withdraw of whoever actually owns k.
+		if r.natOrigin[k] != origin {
+			continue
+		}
 		if b, ok := r.nat[k]; ok {
 			delete(r.nat, k)
+			delete(r.natOrigin, k)
 			r.natFanout(b, pb.RouteOp_ROUTE_OP_WITHDRAW)
 		}
 	}

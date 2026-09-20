@@ -84,11 +84,99 @@ func TestWithdrawPublicFansOut(t *testing.T) {
 	r.RegisterSink(b)
 	rec := publicRecord(pb.PublicKind_PUBLIC_KIND_EDGE_UNDERLAY, "fd00:db8:0:9::e/128", "fd00:db8:0:9::1", 0, 0, 0)
 	r.AnnouncePublic("nodeA", rec)
-	r.WithdrawPublic("nodeA", rec)
+	r.WithdrawPublic("nodeA", rec, nil)
 
 	us := publicUpdates(b)
 	if len(us) != 2 || us[1].Op != pb.RouteOp_ROUTE_OP_WITHDRAW {
 		t.Fatalf("want ADD then WITHDRAW, got %+v", us)
+	}
+}
+
+// The public channel gets the same ownership rule as NAT: only the announcing origin, and only a
+// certificate that speaks for the record's owner, may withdraw it.
+func TestWithdrawPublicIsRefusedUnlessTheRecordIsYours(t *testing.T) {
+	r := NewRIB()
+	s := &fakeSink{id: "sub"}
+	r.RegisterSink(s)
+	rec := PublicRecord{
+		Kind: pb.PublicKind_PUBLIC_KIND_LB_IP, Prefix: "203.0.113.50/32",
+		OwnerUnderlay: "fd00::a", OverlayIP: "10.0.0.1", Vni: 100,
+	}
+	r.AnnouncePublic("nodeA", rec)
+
+	if got := r.WithdrawPublic("nodeC", rec, nil); got != WithdrawRefused {
+		t.Fatalf("a foreign origin must be refused, got %v", got)
+	}
+	deny := OwnerPermit(func(owner string) bool { return owner == "fd00::impostor" })
+	if got := r.WithdrawPublic("nodeA", rec, deny); got != WithdrawRefused {
+		t.Fatalf("a certificate that does not speak for the owner must be refused, got %v", got)
+	}
+	if us := publicUpdates(s); len(us) != 1 || us[0].Op != pb.RouteOp_ROUTE_OP_ADD {
+		t.Fatalf("a refused withdraw must not reach the fabric: %+v", us)
+	}
+
+	allow := OwnerPermit(func(owner string) bool { return owner == "fd00::a" })
+	if got := r.WithdrawPublic("nodeA", rec, allow); got != WithdrawApplied {
+		t.Fatalf("the announcing origin must be able to withdraw its record, got %v", got)
+	}
+	// Withdrawing what is not there is not a refusal, just nothing to do.
+	if got := r.WithdrawPublic("nodeA", rec, allow); got != WithdrawAbsent {
+		t.Fatalf("want WithdrawAbsent for a record that is already gone, got %v", got)
+	}
+}
+
+// A record moves when its owner drains and another node — one whose cert ALSO speaks for that
+// owner underlay — takes it over. The key must move to the new origin, or the old one's
+// disconnect withdraws the new owner's record. Unlike NAT (keyed on nat_ip/port only), publicKey
+// includes the owner, so this needs two origins announcing on behalf of the SAME owner: rarer,
+// same hazard.
+func TestAnnouncePublicMovesTheRecordToItsNewOrigin(t *testing.T) {
+	r := NewRIB()
+	s := &fakeSink{id: "sub"}
+	r.RegisterSink(s)
+	rec := PublicRecord{
+		Kind: pb.PublicKind_PUBLIC_KIND_LB_IP, Prefix: "203.0.113.50/32",
+		OwnerUnderlay: "fd00::a", OverlayIP: "10.0.0.1", Vni: 100,
+	}
+	r.AnnouncePublic("nodeA", rec)
+	r.AnnouncePublic("nodeC", rec)
+
+	// nodeA disconnects: it no longer owns the record, so nothing is withdrawn.
+	r.dropOrigin("nodeA")
+	if us := publicUpdates(s); us[len(us)-1].Op == pb.RouteOp_ROUTE_OP_WITHDRAW {
+		t.Fatalf("the previous origin's disconnect must not withdraw the new owner's record: %+v", us)
+	}
+	// And the new origin still owns it: its own withdraw works.
+	if got := r.WithdrawPublic("nodeC", rec, nil); got != WithdrawApplied {
+		t.Fatalf("the new origin must own the record it took over, got %v", got)
+	}
+}
+
+// The public twin of TestWithdrawNatThenReannounceSurvivesTheOriginalOwnersDisconnect: WithdrawPublic
+// must remove k from THIS origin's publicByOrigin set too, not just from the RIB. Skipping that
+// delete leaves a stale entry in the ORIGINAL owner's set, so its later disconnect silently
+// withdraws the record its successor re-announced under the same key.
+func TestWithdrawPublicThenReannounceSurvivesTheOriginalOwnersDisconnect(t *testing.T) {
+	r := NewRIB()
+	s := &fakeSink{id: "sub"}
+	r.RegisterSink(s)
+	rec := PublicRecord{
+		Kind: pb.PublicKind_PUBLIC_KIND_LB_IP, Prefix: "203.0.113.50/32",
+		OwnerUnderlay: "fd00::a", OverlayIP: "10.0.0.1", Vni: 100,
+	}
+	r.AnnouncePublic("nodeA", rec)
+	if got := r.WithdrawPublic("nodeA", rec, nil); got != WithdrawApplied {
+		t.Fatalf("nodeA must be able to withdraw its own record, got %v", got)
+	}
+	r.AnnouncePublic("nodeC", rec)
+
+	// nodeA disconnects: it withdrew this key itself long ago and no longer owns it.
+	r.dropOrigin("nodeA")
+	if us := publicUpdates(s); us[len(us)-1].Op == pb.RouteOp_ROUTE_OP_WITHDRAW {
+		t.Fatalf("the ORIGINAL owner's disconnect must not withdraw the CURRENT owner's record: %+v", us)
+	}
+	if got := r.WithdrawPublic("nodeC", rec, nil); got != WithdrawApplied {
+		t.Fatalf("nodeC must still own the record it announced after nodeA withdrew, got %v", got)
 	}
 }
 
@@ -112,7 +200,7 @@ func TestDropOriginWithdrawsPublicRecords(t *testing.T) {
 	r.AnnouncePublic("nodeA", publicRecord(pb.PublicKind_PUBLIC_KIND_EDGE_UNDERLAY, "fd00:db8:0:9::e/128", "fd00:db8:0:9::1", 0, 0, 0))
 	r.AnnouncePublic("nodeA", publicRecord(pb.PublicKind_PUBLIC_KIND_NAT_IP, "1.2.3.4/32", "fd00:db8:0:9::1", 100, 1024, 2048))
 
-	r.DropOrigin("nodeA")
+	r.dropOrigin("nodeA")
 
 	var withdraws int
 	for _, pu := range publicUpdates(b) {
@@ -156,7 +244,7 @@ func TestSameNodeLBBackendsDistinctOverlayCoexistAndWithdrawIndependently(t *tes
 	}
 
 	// Withdraw recA only: recB must survive.
-	r.WithdrawPublic("nodeA", recA)
+	r.WithdrawPublic("nodeA", recA, nil)
 	afterWithdraw := &fakeSink{id: "nodeD"}
 	r.RegisterSink(afterWithdraw)
 	us2 := publicUpdates(afterWithdraw)
@@ -169,7 +257,7 @@ func TestUnregisterSinkStopsPublicFanout(t *testing.T) {
 	r := NewRIB()
 	b := &fakeSink{id: "nodeB"}
 	r.RegisterSink(b)
-	r.UnregisterSink(b.ID())
+	r.unregisterSink(b.ID())
 	r.AnnouncePublic("nodeA", publicRecord(pb.PublicKind_PUBLIC_KIND_EDGE_UNDERLAY, "fd00:db8:0:9::e/128", "fd00:db8:0:9::1", 0, 0, 0))
 	if us := publicUpdates(b); len(us) != 0 {
 		t.Fatalf("unregistered sink must not receive public updates, got %+v", us)

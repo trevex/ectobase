@@ -31,7 +31,7 @@ func TestAnycastRouteRefcountedByOrigin(t *testing.T) {
 	r.Announce("edge2", 100, "0.0.0.0/0", []string{"fd00:db8:0:9::e"}, true)
 
 	// One edge's session is lost — the route MUST remain (edge2 still announces it).
-	r.DropOrigin("edge1")
+	r.dropOrigin("edge1")
 	if op, ok := lastOpFor(sub, "0.0.0.0/0"); !ok || op != pb.RouteOp_ROUTE_OP_ADD {
 		t.Fatalf("after 1 of 2 anycast origins drops, route must stay ADD; got op=%v seen=%v", op, ok)
 	}

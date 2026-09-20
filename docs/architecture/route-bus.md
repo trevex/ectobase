@@ -71,6 +71,14 @@ relays NAT returns nor runs Maglev, so the global records were work for nothing 
 WAN edge sends `GLOBAL_FEED_ALL`. The default being `ALL` keeps an older agent, which
 never sets the field, receiving everything exactly as before.
 
+Claiming a node id is exclusive to one session at a time: `Hello` claims it and the
+session holds a token for as long as it lives (`RIB.ClaimOrigin`/`ReleaseOrigin`).
+Claiming drops whatever the previous session left — the agent re-announces its whole
+desired set on reconnect but never withdraws what it no longer wants, so a route it has
+since dropped would otherwise linger for good — and a session's own cleanup tears its
+state down only if it still holds the token, so a predecessor still timing out its
+keepalive window after a fast reconnect can never touch its successor's state.
+
 ### Per-VNI routes vs global records
 
 Routes are fanned out per VNI. When an agent `Subscribe`s to a VNI, the reflector
@@ -232,6 +240,15 @@ fallback the charts never take, since `pki.enabled` is mandatory. The admin (fen
 is additionally CN-gated to the
 `dispatch-controller` identity and split onto its own listener, so a session-cert
 holder can never drive fencing.
+
+Withdraw gets a symmetric guard. `WithdrawNat` and `WithdrawPublic` apply a record only
+if it was announced by THIS session's origin AND the owner underlay it names is one the
+session's certificate speaks for — checked against the STORED record, since the withdraw
+messages themselves carry no owner. Both checks matter: `Hello.node_id` is self-asserted,
+so the origin check alone falls to anyone who claims a node's id, while the certificate is
+what actually binds a record to the node that holds its address. A refused withdraw
+changes nothing, reaches no other session, and is logged by the reflector; withdrawing a
+record that is already gone is not a refusal and passes silently.
 
 ### Enabling it
 

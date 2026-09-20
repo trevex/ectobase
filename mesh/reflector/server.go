@@ -31,6 +31,10 @@ func (s *Server) Session(stream pb.RouteBus_SessionServer) error {
 	// IP SANs (the node's underlay /128). No-op when mTLS is off (no verified cert).
 	guard := newUnderlayGuard(stream.Context())
 
+	// Claim the node id for THIS session: a reconnect that beat its predecessor's timeout drops
+	// what that session left, and the predecessor's cleanup will not touch this one's state.
+	token := s.rib.ClaimOrigin(h.NodeId)
+
 	sink := newSessionQueue(h.NodeId)
 	if h.GetGlobalFeed() == pb.GlobalFeed_GLOBAL_FEED_NONE {
 		// Opted out of the global channel (a compute node): never registered for NAT + public
@@ -62,8 +66,7 @@ func (s *Server) Session(stream pb.RouteBus_SessionServer) error {
 		}
 	}()
 	defer func() {
-		s.rib.UnregisterSink(sink.id) // stop broadcasting NAT/public updates to this dead session
-		s.rib.DropOrigin(sink.id)     // fast-withdraw this node's routes AND NAT/public records on disconnect
+		s.rib.ReleaseOrigin(sink.id, token) // unregister + fast-withdraw, unless superseded
 		sink.close()
 		wg.Wait()
 	}()
@@ -103,7 +106,10 @@ func (s *Server) Session(stream pb.RouteBus_SessionServer) error {
 			})
 		case *pb.ClientMsg_WithdrawNat:
 			w := m.WithdrawNat
-			s.rib.WithdrawNat(sink.id, w.NatIp, w.PortMin, w.PortMax)
+			if out := s.rib.WithdrawNat(sink.id, w.NatIp, w.PortMin, w.PortMax, guard.permits); out == WithdrawRefused {
+				log.Printf("reflector: reject WithdrawNat from %s: %s:[%d,%d) is not its block, or its certificate does not speak for the owner",
+					sink.id, w.NatIp, w.PortMin, w.PortMax)
+			}
 		case *pb.ClientMsg_AnnouncePublic:
 			p := m.AnnouncePublic
 			if !guard.permits(p.OwnerUnderlay) {
@@ -113,7 +119,11 @@ func (s *Server) Session(stream pb.RouteBus_SessionServer) error {
 			s.rib.AnnouncePublic(sink.id, publicRecordFromPB(p))
 		case *pb.ClientMsg_WithdrawPublic:
 			p := m.WithdrawPublic
-			s.rib.WithdrawPublic(sink.id, publicRecordFromPB(p))
+			rec := publicRecordFromPB(p)
+			if out := s.rib.WithdrawPublic(sink.id, rec, guard.permits); out == WithdrawRefused {
+				log.Printf("reflector: reject WithdrawPublic from %s: %s %s is not its record, or its certificate does not speak for the owner",
+					sink.id, rec.Kind, rec.Prefix)
+			}
 		case *pb.ClientMsg_KeepAlive, *pb.ClientMsg_Hello:
 			// keepalive: transport-level for v1; duplicate hello ignored.
 		}

@@ -40,7 +40,7 @@ asymmetries plus doc drift.
 |---|---|---|
 | §1 Correctness (P0) | all seven (`0e2e601f`) | — |
 | §2 Scale ceilings | firewall rule cap (firewall redesign, `acd0d55b` + `ec23ad68`); neighbor-NAT keyed tries (NAT return scaling Inc. 1, `f681d367`); NAT/public broadcast (NAT return scaling Inc. 3, `04d1fe52`) | map ceilings, conntrack pressure, IPAM + peering list costs, sizing doc |
-| §3 Control-plane resilience | NAT/public prune (`a334ef8`), route-prune guard (`cb4188e6`), fence completeness (`a4dd915`), dispatch-controller leader election (`54dda54c`), lossless route-bus snapshots (NAT return scaling Inc. 2, `545ae93a`) | edge `/readyz` not consumed, `replicas: 1` everywhere, `GenerationApplied`, broker sync ordering, NAT/public record ownership (4b), a reconnect torn down by its own stale session (4c) |
+| §3 Control-plane resilience | NAT/public prune (`a334ef8`), route-prune guard (`cb4188e6`), fence completeness (`a4dd915`), dispatch-controller leader election (`54dda54c`), lossless route-bus snapshots (NAT return scaling Inc. 2, `545ae93a`), NAT/public record ownership + reconnect session identity (NAT return scaling Inc. 4, branch `routebus/ownership`) | edge `/readyz` not consumed, `replicas: 1` everywhere, `GenerationApplied`, broker sync ordering |
 | §4 Policy model | priorities, `defaultPolicy`, FirewallPolicy validation, revocation (`b19cbb3`, `99d3880`, `acd0d55b`) | Route intent, source selectors, remaining validation, peering-overlap warning |
 | §5 Symmetry | — | all items |
 | §6 Doc drift | overlay MTU, NAT return wording | the rest of the list |
@@ -234,6 +234,26 @@ firewalls. v4 and v6, sim and eBPF. The refusal now removes the entries the flow
    it out of the old origin's set, so the old origin's disconnect later withdraws the new owner's
    block. `Hello.node_id` is also self-asserted and not bound to the certificate. Planned (all but
    the node_id binding): NAT return scaling, Increment 4.
+   **RESOLVED** (NAT return scaling Increment 4, branch `routebus/ownership`): `WithdrawNat` and
+   `WithdrawPublic` now apply a record only if it was announced by the caller's origin AND the
+   caller's certificate speaks for the record's owner underlay, checked against the STORED record
+   since the withdraw messages carry no owner; and `AnnounceNat`/`AnnouncePublic` now move a
+   contested key to the new origin on takeover, so the old origin's disconnect can no longer
+   withdraw the new owner's record. Two things remain open, confirmed during this increment's
+   review:
+   - `Hello.node_id` is still self-asserted and not bound to the certificate, so an impostor can
+     still claim a live node's id. That is now *worse* in one respect: the claim wipes the victim's
+     RIB state at connect time (the victim's agent pushes only deltas on its live session, so it
+     does not re-announce until its own session drops), where before this increment the wipe
+     happened only on the impostor's later cleanup. The certificate guard — not the origin check —
+     is what still protects each record.
+   - A hostile `Announce` can still take a NAT block over: the announce guard only checks the owner
+     underlay the announcer sent, and `natKey` carries no owner, so any node with a valid leaf can
+     announce over another node's block under its own owner and then legitimately withdraw it. This
+     cannot be closed at the reflector without knowing the allocation (central IPAM); refusing a
+     takeover whose stored owner the certificate does not cover would break the drain/move the
+     takeover exists for. The public side is not exposed the same way today — its key includes the
+     owner, and real producers never collide on it.
 4c. **Found 2026-09-19 (Increment 2 review) — a reconnect can be torn down by its own stale
    session.** Sinks, subscriptions and origins are keyed only by `Hello.node_id` (`r.sinks`,
    `r.subscribers[vni]`, `r.byOrigin`, `r.natByOrigin`, `r.publicByOrigin`), and `Session`'s
@@ -246,8 +266,12 @@ firewalls. v4 and v6, sim and eBPF. The refusal now removes the entries the flow
    `DropOrigin` withdraws its freshly announced routes and NAT/public records fabric-wide. The new
    session is left connected but deaf, its announced state withdrawn; the agent sends only
    changes, so it re-announces nothing until its next reconnect.
-   Related to the self-asserted `node_id` (4b). Not fixed; candidate for Increment 4 (a per-session
-   generation/token so cleanup only removes what that session itself registered).
+   Related to the self-asserted `node_id` (4b). **RESOLVED** (NAT return scaling Increment 4,
+   branch `routebus/ownership`): every session now claims its node id at `Hello` and holds a token
+   for as long as it lives (`RIB.ClaimOrigin`/`ReleaseOrigin`); claiming drops whatever the
+   previous session left, in the same critical section, and a session's cleanup tears state down
+   only if it still holds the token — so a predecessor timing out its keepalive window can no
+   longer unregister, unsubscribe or withdraw on behalf of a successor that already reconnected.
 4. ~~**dispatch-controller has no leader election**~~ **FIXED** (`42c6ea1d`, merged in
    `54dda54c`): the manager takes a Lease (`ectobase-dispatch-controller`, host
    kube-apiserver, `ReleaseOnCancel`) before starting any reconciler, with lease RBAC in the
@@ -381,7 +405,8 @@ get mirrored, and each gap is individually "known" but the set is growing.
   `tap0`; code uses netkit-L2 and derives/rejects `tap0` (`attach/naming.rs:77-89`).
 - `attach/mod.rs:44-45` — stale "fails ... until B.4 lands" comment on the *default* container
   path (B.4 landed); would misdirect an incident.
-- `mesh/reflector/admin.go:19-21` — stale `TODO(authz)`; CN-gating is implemented.
+- ~~`mesh/reflector/admin.go:19-21` — stale `TODO(authz)`; CN-gating is implemented.~~ **FIXED**
+  (branch `routebus/ownership`): the comment is deleted.
 - Broker `main.go:6-7,180` — says "filtered by spec.clusterName"; it's namespace-scoped.
 - `docs/features/nat.md` — ~~v4-only return wording~~ **FIXED** (`a3f5089a`: the return path
   now covers both families over `NEIGHBOR_NAT`/`NEIGHBOR_NAT6`); still open: `:159` says NAT64
