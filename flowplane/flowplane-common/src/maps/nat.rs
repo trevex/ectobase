@@ -1,5 +1,6 @@
-//! NAT / NAT66 config map key & value types plus the neighbor-NAT entries (the `NAT_CONFIG`,
-//! `NAT_CONFIG6`, `NAT_OWNERS`, `NAT_OWNERS6` maps).
+//! NAT / NAT66 map key & value types: the `NAT_CONFIG{,6}` guest config and the `NAT_OWNERS{,6}`
+//! trie key and owner. The neighbor-NAT block records at the end are the control plane's own, not
+//! map types — a block reaches the datapath as the owner prefixes that cover its port range.
 
 /// NAT-GW config key: (vni, local guest IPv4).
 #[repr(C)]
@@ -74,10 +75,10 @@ pub const NAT_OWNERS_MAX: u32 = 65536;
 pub const NAT_OWNER_ADDR_BITS4: u32 = 32;
 pub const NAT_OWNER_ADDR_BITS6: u32 = 128;
 
-/// A neighbor-NAT block: a remote node owns `(vni, nat_ip, [port_min, port_max))`; return traffic
-/// to that nat_ip:port is re-forwarded to `underlay`. Stored in the datapath as `NAT_OWNERS`
-/// prefixes (see [`NatOwnerKey`]).
-#[repr(C)]
+/// The control plane's record of a neighbor-NAT block: a remote node owns
+/// `(vni, nat_ip, [port_min, port_max))`; return traffic to that nat_ip:port is re-forwarded to
+/// `underlay`. Not a map value — the datapath stores a block as `NAT_OWNERS` prefixes carrying
+/// [`NatOwner`] (see [`NatOwnerKey`]), so this type has no ABI to hold to.
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Default)]
 pub struct NeighborNatEntry {
     pub underlay: [u8; 16],
@@ -85,14 +86,12 @@ pub struct NeighborNatEntry {
     pub vni: u32,
     pub port_min: u16,
     pub port_max: u16,
-    pub enabled: u8,
-    pub _pad: [u8; 3],
 }
 
 /// A neighbor-NAT block: v6 sibling of [`NeighborNatEntry`]. A remote node owns
 /// `(vni, nat_ip6, [port_min, port_max))`; return traffic to that nat_ip6:port is re-forwarded to
-/// `underlay`. Stored in the datapath as `NAT_OWNERS6` prefixes (see [`NatOwnerKey6`]).
-#[repr(C)]
+/// `underlay`. Not a map value — the datapath stores a block as `NAT_OWNERS6` prefixes carrying
+/// [`NatOwner`] (see [`NatOwnerKey6`]), so this type has no ABI to hold to.
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Default)]
 pub struct NeighborNat6Entry {
     pub underlay: [u8; 16],
@@ -100,12 +99,10 @@ pub struct NeighborNat6Entry {
     pub vni: u32,
     pub port_min: u16,
     pub port_max: u16,
-    pub enabled: u8,
-    pub _pad: [u8; 3],
 }
 
-// SAFETY: all `#[repr(C)]` fixed-size POD types with no padding beyond explicit `_pad` fields, so
-// their raw bytes are a valid map key/value ABI shared with the eBPF datapath.
+// SAFETY: all `#[repr(C)]` fixed-size POD types with no padding, so their raw bytes are a valid
+// map key/value ABI shared with the eBPF datapath.
 #[cfg(feature = "user")]
 mod user_impls {
     use super::*;
@@ -116,8 +113,6 @@ mod user_impls {
     unsafe impl aya::Pod for NatOwnerKey {}
     unsafe impl aya::Pod for NatOwnerKey6 {}
     unsafe impl aya::Pod for NatOwner {}
-    unsafe impl aya::Pod for NeighborNatEntry {}
-    unsafe impl aya::Pod for NeighborNat6Entry {}
 }
 
 #[cfg(test)]
@@ -140,15 +135,6 @@ mod tests {
     fn nat6_layouts() {
         assert_eq!(size_of::<NatKey6>(), 20); // 4 + 16
         assert_eq!(size_of::<NatValue6>(), 20); // 16 + 2 + 2
-        assert_eq!(size_of::<NeighborNat6Entry>(), 44); // 16 + 16 + 4 + 2 + 2 + 1 + 3
-    }
-
-    #[test]
-    fn neighbor_nat_entry_layout() {
-        // 16 (underlay) + 4 (nat_ip) + 4 (vni) + 2 (port_min) + 2 (port_max)
-        // + 1 (enabled) + 3 (_pad) = 32.
-        assert_eq!(size_of::<NeighborNatEntry>(), 32);
-        assert_eq!(align_of::<NeighborNatEntry>(), 4);
     }
 
     #[test]

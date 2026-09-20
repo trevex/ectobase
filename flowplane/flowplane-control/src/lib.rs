@@ -19,6 +19,11 @@ pub use nat::ReplaceCounts;
 pub use natowner::NeighborNatError;
 pub use writer::{CtFlushScope, CtFlushScope6, MapWriter};
 
+/// A neighbor-NAT block's place in the index: its nat_ip and the port its range starts at.
+pub(crate) type BlockKey4 = ([u8; 4], u16);
+/// v6 sibling of [`BlockKey4`], over a nat_ip6.
+pub(crate) type BlockKey6 = ([u8; 16], u16);
+
 /// Backend-agnostic control-plane state + programming, generic over the map write surface.
 /// Holds the config shadow + interface metadata the agnostic ops need; programs maps via `W`.
 pub struct ControlCore<W: MapWriter> {
@@ -32,10 +37,14 @@ pub struct ControlCore<W: MapWriter> {
     // The eBPF `detach_interface` VNI-reset reads lb-vni membership via `vni_has_lb`.
     pub(crate) lbs: std::collections::HashMap<Vec<u8>, shadow::LbEntry>,
     pub(crate) next_table_id: u32,
-    // Neighbor-NAT blocks; the NAT_OWNERS tries store each as its port prefixes.
-    pub(crate) neigh_nats: Vec<flowplane_common::NeighborNatEntry>,
-    // NAT66 neighbor-NAT blocks — v6 sibling of `neigh_nats`, stored in NAT_OWNERS6.
-    pub(crate) neigh_nats6: Vec<flowplane_common::NeighborNat6Entry>,
+    // Neighbor-NAT blocks, keyed by (nat_ip, port_min): blocks never overlap on one nat_ip, so
+    // this order makes an overlap check two neighbour lookups and a delete one removal. The
+    // NAT_OWNERS tries store each block as its port prefixes.
+    pub(crate) neigh_nats:
+        std::collections::BTreeMap<BlockKey4, flowplane_common::NeighborNatEntry>,
+    // NAT66 sibling of `neigh_nats`, stored in NAT_OWNERS6.
+    pub(crate) neigh_nats6:
+        std::collections::BTreeMap<BlockKey6, flowplane_common::NeighborNat6Entry>,
     // Sum of the listed blocks' prefix counts, per family (the capacity check reads these). Equal
     // to the trie's size while list and trie agree; after a failed write it reads high, never low.
     pub(crate) nat_owner_count4: usize,
@@ -55,8 +64,8 @@ impl<W: MapWriter> ControlCore<W> {
             ifaces_meta: std::collections::HashMap::new(),
             lbs: std::collections::HashMap::new(),
             next_table_id: 1,
-            neigh_nats: Vec::new(),
-            neigh_nats6: Vec::new(),
+            neigh_nats: std::collections::BTreeMap::new(),
+            neigh_nats6: std::collections::BTreeMap::new(),
             nat_owner_count4: 0,
             nat_owner_count6: 0,
             fw_binds: std::collections::HashMap::new(),

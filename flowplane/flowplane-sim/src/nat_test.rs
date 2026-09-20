@@ -953,8 +953,6 @@ fn neigh_nat_entry() -> NeighborNatEntry {
         vni: NEIGH_VNI,
         port_min: NEIGH_PORT_MIN,
         port_max: NEIGH_PORT_MAX,
-        enabled: 1,
-        _pad: [0; 3],
     }
 }
 

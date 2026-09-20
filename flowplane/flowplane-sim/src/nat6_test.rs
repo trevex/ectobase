@@ -361,8 +361,6 @@ fn wan6_rx_relays_nat_ip6_return_to_owner_with_owner_vni() {
         vni: OWNER_VNI,
         port_min: RET_NAT_PORT,
         port_max: RET_NAT_PORT + 1,
-        enabled: 1,
-        _pad: [0; 3],
     });
     // A plain WAN v6 frame EXT_V6 → NAT_V6:NAT_PORT (no LB_IP_CONST, no local ownership).
     let out = node.wan_rx(&ret_tcp_frame());
@@ -391,8 +389,6 @@ fn uplink6_relays_nat_ip6_return_to_owner() {
         vni: VNI,
         port_min: RET_NAT_PORT,
         port_max: RET_NAT_PORT + 1,
-        enabled: 1,
-        _pad: [0; 3],
     });
     // Not a locally-owned nat_ip (no nat_ips6/nat_ct6), no local INTERFACES6 → neighbor relay.
     let out = node.uplink_v6_dsr(&ret_tcp_frame(), VNI, &local(), None);

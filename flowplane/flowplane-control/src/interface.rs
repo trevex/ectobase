@@ -253,21 +253,21 @@ impl<W: MapWriter> ControlCore<W> {
     /// the VNI is no longer in use; `ipv4` is the removed interface's guest IPv4.
     pub fn purge_vni(&mut self, vni: u32, ipv4: [u8; 4]) -> anyhow::Result<()> {
         // Purge this VNI's neighbor-NAT blocks, both families.
-        let v4: Vec<_> = self
+        let v4 = self
             .neigh_nats
-            .iter()
+            .values()
             .filter(|e| e.vni == vni)
             .copied()
-            .collect();
+            .collect::<Vec<_>>();
         for e in v4 {
             let _ = self.del_neighbor_nat(e.vni, e.nat_ip, e.port_min, e.port_max);
         }
-        let v6: Vec<_> = self
+        let v6 = self
             .neigh_nats6
-            .iter()
+            .values()
             .filter(|e| e.vni == vni)
             .copied()
-            .collect();
+            .collect::<Vec<_>>();
         for e in v6 {
             let _ = self.del_neighbor_nat6(e.vni, e.nat_ip6, e.port_min, e.port_max);
         }

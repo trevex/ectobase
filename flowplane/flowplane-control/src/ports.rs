@@ -23,6 +23,26 @@ pub fn port_prefixes(lo: u16, hi: u16) -> Vec<(u16, u8)> {
     out
 }
 
+/// How many pairs [`port_prefixes`] would return for `lo..=hi`, without building them: the
+/// capacity check of a whole block set needs the count and nothing else.
+pub fn port_prefix_count(lo: u16, hi: u16) -> usize {
+    let (mut lo, hi) = (lo as u32, hi as u32);
+    let mut n = 0;
+    while lo <= hi {
+        let mut size = if lo == 0 {
+            1u32 << 16
+        } else {
+            lo & lo.wrapping_neg()
+        };
+        while lo + size - 1 > hi {
+            size >>= 1;
+        }
+        n += 1;
+        lo += size;
+    }
+    n
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -67,6 +87,46 @@ mod tests {
                     "unaligned {value}/{bits}"
                 );
             }
+        }
+    }
+
+    // The count has to agree with the decomposition everywhere, including the shapes that make
+    // port_prefixes split most: it is what the capacity check trusts instead of allocating.
+    #[test]
+    fn the_count_matches_the_decomposition() {
+        for (lo, hi) in [
+            (0u16, 65535u16),
+            (1, 65535),
+            (1024, 2047),
+            (20000, 29999),
+            (5, 5),
+            (65534, 65535),
+        ] {
+            assert_eq!(
+                port_prefix_count(lo, hi),
+                port_prefixes(lo, hi).len(),
+                "{lo}..={hi}"
+            );
+        }
+        // A deterministic sweep: every range starting below 300, and every range ending above
+        // 65300, plus a stride across the middle — enough shapes that an off-by-one shows up.
+        for lo in 0..300u16 {
+            for hi in [lo, lo + 1, lo + 7, 40000, 65535] {
+                if hi >= lo {
+                    assert_eq!(
+                        port_prefix_count(lo, hi),
+                        port_prefixes(lo, hi).len(),
+                        "{lo}..={hi}"
+                    );
+                }
+            }
+        }
+        for lo in 65300..=65535u16 {
+            assert_eq!(
+                port_prefix_count(lo, 65535),
+                port_prefixes(lo, 65535).len(),
+                "{lo}..=65535"
+            );
         }
     }
 
