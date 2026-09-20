@@ -153,17 +153,11 @@ pub fn add_neighbor_nat<W: MapWriter>(
     let port_min = port_u16(req.port_min).map_err(invalid)?;
     let port_max = port_u16(req.port_max).map_err(invalid)?;
     let vni = req.vni;
-    // Idempotent: drop any existing entry for this (vni, nat_ip, ports) first so a re-announce
-    // replaces the owner underlay.
+    // Idempotent: a block already listed for this (nat_ip, ports) is refreshed in place, so a
+    // re-announce moves its prefixes to the new owner underlay without unprogramming them.
     match nat {
-        IpAddr::V4(n) => {
-            core.del_neighbor_nat(vni, n.octets(), port_min, port_max)?;
-            core.add_neighbor_nat(vni, n.octets(), port_min, port_max, owner)?;
-        }
-        IpAddr::V6(n) => {
-            core.del_neighbor_nat6(vni, n.octets(), port_min, port_max)?;
-            core.add_neighbor_nat6(vni, n.octets(), port_min, port_max, owner)?;
-        }
+        IpAddr::V4(n) => core.upsert_neighbor_nat(vni, n.octets(), port_min, port_max, owner)?,
+        IpAddr::V6(n) => core.upsert_neighbor_nat6(vni, n.octets(), port_min, port_max, owner)?,
     }
     Ok(pb::AddNeighborNatResponse {})
 }
@@ -873,6 +867,49 @@ mod tests {
         withdraw_neighbor_nat(&mut c, &withdraw).unwrap();
         assert!(c.writer().nat_owners6.is_empty());
         withdraw_neighbor_nat(&mut c, &withdraw).unwrap();
+    }
+
+    // The handler refreshes a re-announced block in place, so it never removes a prefix: with a
+    // removal of its first prefix rigged to fail, a delete-then-add would fail the call, and in
+    // between the block's whole return path would have been unprogrammed.
+    #[test]
+    fn neighbor_nat_reannounce_never_unprograms_the_block() {
+        let mut c = core();
+        let add = |owner: &str| pb::AddNeighborNatRequest {
+            vni: 100,
+            nat_ip: "198.51.100.7".into(),
+            owner_underlay: owner.into(),
+            port_min: 20000,
+            port_max: 30001,
+        };
+        add_neighbor_nat(&mut c, &add("2001:db8::bb")).unwrap();
+        let (plen, key, _) = owners4([198, 51, 100, 7], 20000, 30001, "2001:db8::bb")[0];
+        c.writer_mut().nat_owner_fault.remove = Some((plen, key));
+        add_neighbor_nat(&mut c, &add("2001:db8::cc")).unwrap();
+        assert_trie(
+            &c.writer().nat_owners,
+            &owners4([198, 51, 100, 7], 20000, 30001, "2001:db8::cc"),
+        );
+    }
+
+    #[test]
+    fn neighbor_nat6_reannounce_never_unprograms_the_block() {
+        let mut c = core();
+        let add = |owner: &str| pb::AddNeighborNatRequest {
+            vni: 100,
+            nat_ip: "2001:db8:2b::7".into(),
+            owner_underlay: owner.into(),
+            port_min: 20000,
+            port_max: 30001,
+        };
+        add_neighbor_nat(&mut c, &add("2001:db8::bb")).unwrap();
+        let (plen, key, _) = owners6("2001:db8:2b::7", 20000, 30001, "2001:db8::bb")[0];
+        c.writer_mut().nat_owner6_fault.remove = Some((plen, key));
+        add_neighbor_nat(&mut c, &add("2001:db8::cc")).unwrap();
+        assert_trie(
+            &c.writer().nat_owners6,
+            &owners6("2001:db8:2b::7", 20000, 30001, "2001:db8::cc"),
+        );
     }
 
     #[test]

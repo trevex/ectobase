@@ -14,7 +14,8 @@ use crate::{
     BlockKey4, BlockKey6, ControlCore, CtFlushScope, CtFlushScope6, MapWriter, NeighborNatError,
 };
 use flowplane_common::{
-    NatKey, NatKey6, NatValue, NatValue6, NeighborNat6Entry, NeighborNatEntry, NAT_OWNERS_MAX,
+    NatKey, NatKey6, NatOwnerKey, NatOwnerKey6, NatValue, NatValue6, NeighborNat6Entry,
+    NeighborNatEntry, NAT_OWNERS_MAX,
 };
 
 /// What a replace did, block by block.
@@ -207,6 +208,46 @@ impl<W: MapWriter> ControlCore<W> {
             enabled: 1,
             _pad: [0; 3],
         })
+    }
+
+    /// Announce a block, refreshing one that is already there instead of replacing it: the agent
+    /// replays every block it knows on each reconnect, and a delete-then-add would leave the
+    /// range unprogrammed in between. A block with this exact range (any VNI, any owner) has its
+    /// prefixes rewritten in place — the prefix set of a range is the range, so nothing is ever
+    /// removed, and each upsert is atomic in the kernel, so a return packet always finds an owner.
+    /// Anything else is [`Self::add_neighbor_nat`], overlap check included. A failed upsert leaves
+    /// the block listed with a mix of old and new owners on its prefixes; the next replay, or the
+    /// next adopt, rewrites them all.
+    pub fn upsert_neighbor_nat(
+        &mut self,
+        vni: u32,
+        nat_ip: [u8; 4],
+        port_min: u16,
+        port_max: u16,
+        underlay: [u8; 16],
+    ) -> Result<(), NeighborNatError> {
+        if port_min >= port_max {
+            return Err(NeighborNatError::EmptyRange);
+        }
+        let key = (nat_ip, port_min);
+        let listed = self.neigh_nats.get(&key).map(|b| b.port_max) == Some(port_max);
+        if !listed {
+            return self.add_neighbor_nat(vni, nat_ip, port_min, port_max, underlay);
+        }
+        let b = NeighborNatEntry {
+            underlay,
+            nat_ip,
+            vni,
+            port_min,
+            port_max,
+            enabled: 1,
+            _pad: [0; 3],
+        };
+        for (plen, k, owner) in owner_prefixes4(&b) {
+            self.w.nat_owner_upsert(plen, k, owner)?;
+        }
+        self.neigh_nats.insert(key, b);
+        Ok(())
     }
 
     /// True if `[lo, hi)` on `nat_ip` overlaps a listed block. Blocks never overlap each other, so
@@ -417,6 +458,39 @@ impl<W: MapWriter> ControlCore<W> {
         })
     }
 
+    /// IPv6 sibling of [`Self::upsert_neighbor_nat`].
+    pub fn upsert_neighbor_nat6(
+        &mut self,
+        vni: u32,
+        nat_ip: [u8; 16],
+        port_min: u16,
+        port_max: u16,
+        underlay: [u8; 16],
+    ) -> Result<(), NeighborNatError> {
+        if port_min >= port_max {
+            return Err(NeighborNatError::EmptyRange);
+        }
+        let key = (nat_ip, port_min);
+        let listed = self.neigh_nats6.get(&key).map(|b| b.port_max) == Some(port_max);
+        if !listed {
+            return self.add_neighbor_nat6(vni, nat_ip, port_min, port_max, underlay);
+        }
+        let b = NeighborNat6Entry {
+            underlay,
+            nat_ip6: nat_ip,
+            vni,
+            port_min,
+            port_max,
+            enabled: 1,
+            _pad: [0; 3],
+        };
+        for (plen, k, owner) in owner_prefixes6(&b) {
+            self.w.nat_owner6_upsert(plen, k, owner)?;
+        }
+        self.neigh_nats6.insert(key, b);
+        Ok(())
+    }
+
     /// IPv6 sibling of [`Self::overlaps4`].
     fn overlaps6(&self, nat_ip: [u8; 16], lo: u16, hi: u16) -> bool {
         if let Some(((ip, _), b)) = self.neigh_nats6.range(..=(nat_ip, lo)).next_back() {
@@ -579,7 +653,8 @@ impl<W: MapWriter> ControlCore<W> {
     /// Adopt after a restart: the pinned owner tries survived, the block lists did not. Rebuild
     /// them from the tries' values (each prefix carries its whole block), then rewrite each
     /// block's full prefix set, since a crash between two prefix writes can leave a block partial.
-    /// A block a crash left half-withdrawn so comes back whole. Nothing here knows whether an
+    /// A block a crash left half-withdrawn so comes back whole, and a prefix no rebuilt block owns
+    /// is removed, so the invariant holds both ways. Nothing here knows whether an
     /// adopted block is still wanted: if the agent restarted too, it withdraws only what it
     /// installed itself, so a block withdrawn or reassigned while both were down stays listed
     /// (and refuses an overlapping successor) until a declarative sync replaces the set.
@@ -607,6 +682,21 @@ impl<W: MapWriter> ControlCore<W> {
             }
         }
         self.neigh_nats = v4;
+        // Every prefix in the trie must belong to a listed block. Adopt has just rebuilt the list
+        // from the trie, so anything left over came from an older decomposition or a writer
+        // outside this core (the lab CLI): remove it rather than relay traffic no block accounts
+        // for. Errors are ignored like the repairs above — the next adopt retries.
+        let want4: HashSet<(u32, NatOwnerKey)> = self
+            .neigh_nats
+            .values()
+            .flat_map(owner_prefixes4)
+            .map(|(p, k, _)| (p, k))
+            .collect();
+        for (plen, key, _) in self.w.nat_owner_entries() {
+            if !want4.contains(&(plen, key)) {
+                let _ = self.w.nat_owner_remove(plen, &key);
+            }
+        }
 
         let mut v6: std::collections::BTreeMap<BlockKey6, NeighborNat6Entry> = Default::default();
         for (_, key, o) in self.w.nat_owner6_entries() {
@@ -630,6 +720,17 @@ impl<W: MapWriter> ControlCore<W> {
             }
         }
         self.neigh_nats6 = v6;
+        let want6: HashSet<(u32, NatOwnerKey6)> = self
+            .neigh_nats6
+            .values()
+            .flat_map(owner_prefixes6)
+            .map(|(p, k, _)| (p, k))
+            .collect();
+        for (plen, key, _) in self.w.nat_owner6_entries() {
+            if !want6.contains(&(plen, key)) {
+                let _ = self.w.nat_owner6_remove(plen, &key);
+            }
+        }
     }
 }
 
@@ -1431,6 +1532,77 @@ mod neighbor_nat_tests {
         c.add_neighbor_nat(7, IP, 30000, 40000, [4; 16]).unwrap();
         c.add_neighbor_nat(7, [198, 51, 100, 1], 20000, 30000, [4; 16])
             .unwrap();
+        assert_counted(&c);
+    }
+
+    // A re-announce refreshes a block that is already there — the agent replays one on every
+    // reconnect. Rewriting its prefixes in place keeps the return path programmed throughout; the
+    // old delete-then-add left up to 30 prefixes missing in between.
+    #[test]
+    fn a_reannounce_rewrites_the_block_in_place() {
+        let mut c = ControlCore::new(MemMapWriter::default());
+        add(&mut c, block(IP, 7, 20000, 30000, 3));
+        // A removal of any of its prefixes would fail: the rewrite must not remove anything.
+        c.w.nat_owner_fault.remove = Some(nth(&block(IP, 7, 20000, 30000, 3), 0));
+        c.upsert_neighbor_nat(9, IP, 20000, 30000, [4; 16]).unwrap();
+        assert_eq!(stored(&c), prefixes(&[block(IP, 9, 20000, 30000, 4)]));
+        assert_counted(&c);
+    }
+
+    #[test]
+    fn a_v6_reannounce_rewrites_the_block_in_place() {
+        let mut c = ControlCore::new(MemMapWriter::default());
+        c.add_neighbor_nat6(7, IP6, 20000, 30000, [3; 16]).unwrap();
+        c.w.nat_owner6_fault.remove = Some(nth6(&block6(IP6, 7, 20000, 30000, 3), 0));
+        c.upsert_neighbor_nat6(9, IP6, 20000, 30000, [4; 16])
+            .unwrap();
+        assert_eq!(stored6(&c), prefixes6(&[block6(IP6, 9, 20000, 30000, 4)]));
+        assert_counted(&c);
+    }
+
+    // A block whose range does not exist yet is just an add — including the overlap refusal.
+    #[test]
+    fn an_upsert_of_a_new_range_is_an_add() {
+        let mut c = ControlCore::new(MemMapWriter::default());
+        c.upsert_neighbor_nat(7, IP, 20000, 30000, [3; 16]).unwrap();
+        assert_eq!(stored(&c), prefixes(&[block(IP, 7, 20000, 30000, 3)]));
+        assert!(matches!(
+            c.upsert_neighbor_nat(7, IP, 25000, 35000, [4; 16]),
+            Err(NeighborNatError::Overlap)
+        ));
+        c.upsert_neighbor_nat6(7, IP6, 20000, 30000, [3; 16])
+            .unwrap();
+        assert_eq!(stored6(&c), prefixes6(&[block6(IP6, 7, 20000, 30000, 3)]));
+        assert!(matches!(
+            c.upsert_neighbor_nat6(7, IP6, 25000, 35000, [4; 16]),
+            Err(NeighborNatError::Overlap)
+        ));
+        assert_counted(&c);
+    }
+
+    // Adopt rebuilds the blocks from the trie and repairs them — and now also removes what no
+    // rebuilt block owns, so a prefix left by an older decomposition or a foreign writer cannot
+    // keep relaying traffic that no listed block accounts for. Such a prefix carries a listed
+    // block's owner but sits at a port that block's decomposition never produces; one whose owner
+    // describes a block of its own is adopted AS that block, which is what adopt is for.
+    #[test]
+    fn adopt_removes_a_prefix_no_block_owns() {
+        let mut before = ControlCore::new(MemMapWriter::default());
+        add(&mut before, block(IP, 7, 20000, 30000, 3));
+        before
+            .add_neighbor_nat6(7, IP6, 20000, 30000, [3; 16])
+            .unwrap();
+        let (plen, mut key, owner) = owner_prefixes4(&block(IP, 7, 20000, 30000, 3))[0];
+        key.port = 40000u16.to_be_bytes();
+        before.w.nat_owner_upsert(plen, key, owner).unwrap();
+        let (plen6, mut key6, owner6) = owner_prefixes6(&block6(IP6, 7, 20000, 30000, 3))[0];
+        key6.port = 40000u16.to_be_bytes();
+        before.w.nat_owner6_upsert(plen6, key6, owner6).unwrap();
+
+        let mut c = ControlCore::new(before.w);
+        c.adopt_nat_owners();
+        assert_eq!(stored(&c), prefixes(&[block(IP, 7, 20000, 30000, 3)]));
+        assert_eq!(stored6(&c), prefixes6(&[block6(IP6, 7, 20000, 30000, 3)]));
         assert_counted(&c);
     }
 
