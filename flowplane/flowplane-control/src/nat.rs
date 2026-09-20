@@ -9,6 +9,7 @@
 use std::collections::HashSet;
 
 use crate::natowner::{owner_prefixes4, owner_prefixes6};
+use crate::ports::port_prefix_count;
 use crate::{ControlCore, CtFlushScope, CtFlushScope6, MapWriter, NeighborNatError};
 use flowplane_common::{
     NatKey, NatKey6, NatValue, NatValue6, NeighborNat6Entry, NeighborNatEntry, NAT_OWNERS_MAX,
@@ -470,14 +471,31 @@ impl<W: MapWriter> ControlCore<W> {
         v4: &[NeighborNatEntry],
         v6: &[NeighborNat6Entry],
     ) -> Result<ReplaceCounts, NeighborNatError> {
-        check_block_set(
-            v4.iter()
-                .map(|b| (b.nat_ip, b.port_min, b.port_max, owner_prefixes4(b).len())),
-        )?;
-        check_block_set(
-            v6.iter()
-                .map(|b| (b.nat_ip6, b.port_min, b.port_max, owner_prefixes6(b).len())),
-        )?;
+        // The empty range `check_block_set` refuses is guarded here too: it gets the count first,
+        // and `port_max - 1` would underflow on `port_max == 0`.
+        let count = |lo: u16, hi: u16| {
+            if lo >= hi {
+                0
+            } else {
+                port_prefix_count(lo, hi - 1)
+            }
+        };
+        check_block_set(v4.iter().map(|b| {
+            (
+                b.nat_ip,
+                b.port_min,
+                b.port_max,
+                count(b.port_min, b.port_max),
+            )
+        }))?;
+        check_block_set(v6.iter().map(|b| {
+            (
+                b.nat_ip6,
+                b.port_min,
+                b.port_max,
+                count(b.port_min, b.port_max),
+            )
+        }))?;
         let mut n = ReplaceCounts::default();
 
         let want4: HashSet<BlockId4> = v4.iter().map(id4).collect();
