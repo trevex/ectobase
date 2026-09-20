@@ -9,6 +9,7 @@ mod conntrack_gc;
 mod control;
 mod error;
 mod handlers;
+mod legacy_nat;
 mod loader;
 mod maps;
 mod node;
