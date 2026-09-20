@@ -646,14 +646,22 @@ impl<W: MapWriter> ControlCore<W> {
     /// them from the tries' values (each prefix carries its whole block), then rewrite each
     /// block's full prefix set, since a crash between two prefix writes can leave a block partial.
     /// A block a crash left half-withdrawn so comes back whole, and a prefix no rebuilt block owns
-    /// is removed, so the invariant holds both ways. Nothing here knows whether an
-    /// adopted block is still wanted: if the agent restarted too, it withdraws only what it
-    /// installed itself, so a block withdrawn or reassigned while both were down stays listed
-    /// (and refuses an overlapping successor) until a declarative sync replaces the set.
+    /// is removed, so the invariant holds both ways. Nothing here knows whether an adopted block is
+    /// still wanted: if the agent restarted too, it withdraws only what it installed itself, so a
+    /// block withdrawn or reassigned while both were down stays listed (and refuses an overlapping
+    /// successor) until a declarative sync replaces the set.
+    ///
+    /// A rebuilt list can hold blocks that overlap, which no listed set ever may: a prefix an
+    /// older decomposition or a writer outside this core left can describe a range starting inside
+    /// a real block. Those are dropped, keeping the one that starts first — arbitrary but
+    /// deterministic, and the next [`Self::replace_neighbor_nats`] corrects the set anyway.
     pub fn adopt_nat_owners(&mut self) {
+        // One walk per family: on the aya writer `nat_owner_entries` reads the whole trie by
+        // syscall, so the sweep below reuses this list rather than walking it again.
+        let walked4 = self.w.nat_owner_entries();
         // Each prefix repeats its block; the index dedups them by key as it is built.
         let mut v4: std::collections::BTreeMap<BlockKey4, NeighborNatEntry> = Default::default();
-        for (_, key, o) in self.w.nat_owner_entries() {
+        for (_, key, o) in &walked4 {
             let b = NeighborNatEntry {
                 underlay: o.underlay,
                 nat_ip: key.nat_ip,
@@ -663,6 +671,16 @@ impl<W: MapWriter> ControlCore<W> {
             };
             v4.insert((b.nat_ip, b.port_min), b);
         }
+        // The map is sorted by (nat_ip, port_min), so one pass over neighbours finds every block
+        // that starts inside the last one kept on its nat_ip.
+        let mut prev: Option<([u8; 4], u16)> = None; // (nat_ip, port_max)
+        v4.retain(|(ip, start), b| {
+            let keep = !matches!(prev, Some((p_ip, p_max)) if p_ip == *ip && *start < p_max);
+            if keep {
+                prev = Some((*ip, b.port_max));
+            }
+            keep
+        });
         self.nat_owner_count4 = 0;
         for b in v4.values() {
             let entries = owner_prefixes4(b);
@@ -673,23 +691,27 @@ impl<W: MapWriter> ControlCore<W> {
         }
         self.neigh_nats = v4;
         // Every prefix in the trie must belong to a listed block. Adopt has just rebuilt the list
-        // from the trie, so anything left over came from an older decomposition or a writer
-        // outside this core (the lab CLI): remove it rather than relay traffic no block accounts
-        // for. Errors are ignored like the repairs above — the next adopt retries.
+        // from the trie, so anything left over came from an older decomposition, a writer outside
+        // this core (the lab CLI), or a block the overlap pass dropped: remove it rather than
+        // relay traffic no block accounts for. Errors are ignored like the repairs above — the
+        // next adopt retries. Sweeping the walk instead of re-reading the trie is the same set of
+        // candidates: the repairs only ever wrote keys that are in `want4`, so none of them can be
+        // one, and a dropped block's prefixes are still in the walk.
         let want4: HashSet<(u32, NatOwnerKey)> = self
             .neigh_nats
             .values()
             .flat_map(owner_prefixes4)
             .map(|(p, k, _)| (p, k))
             .collect();
-        for (plen, key, _) in self.w.nat_owner_entries() {
+        for (plen, key, _) in walked4 {
             if !want4.contains(&(plen, key)) {
                 let _ = self.w.nat_owner_remove(plen, &key);
             }
         }
 
+        let walked6 = self.w.nat_owner6_entries();
         let mut v6: std::collections::BTreeMap<BlockKey6, NeighborNat6Entry> = Default::default();
-        for (_, key, o) in self.w.nat_owner6_entries() {
+        for (_, key, o) in &walked6 {
             let b = NeighborNat6Entry {
                 underlay: o.underlay,
                 nat_ip6: key.nat_ip6,
@@ -699,6 +721,14 @@ impl<W: MapWriter> ControlCore<W> {
             };
             v6.insert((b.nat_ip6, b.port_min), b);
         }
+        let mut prev6: Option<([u8; 16], u16)> = None;
+        v6.retain(|(ip, start), b| {
+            let keep = !matches!(prev6, Some((p_ip, p_max)) if p_ip == *ip && *start < p_max);
+            if keep {
+                prev6 = Some((*ip, b.port_max));
+            }
+            keep
+        });
         self.nat_owner_count6 = 0;
         for b in v6.values() {
             let entries = owner_prefixes6(b);
@@ -714,7 +744,7 @@ impl<W: MapWriter> ControlCore<W> {
             .flat_map(owner_prefixes6)
             .map(|(p, k, _)| (p, k))
             .collect();
-        for (plen, key, _) in self.w.nat_owner6_entries() {
+        for (plen, key, _) in walked6 {
             if !want6.contains(&(plen, key)) {
                 let _ = self.w.nat_owner6_remove(plen, &key);
             }
@@ -1588,6 +1618,83 @@ mod neighbor_nat_tests {
         assert_eq!(stored(&c), prefixes(&[block(IP, 7, 20000, 30000, 3)]));
         assert_eq!(stored6(&c), prefixes6(&[block6(IP6, 7, 20000, 30000, 3)]));
         assert_counted(&c);
+    }
+
+    // Adopt rebuilds the block list from the trie's values, so a prefix a foreign writer left —
+    // the lab CLI writes NAT_OWNERS directly — can describe a range starting inside a real block
+    // and become a second, overlapping listed block. That breaks the invariant the overlap check
+    // rests on (blocks never overlap on one nat_ip), and a later add lands inside a listed block.
+    // Adopt keeps the one that starts first and sweeps the other's prefixes.
+    #[test]
+    fn adopt_never_lists_two_overlapping_blocks() {
+        let mut before = ControlCore::new(MemMapWriter::default());
+        let real = block(IP, 7, 20000, 30000, 3);
+        add(&mut before, real);
+        let (plen, mut key, _) = owner_prefixes4(&real)[0];
+        key.port = 25000u16.to_be_bytes();
+        before
+            .w
+            .nat_owner_upsert(
+                plen,
+                key,
+                NatOwner {
+                    underlay: [9; 16],
+                    vni: 7,
+                    port_min: 25000,
+                    port_max: 26000,
+                },
+            )
+            .unwrap();
+
+        let mut c = ControlCore::new(before.w);
+        c.adopt_nat_owners();
+        assert_eq!(c.neigh_nats.len(), 1, "one block listed");
+        assert_eq!(stored(&c), prefixes(&[real]));
+        assert_counted(&c);
+        assert!(
+            matches!(
+                c.add_neighbor_nat(7, IP, 29000, 29500, [4; 16]),
+                Err(NeighborNatError::Overlap)
+            ),
+            "an add inside the surviving block is still refused"
+        );
+    }
+
+    #[test]
+    fn adopt_never_lists_two_overlapping_v6_blocks() {
+        let mut before = ControlCore::new(MemMapWriter::default());
+        let real = block6(IP6, 7, 20000, 30000, 3);
+        before
+            .add_neighbor_nat6(7, IP6, 20000, 30000, [3; 16])
+            .unwrap();
+        let (plen, mut key, _) = owner_prefixes6(&real)[0];
+        key.port = 25000u16.to_be_bytes();
+        before
+            .w
+            .nat_owner6_upsert(
+                plen,
+                key,
+                NatOwner {
+                    underlay: [9; 16],
+                    vni: 7,
+                    port_min: 25000,
+                    port_max: 26000,
+                },
+            )
+            .unwrap();
+
+        let mut c = ControlCore::new(before.w);
+        c.adopt_nat_owners();
+        assert_eq!(c.neigh_nats6.len(), 1, "one block listed");
+        assert_eq!(stored6(&c), prefixes6(&[real]));
+        assert_counted(&c);
+        assert!(
+            matches!(
+                c.add_neighbor_nat6(7, IP6, 29000, 29500, [4; 16]),
+                Err(NeighborNatError::Overlap)
+            ),
+            "an add inside the surviving block is still refused"
+        );
     }
 
     // Deleting names the block by (vni, nat_ip, range): a different VNI or a different end is a
