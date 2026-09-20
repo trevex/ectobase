@@ -16,6 +16,7 @@ use std::path::Path;
 
 use aya::maps::{Array, HashMap as AyaHashMap, MapData};
 use flowplane_common::{NeighborNat6Entry, NeighborNatEntry};
+use flowplane_control::{ControlCore, MapWriter};
 
 /// The retired `NEIGHBOR_NAT` value, byte for byte as the build that pinned it wrote it. The live
 /// [`NeighborNatEntry`] is a plain record now (no `repr(C)`, no `Pod`) and is free to change
@@ -170,9 +171,44 @@ fn blocks6(count: u32, slots: &HashMap<u32, LegacyNeighborNat6>) -> Vec<Neighbor
         .collect()
 }
 
+/// Install migrated blocks into the tries, returning how many landed. Call AFTER
+/// `adopt_nat_owners()`: adopt rebuilds the block list from the tries, which are the newer truth,
+/// so a legacy block that clashes with one of those is the stale copy and is skipped. An upsert
+/// is used rather than an add so a block adopt already rebuilt with this exact range is refreshed
+/// in place — with what the retired table recorded — instead of being refused as an overlap.
+pub(crate) fn install<W: MapWriter>(core: &mut ControlCore<W>, blocks: LegacyBlocks) -> usize {
+    let mut n = 0;
+    for b in blocks.v4 {
+        match core.upsert_neighbor_nat(b.vni, b.nat_ip, b.port_min, b.port_max, b.underlay) {
+            Ok(()) => n += 1,
+            Err(e) => eprintln!(
+                "migrate: neighbor-NAT block {}:{}..{} (vni {}): {e}",
+                std::net::Ipv4Addr::from(b.nat_ip),
+                b.port_min,
+                b.port_max,
+                b.vni
+            ),
+        }
+    }
+    for b in blocks.v6 {
+        match core.upsert_neighbor_nat6(b.vni, b.nat_ip6, b.port_min, b.port_max, b.underlay) {
+            Ok(()) => n += 1,
+            Err(e) => eprintln!(
+                "migrate: neighbor-NAT6 block [{}]:{}..{} (vni {}): {e}",
+                std::net::Ipv6Addr::from(b.nat_ip6),
+                b.port_min,
+                b.port_max,
+                b.vni
+            ),
+        }
+    }
+    n
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flowplane_control::mem::MemMapWriter;
     use std::collections::HashMap;
     use std::mem::{align_of, offset_of, size_of};
 
@@ -306,5 +342,71 @@ mod tests {
         let got = blocks6(1, &slots);
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].nat_ip6, [1; 16]);
+    }
+
+    fn block4(nat_ip: [u8; 4], port_min: u16, port_max: u16) -> NeighborNatEntry {
+        NeighborNatEntry {
+            underlay: [7; 16],
+            nat_ip,
+            vni: 9,
+            port_min,
+            port_max,
+        }
+    }
+
+    #[test]
+    fn an_installed_block_owns_its_prefixes() {
+        let mut core = ControlCore::new(MemMapWriter::default());
+        let n = install(
+            &mut core,
+            LegacyBlocks {
+                v4: vec![block4([203, 0, 113, 5], 1024, 2048)],
+                v6: vec![],
+            },
+        );
+        assert_eq!(n, 1);
+        // The block is listed, so a block overlapping it is now refused.
+        assert!(core
+            .add_neighbor_nat(9, [203, 0, 113, 5], 1500, 1600, [7; 16])
+            .is_err());
+    }
+
+    /// Adopt runs first and owns the tries; a legacy block that clashes with what adopt rebuilt is
+    /// the stale copy, so it is skipped rather than allowed to break the non-overlap invariant.
+    #[test]
+    fn a_block_that_clashes_with_an_adopted_one_is_skipped() {
+        let mut core = ControlCore::new(MemMapWriter::default());
+        core.add_neighbor_nat(9, [203, 0, 113, 5], 1024, 2048, [1; 16])
+            .expect("the adopted block");
+        let n = install(
+            &mut core,
+            LegacyBlocks {
+                v4: vec![block4([203, 0, 113, 5], 1500, 2500)],
+                v6: vec![],
+            },
+        );
+        assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn an_installed_v6_block_owns_its_prefixes() {
+        let mut core = ControlCore::new(MemMapWriter::default());
+        let n = install(
+            &mut core,
+            LegacyBlocks {
+                v4: vec![],
+                v6: vec![NeighborNat6Entry {
+                    underlay: [7; 16],
+                    nat_ip6: [1; 16],
+                    vni: 9,
+                    port_min: 1024,
+                    port_max: 2048,
+                }],
+            },
+        );
+        assert_eq!(n, 1);
+        assert!(core
+            .add_neighbor_nat6(9, [1; 16], 1500, 1600, [7; 16])
+            .is_err());
     }
 }

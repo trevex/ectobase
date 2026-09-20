@@ -20,6 +20,15 @@ impl Control {
         adopt: bool,
         pin_links: bool,
     ) -> anyhow::Result<Self> {
+        // The retired 64-slot neighbor-NAT tables, if this node is upgrading across NAT return
+        // scaling Increment 1. Read BEFORE the loader, which unpins them (`RETIRED_PINNED_MAPS`);
+        // the blocks are installed after adopt below. Only on an adopt: a fresh bring-up is
+        // deliberately starting from nothing, and inheriting an old table would contradict that.
+        let legacy = if adopt {
+            crate::legacy_nat::take(pin_dir)
+        } else {
+            crate::legacy_nat::LegacyBlocks::default()
+        };
         let mut ebpf = loader::load_ebpf(pin_dir)?;
         loader::maybe_install_logger(&mut ebpf);
         // Bring up the node-wide `collect_md` Geneve device (the overlay encap target). Idempotent
@@ -208,6 +217,12 @@ impl Control {
             // Likewise the neighbor-NAT blocks in the pinned `NAT_OWNERS{,6}` tries: rebuild their
             // lists (repairing any a crash left partial) so a withdraw or overlap check sees them.
             inner.core.adopt_nat_owners();
+            // Blocks the retired slot table still held. Adopt has just rebuilt the tries' own
+            // blocks, so these fill in only what this build never saw.
+            if !legacy.is_empty() {
+                let n = crate::legacy_nat::install(&mut inner.core, legacy);
+                eprintln!("migrate: {n} neighbor-NAT block(s) from the retired slot table");
+            }
             let recovered = Self::rebuild_from_maps(&mut inner)?;
             eprintln!(
                 "adopt: recovered {} interface(s) from pinned maps",
