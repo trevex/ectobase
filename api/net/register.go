@@ -42,6 +42,8 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 		&LBPoolList{},
 		&IPPool{},
 		&IPPoolList{},
+		&IPAllocation{},
+		&IPAllocationList{},
 		&NetworkInterface{},
 		&NetworkInterfaceList{},
 		&FirewallPolicy{},

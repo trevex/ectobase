@@ -9,6 +9,15 @@ type LocalObjectReference struct {
 	Name string `json:"name" protobuf:"bytes,1,opt,name=name"`
 }
 
+// TypedLocalObjectReference references an object by kind and name within the same namespace.
+// Kind alone (no group) because every consumer of one lives in net.ectobase.dev.
+type TypedLocalObjectReference struct {
+	// Kind is the kind of the referenced object.
+	Kind string `json:"kind" protobuf:"bytes,1,opt,name=kind"`
+	// Name is the name of the referenced object.
+	Name string `json:"name" protobuf:"bytes,2,opt,name=name"`
+}
+
 // PortType is the kind of dataplane port backing a NetworkInterface.
 // +kubebuilder:validation:Enum=tap;vf
 type PortType string

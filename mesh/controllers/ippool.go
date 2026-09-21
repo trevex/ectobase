@@ -10,6 +10,7 @@ import (
 	"net/netip"
 
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
@@ -42,11 +43,11 @@ func (r *IPPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 // pool-scoped (<pool>-<address>). Nothing below the pool can see that mistake.
 func (r *IPPoolReconciler) Sync(ctx context.Context, p *netv1.IPPool) error {
 	if !validIPPoolType(p.Spec.Type) {
-		return r.setState(ctx, p, "Invalid", 0)
+		return r.setState(ctx, p, "Invalid", 0, 0)
 	}
 	v4, v6, perr := parsePoolPrefixes(p)
 	if perr != nil {
-		return r.setState(ctx, p, "Invalid", 0)
+		return r.setState(ctx, p, "Invalid", 0, 0)
 	}
 
 	var list netv1.IPPoolList
@@ -66,10 +67,34 @@ func (r *IPPoolReconciler) Sync(ctx context.Context, p *netv1.IPPool) error {
 		// (first writer wins); this keeps the resolution deterministic regardless of
 		// which pool reconciles first.
 		if (overlaps(v4, ov4) || overlaps(v6, ov6)) && ipPoolPrecedes(o, p) {
-			return r.setState(ctx, p, "Conflict", 0)
+			return r.setState(ctx, p, "Conflict", 0, 0)
 		}
 	}
-	return r.setState(ctx, p, "Ready", poolTotal(v4, v6))
+	allocated, err := r.countAllocations(ctx, p)
+	if err != nil {
+		return err
+	}
+	return r.setState(ctx, p, "Ready", poolTotal(v4, v6), allocated)
+}
+
+// countAllocations fills the Allocated convenience counter by label-listing the pool's
+// IPAllocations. It is derived and reported for operators only: no allocator ever reads it
+// back, because a counter cannot tell you WHICH addresses are free, and a stale one would be
+// a licence to double-allocate.
+func (r *IPPoolReconciler) countAllocations(ctx context.Context, p *netv1.IPPool) (int32, error) {
+	var list netv1.IPAllocationList
+	if err := r.APIReader.List(ctx, &list, client.InNamespace(p.Namespace),
+		client.MatchingLabels{netv1.PoolLabel: p.Name}); err != nil {
+		return 0, fmt.Errorf("list ipallocations for pool %s: %w", p.Name, err)
+	}
+	var n int32
+	for i := range list.Items {
+		// The label is an index, not a fact — spec.poolRef is what the object claims.
+		if list.Items[i].Spec.PoolRef.Name == p.Name {
+			n++
+		}
+	}
+	return n, nil
 }
 
 // validIPPoolType mirrors the v1alpha1 kubebuilder enum. The CRD rejects anything else on
@@ -128,9 +153,10 @@ func ipPoolPrecedes(a, b *netv1.IPPool) bool {
 	return a.UID < b.UID
 }
 
-func (r *IPPoolReconciler) setState(ctx context.Context, p *netv1.IPPool, state string, total int32) error {
+func (r *IPPoolReconciler) setState(ctx context.Context, p *netv1.IPPool, state string, total, allocated int32) error {
 	p.Status.State = state
 	p.Status.Total = total
+	p.Status.Allocated = allocated
 	if err := r.Client.Status().Update(ctx, p); err != nil {
 		return fmt.Errorf("update ippool status: %w", err)
 	}
@@ -144,6 +170,9 @@ func (r *IPPoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&netv1.IPPool{}).
 		Watches(&netv1.IPPool{}, r.siblingPools()).
+		// Keeps the Allocated counter roughly live. It is a display value, so a missed
+		// event costs an operator a stale number until the next resync, nothing more.
+		Watches(&netv1.IPAllocation{}, r.poolOfAllocation()).
 		WithOptions(controller.Options{MaxConcurrentReconciles: 1}).
 		Complete(r)
 }
@@ -170,5 +199,19 @@ func (r *IPPoolReconciler) siblingPools() handler.EventHandler {
 			reqs = append(reqs, reconcile.Request{NamespacedName: keyOf(o)})
 		}
 		return reqs
+	})
+}
+
+// poolOfAllocation enqueues the IPPool an IPAllocation names, so the Allocated counter
+// follows claims and releases instead of only the resync.
+func (r *IPPoolReconciler) poolOfAllocation() handler.EventHandler {
+	return handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {
+		alloc, ok := obj.(*netv1.IPAllocation)
+		if !ok || alloc.Spec.PoolRef.Name == "" {
+			return nil
+		}
+		return []reconcile.Request{{NamespacedName: types.NamespacedName{
+			Namespace: alloc.Namespace, Name: alloc.Spec.PoolRef.Name,
+		}}}
 	})
 }

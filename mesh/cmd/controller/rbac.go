@@ -21,6 +21,12 @@ package main
 //+kubebuilder:rbac:groups=net.ectobase.dev,resources=lbpools/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=net.ectobase.dev,resources=ippools,verbs=get;list;watch
 //+kubebuilder:rbac:groups=net.ectobase.dev,resources=ippools/status,verbs=get;update;patch
+// IPAllocation is the allocation record itself: the allocator CREATEs one per address (the
+// create IS the claim, which is why it needs more than read here) and DELETEs the one it
+// supersedes when its own consumer is repointed at a different address. Reclamation on
+// consumer deletion is Kubernetes garbage collection via the ownerReference, not a delete
+// issued here.
+//+kubebuilder:rbac:groups=net.ectobase.dev,resources=ipallocations,verbs=get;list;watch;create;delete
 //+kubebuilder:rbac:groups=net.ectobase.dev,resources=vpcs,verbs=get;list;watch
 //+kubebuilder:rbac:groups=net.ectobase.dev,resources=vpcs/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=net.ectobase.dev,resources=vpcpeerings,verbs=get;list;watch

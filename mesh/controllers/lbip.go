@@ -57,7 +57,7 @@ func (r *LoadBalancerIPReconciler) Sync(ctx context.Context, lb *netv1.LoadBalan
 		}
 		pinned = &a
 	}
-	prefix, err := poolPrefixFor(&pool, pinned)
+	prefix, err := lbPoolPrefixFor(&pool, pinned)
 	if err != nil {
 		return r.setState(ctx, lb, "Invalid", "")
 	}
@@ -97,29 +97,9 @@ func (r *LoadBalancerIPReconciler) Sync(ctx context.Context, lb *netv1.LoadBalan
 	return r.setState(ctx, lb, "Allocated", lbIP.String())
 }
 
-// stickyOrLowest keeps the previously-allocated LB address if it is still valid and
-// free, otherwise falls back to the lowest free address in the prefix.
-func stickyOrLowest(prefix netip.Prefix, preferred *netip.Addr, used map[netip.Addr]struct{}, resv []netip.Addr) (netip.Addr, bool) {
-	if preferred != nil && allocator.InPrefix(prefix, *preferred) {
-		if _, taken := used[*preferred]; !taken {
-			blocked := false
-			for _, x := range resv {
-				if x == *preferred {
-					blocked = true
-					break
-				}
-			}
-			if !blocked {
-				return *preferred, true
-			}
-		}
-	}
-	return allocator.LowestFree(prefix, used, resv)
-}
-
-// poolPrefixFor returns the pool prefix matching a pinned LB address's family, or the
+// lbPoolPrefixFor returns the pool prefix matching a pinned LB address's family, or the
 // pool's single prefix (preferring v4) when unpinned.
-func poolPrefixFor(p *netv1.LBPool, pinned *netip.Addr) (netip.Prefix, error) {
+func lbPoolPrefixFor(p *netv1.LBPool, pinned *netip.Addr) (netip.Prefix, error) {
 	var v4, v6 *netip.Prefix
 	if p.Spec.V4Prefix != nil {
 		pre, err := netip.ParsePrefix(*p.Spec.V4Prefix)

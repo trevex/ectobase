@@ -73,6 +73,9 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		netv1alpha1.FloatingIPList{}.OpenAPIModelName():              schema_ectobase_api_net_v1alpha1_FloatingIPList(ref),
 		netv1alpha1.FloatingIPSpec{}.OpenAPIModelName():              schema_ectobase_api_net_v1alpha1_FloatingIPSpec(ref),
 		netv1alpha1.FloatingIPStatus{}.OpenAPIModelName():            schema_ectobase_api_net_v1alpha1_FloatingIPStatus(ref),
+		netv1alpha1.IPAllocation{}.OpenAPIModelName():                schema_ectobase_api_net_v1alpha1_IPAllocation(ref),
+		netv1alpha1.IPAllocationList{}.OpenAPIModelName():            schema_ectobase_api_net_v1alpha1_IPAllocationList(ref),
+		netv1alpha1.IPAllocationSpec{}.OpenAPIModelName():            schema_ectobase_api_net_v1alpha1_IPAllocationSpec(ref),
 		netv1alpha1.IPPool{}.OpenAPIModelName():                      schema_ectobase_api_net_v1alpha1_IPPool(ref),
 		netv1alpha1.IPPoolList{}.OpenAPIModelName():                  schema_ectobase_api_net_v1alpha1_IPPoolList(ref),
 		netv1alpha1.IPPoolSpec{}.OpenAPIModelName():                  schema_ectobase_api_net_v1alpha1_IPPoolSpec(ref),
@@ -103,6 +106,7 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		netv1alpha1.SubnetList{}.OpenAPIModelName():                  schema_ectobase_api_net_v1alpha1_SubnetList(ref),
 		netv1alpha1.SubnetSpec{}.OpenAPIModelName():                  schema_ectobase_api_net_v1alpha1_SubnetSpec(ref),
 		netv1alpha1.SubnetStatus{}.OpenAPIModelName():                schema_ectobase_api_net_v1alpha1_SubnetStatus(ref),
+		netv1alpha1.TypedLocalObjectReference{}.OpenAPIModelName():   schema_ectobase_api_net_v1alpha1_TypedLocalObjectReference(ref),
 		netv1alpha1.VPC{}.OpenAPIModelName():                         schema_ectobase_api_net_v1alpha1_VPC(ref),
 		netv1alpha1.VPCList{}.OpenAPIModelName():                     schema_ectobase_api_net_v1alpha1_VPCList(ref),
 		netv1alpha1.VPCPeering{}.OpenAPIModelName():                  schema_ectobase_api_net_v1alpha1_VPCPeering(ref),
@@ -2647,6 +2651,134 @@ func schema_ectobase_api_net_v1alpha1_FloatingIPStatus(ref common.ReferenceCallb
 	}
 }
 
+func schema_ectobase_api_net_v1alpha1_IPAllocation(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "IPAllocation is one address held out of one IPPool. It is created by the consumer's allocator and reclaimed by Kubernetes garbage collection when its ownerReference's consumer is deleted.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"kind": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"apiVersion": {
+						SchemaProps: spec.SchemaProps{
+							Description: "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"metadata": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref(metav1.ObjectMeta{}.OpenAPIModelName()),
+						},
+					},
+					"spec": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref(netv1alpha1.IPAllocationSpec{}.OpenAPIModelName()),
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			netv1alpha1.IPAllocationSpec{}.OpenAPIModelName(), metav1.ObjectMeta{}.OpenAPIModelName()},
+	}
+}
+
+func schema_ectobase_api_net_v1alpha1_IPAllocationList(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "IPAllocationList is a list of IPAllocation objects.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"kind": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"apiVersion": {
+						SchemaProps: spec.SchemaProps{
+							Description: "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"metadata": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref(metav1.ListMeta{}.OpenAPIModelName()),
+						},
+					},
+					"items": {
+						SchemaProps: spec.SchemaProps{
+							Type: []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref(netv1alpha1.IPAllocation{}.OpenAPIModelName()),
+									},
+								},
+							},
+						},
+					},
+				},
+				Required: []string{"items"},
+			},
+		},
+		Dependencies: []string{
+			netv1alpha1.IPAllocation{}.OpenAPIModelName(), metav1.ListMeta{}.OpenAPIModelName()},
+	}
+}
+
+func schema_ectobase_api_net_v1alpha1_IPAllocationSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "IPAllocationSpec is the desired state of an IPAllocation.\n\nThere is no status: the object's EXISTENCE is the state. Its name is derived from (pool, address) and object names are unique within a namespace, which makes Create a compare-and-swap — two allocators racing for one address cannot both succeed, without either of them assuming it is the only writer.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"poolRef": {
+						SchemaProps: spec.SchemaProps{
+							Description: "PoolRef is the IPPool this address came from.",
+							Default:     map[string]interface{}{},
+							Ref:         ref(netv1alpha1.LocalObjectReference{}.OpenAPIModelName()),
+						},
+					},
+					"address": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Address is the allocated address, canonical form.",
+							Default:     "",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"consumerRef": {
+						SchemaProps: spec.SchemaProps{
+							Description: "ConsumerRef records who asked for it, for humans and diagnostics. The authoritative lifetime link is the ownerReference, not this field.",
+							Default:     map[string]interface{}{},
+							Ref:         ref(netv1alpha1.TypedLocalObjectReference{}.OpenAPIModelName()),
+						},
+					},
+				},
+				Required: []string{"poolRef", "address", "consumerRef"},
+			},
+		},
+		Dependencies: []string{
+			netv1alpha1.LocalObjectReference{}.OpenAPIModelName(), netv1alpha1.TypedLocalObjectReference{}.OpenAPIModelName()},
+	}
+}
+
 func schema_ectobase_api_net_v1alpha1_IPPool(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
@@ -3995,6 +4127,36 @@ func schema_ectobase_api_net_v1alpha1_SubnetStatus(ref common.ReferenceCallback)
 						},
 					},
 				},
+			},
+		},
+	}
+}
+
+func schema_ectobase_api_net_v1alpha1_TypedLocalObjectReference(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "TypedLocalObjectReference references an object by kind and name within the same namespace. Kind alone (no group) because every consumer of one lives in net.ectobase.dev.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"kind": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Kind is the kind of the referenced object.",
+							Default:     "",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"name": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Name is the name of the referenced object.",
+							Default:     "",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+				},
+				Required: []string{"kind", "name"},
 			},
 		},
 	}

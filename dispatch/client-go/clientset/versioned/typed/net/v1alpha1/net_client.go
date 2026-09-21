@@ -14,6 +14,7 @@ type NetV1alpha1Interface interface {
 	RESTClient() rest.Interface
 	FirewallPoliciesGetter
 	FloatingIPsGetter
+	IPAllocationsGetter
 	IPPoolsGetter
 	LBPoolsGetter
 	LoadBalancersGetter
@@ -35,6 +36,10 @@ func (c *NetV1alpha1Client) FirewallPolicies(namespace string) FirewallPolicyInt
 
 func (c *NetV1alpha1Client) FloatingIPs(namespace string) FloatingIPInterface {
 	return newFloatingIPs(c, namespace)
+}
+
+func (c *NetV1alpha1Client) IPAllocations(namespace string) IPAllocationInterface {
+	return newIPAllocations(c, namespace)
 }
 
 func (c *NetV1alpha1Client) IPPools(namespace string) IPPoolInterface {

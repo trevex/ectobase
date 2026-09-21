@@ -1421,6 +1421,91 @@ renders (ebpf clab):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+      name: ipallocations.net.ectobase.dev
+    spec:
+      group: net.ectobase.dev
+      names:
+        kind: IPAllocation
+        listKind: IPAllocationList
+        plural: ipallocations
+        singular: ipallocation
+      scope: Namespaced
+      versions:
+        - name: v1alpha1
+          schema:
+            openAPIV3Schema:
+              description: |-
+                IPAllocation is one address held out of one IPPool. It is created by the consumer's
+                allocator and reclaimed by Kubernetes garbage collection when its ownerReference's
+                consumer is deleted.
+              properties:
+                apiVersion:
+                  description: |-
+                    APIVersion defines the versioned schema of this representation of an object.
+                    Servers should convert recognized schemas to the latest internal value, and
+                    may reject unrecognized values.
+                    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+                  type: string
+                kind:
+                  description: |-
+                    Kind is a string value representing the REST resource this object represents.
+                    Servers may infer this from the endpoint the client submits requests to.
+                    Cannot be updated.
+                    In CamelCase.
+                    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+                  type: string
+                metadata:
+                  type: object
+                spec:
+                  description: |-
+                    IPAllocationSpec is the desired state of an IPAllocation.
+
+                    There is no status: the object's EXISTENCE is the state. Its name is derived from
+                    (pool, address) and object names are unique within a namespace, which makes Create a
+                    compare-and-swap — two allocators racing for one address cannot both succeed, without
+                    either of them assuming it is the only writer.
+                  properties:
+                    address:
+                      description: Address is the allocated address, canonical form.
+                      type: string
+                    consumerRef:
+                      description: |-
+                        ConsumerRef records who asked for it, for humans and diagnostics. The authoritative
+                        lifetime link is the ownerReference, not this field.
+                      properties:
+                        kind:
+                          description: Kind is the kind of the referenced object.
+                          type: string
+                        name:
+                          description: Name is the name of the referenced object.
+                          type: string
+                      required:
+                        - kind
+                        - name
+                      type: object
+                    poolRef:
+                      description: PoolRef is the IPPool this address came from.
+                      properties:
+                        name:
+                          description: Name is the name of the referenced object.
+                          type: string
+                      required:
+                        - name
+                      type: object
+                  required:
+                    - address
+                    - consumerRef
+                    - poolRef
+                  type: object
+              type: object
+          served: true
+          storage: true
+  15: |
+    apiVersion: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    metadata:
+      annotations:
+        controller-gen.kubebuilder.io/version: v0.20.1
       name: ippools.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -1500,7 +1585,7 @@ renders (ebpf clab):
           storage: true
           subresources:
             status: {}
-  15: |
+  16: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -1569,7 +1654,7 @@ renders (ebpf clab):
           storage: true
           subresources:
             status: {}
-  16: |
+  17: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -1730,7 +1815,7 @@ renders (ebpf clab):
           storage: true
           subresources:
             status: {}
-  17: |
+  18: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -1840,7 +1925,7 @@ renders (ebpf clab):
           storage: true
           subresources:
             status: {}
-  18: |
+  19: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -2081,7 +2166,7 @@ renders (ebpf clab):
           storage: true
           subresources:
             status: {}
-  19: |
+  20: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -2165,7 +2250,7 @@ renders (ebpf clab):
           storage: true
           subresources:
             status: {}
-  20: |
+  21: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -2258,7 +2343,7 @@ renders (ebpf clab):
           storage: true
           subresources:
             status: {}
-  21: |
+  22: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -2394,7 +2479,7 @@ renders (ebpf clab):
           storage: true
           subresources:
             status: {}
-  22: |
+  23: |
     apiVersion: apps/v1
     kind: DaemonSet
     metadata:
@@ -2510,7 +2595,7 @@ renders (ebpf clab):
                 path: /var/run/netns
                 type: DirectoryOrCreate
               name: netns
-  23: |
+  24: |
     apiVersion: k8s.cni.cncf.io/v1
     kind: NetworkAttachmentDefinition
     metadata:
@@ -2527,7 +2612,7 @@ renders (ebpf clab):
             }
           ]
         }
-  24: |
+  25: |
     apiVersion: k8s.cni.cncf.io/v1
     kind: NetworkAttachmentDefinition
     metadata:
@@ -2545,7 +2630,7 @@ renders (ebpf clab):
             }
           ]
         }
-  25: |
+  26: |
     apiVersion: apps/v1
     kind: Deployment
     metadata:
@@ -2578,13 +2663,13 @@ renders (ebpf clab):
                   cpu: 50m
                   memory: 64Mi
           serviceAccountName: pod-materializer
-  26: |
+  27: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: mesh-agent
       namespace: ectobase-system
-  27: |
+  28: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -2628,7 +2713,7 @@ renders (ebpf clab):
           - get
           - list
           - watch
-  28: |
+  29: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -2641,13 +2726,13 @@ renders (ebpf clab):
       - kind: ServiceAccount
         name: mesh-agent
         namespace: ectobase-system
-  29: |
+  30: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: dispatch-broker
       namespace: ectobase-system
-  30: |
+  31: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -2698,7 +2783,7 @@ renders (ebpf clab):
           - get
           - list
           - watch
-  31: |
+  32: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -2711,13 +2796,13 @@ renders (ebpf clab):
       - kind: ServiceAccount
         name: dispatch-broker
         namespace: ectobase-system
-  32: |
+  33: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: pod-materializer
       namespace: ectobase-system
-  33: |
+  34: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -2754,7 +2839,7 @@ renders (ebpf clab):
           - get
           - patch
           - update
-  34: |
+  35: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -2767,7 +2852,7 @@ renders (ebpf clab):
       - kind: ServiceAccount
         name: pod-materializer
         namespace: ectobase-system
-  35: |
+  36: |
     apiVersion: cert-manager.io/v1
     kind: Issuer
     metadata:
@@ -2779,7 +2864,7 @@ renders (ebpf clab):
     spec:
       ca:
         secretName: ectobase-pool-ca
-  36: |
+  37: |
     apiVersion: cert-manager.io/v1
     kind: Certificate
     metadata:
@@ -4226,6 +4311,91 @@ renders (ebpf hw):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+      name: ipallocations.net.ectobase.dev
+    spec:
+      group: net.ectobase.dev
+      names:
+        kind: IPAllocation
+        listKind: IPAllocationList
+        plural: ipallocations
+        singular: ipallocation
+      scope: Namespaced
+      versions:
+        - name: v1alpha1
+          schema:
+            openAPIV3Schema:
+              description: |-
+                IPAllocation is one address held out of one IPPool. It is created by the consumer's
+                allocator and reclaimed by Kubernetes garbage collection when its ownerReference's
+                consumer is deleted.
+              properties:
+                apiVersion:
+                  description: |-
+                    APIVersion defines the versioned schema of this representation of an object.
+                    Servers should convert recognized schemas to the latest internal value, and
+                    may reject unrecognized values.
+                    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+                  type: string
+                kind:
+                  description: |-
+                    Kind is a string value representing the REST resource this object represents.
+                    Servers may infer this from the endpoint the client submits requests to.
+                    Cannot be updated.
+                    In CamelCase.
+                    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+                  type: string
+                metadata:
+                  type: object
+                spec:
+                  description: |-
+                    IPAllocationSpec is the desired state of an IPAllocation.
+
+                    There is no status: the object's EXISTENCE is the state. Its name is derived from
+                    (pool, address) and object names are unique within a namespace, which makes Create a
+                    compare-and-swap — two allocators racing for one address cannot both succeed, without
+                    either of them assuming it is the only writer.
+                  properties:
+                    address:
+                      description: Address is the allocated address, canonical form.
+                      type: string
+                    consumerRef:
+                      description: |-
+                        ConsumerRef records who asked for it, for humans and diagnostics. The authoritative
+                        lifetime link is the ownerReference, not this field.
+                      properties:
+                        kind:
+                          description: Kind is the kind of the referenced object.
+                          type: string
+                        name:
+                          description: Name is the name of the referenced object.
+                          type: string
+                      required:
+                        - kind
+                        - name
+                      type: object
+                    poolRef:
+                      description: PoolRef is the IPPool this address came from.
+                      properties:
+                        name:
+                          description: Name is the name of the referenced object.
+                          type: string
+                      required:
+                        - name
+                      type: object
+                  required:
+                    - address
+                    - consumerRef
+                    - poolRef
+                  type: object
+              type: object
+          served: true
+          storage: true
+  15: |
+    apiVersion: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    metadata:
+      annotations:
+        controller-gen.kubebuilder.io/version: v0.20.1
       name: ippools.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -4305,7 +4475,7 @@ renders (ebpf hw):
           storage: true
           subresources:
             status: {}
-  15: |
+  16: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -4374,7 +4544,7 @@ renders (ebpf hw):
           storage: true
           subresources:
             status: {}
-  16: |
+  17: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -4535,7 +4705,7 @@ renders (ebpf hw):
           storage: true
           subresources:
             status: {}
-  17: |
+  18: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -4645,7 +4815,7 @@ renders (ebpf hw):
           storage: true
           subresources:
             status: {}
-  18: |
+  19: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -4886,7 +5056,7 @@ renders (ebpf hw):
           storage: true
           subresources:
             status: {}
-  19: |
+  20: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -4970,7 +5140,7 @@ renders (ebpf hw):
           storage: true
           subresources:
             status: {}
-  20: |
+  21: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -5063,7 +5233,7 @@ renders (ebpf hw):
           storage: true
           subresources:
             status: {}
-  21: |
+  22: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -5199,7 +5369,7 @@ renders (ebpf hw):
           storage: true
           subresources:
             status: {}
-  22: |
+  23: |
     apiVersion: apps/v1
     kind: DaemonSet
     metadata:
@@ -5312,7 +5482,7 @@ renders (ebpf hw):
                 path: /var/run/netns
                 type: DirectoryOrCreate
               name: netns
-  23: |
+  24: |
     apiVersion: k8s.cni.cncf.io/v1
     kind: NetworkAttachmentDefinition
     metadata:
@@ -5329,7 +5499,7 @@ renders (ebpf hw):
             }
           ]
         }
-  24: |
+  25: |
     apiVersion: k8s.cni.cncf.io/v1
     kind: NetworkAttachmentDefinition
     metadata:
@@ -5347,7 +5517,7 @@ renders (ebpf hw):
             }
           ]
         }
-  25: |
+  26: |
     apiVersion: apps/v1
     kind: Deployment
     metadata:
@@ -5380,13 +5550,13 @@ renders (ebpf hw):
                   cpu: 50m
                   memory: 64Mi
           serviceAccountName: pod-materializer
-  26: |
+  27: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: mesh-agent
       namespace: ectobase-system
-  27: |
+  28: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -5430,7 +5600,7 @@ renders (ebpf hw):
           - get
           - list
           - watch
-  28: |
+  29: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -5443,13 +5613,13 @@ renders (ebpf hw):
       - kind: ServiceAccount
         name: mesh-agent
         namespace: ectobase-system
-  29: |
+  30: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: dispatch-broker
       namespace: ectobase-system
-  30: |
+  31: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -5500,7 +5670,7 @@ renders (ebpf hw):
           - get
           - list
           - watch
-  31: |
+  32: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -5513,13 +5683,13 @@ renders (ebpf hw):
       - kind: ServiceAccount
         name: dispatch-broker
         namespace: ectobase-system
-  32: |
+  33: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: pod-materializer
       namespace: ectobase-system
-  33: |
+  34: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -5556,7 +5726,7 @@ renders (ebpf hw):
           - get
           - patch
           - update
-  34: |
+  35: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -5569,7 +5739,7 @@ renders (ebpf hw):
       - kind: ServiceAccount
         name: pod-materializer
         namespace: ectobase-system
-  35: |
+  36: |
     apiVersion: cert-manager.io/v1
     kind: Issuer
     metadata:
@@ -5581,7 +5751,7 @@ renders (ebpf hw):
     spec:
       ca:
         secretName: ectobase-pool-ca
-  36: |
+  37: |
     apiVersion: cert-manager.io/v1
     kind: Certificate
     metadata:
@@ -7028,6 +7198,91 @@ renders (tier1 on):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+      name: ipallocations.net.ectobase.dev
+    spec:
+      group: net.ectobase.dev
+      names:
+        kind: IPAllocation
+        listKind: IPAllocationList
+        plural: ipallocations
+        singular: ipallocation
+      scope: Namespaced
+      versions:
+        - name: v1alpha1
+          schema:
+            openAPIV3Schema:
+              description: |-
+                IPAllocation is one address held out of one IPPool. It is created by the consumer's
+                allocator and reclaimed by Kubernetes garbage collection when its ownerReference's
+                consumer is deleted.
+              properties:
+                apiVersion:
+                  description: |-
+                    APIVersion defines the versioned schema of this representation of an object.
+                    Servers should convert recognized schemas to the latest internal value, and
+                    may reject unrecognized values.
+                    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+                  type: string
+                kind:
+                  description: |-
+                    Kind is a string value representing the REST resource this object represents.
+                    Servers may infer this from the endpoint the client submits requests to.
+                    Cannot be updated.
+                    In CamelCase.
+                    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+                  type: string
+                metadata:
+                  type: object
+                spec:
+                  description: |-
+                    IPAllocationSpec is the desired state of an IPAllocation.
+
+                    There is no status: the object's EXISTENCE is the state. Its name is derived from
+                    (pool, address) and object names are unique within a namespace, which makes Create a
+                    compare-and-swap — two allocators racing for one address cannot both succeed, without
+                    either of them assuming it is the only writer.
+                  properties:
+                    address:
+                      description: Address is the allocated address, canonical form.
+                      type: string
+                    consumerRef:
+                      description: |-
+                        ConsumerRef records who asked for it, for humans and diagnostics. The authoritative
+                        lifetime link is the ownerReference, not this field.
+                      properties:
+                        kind:
+                          description: Kind is the kind of the referenced object.
+                          type: string
+                        name:
+                          description: Name is the name of the referenced object.
+                          type: string
+                      required:
+                        - kind
+                        - name
+                      type: object
+                    poolRef:
+                      description: PoolRef is the IPPool this address came from.
+                      properties:
+                        name:
+                          description: Name is the name of the referenced object.
+                          type: string
+                      required:
+                        - name
+                      type: object
+                  required:
+                    - address
+                    - consumerRef
+                    - poolRef
+                  type: object
+              type: object
+          served: true
+          storage: true
+  15: |
+    apiVersion: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    metadata:
+      annotations:
+        controller-gen.kubebuilder.io/version: v0.20.1
       name: ippools.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -7107,7 +7362,7 @@ renders (tier1 on):
           storage: true
           subresources:
             status: {}
-  15: |
+  16: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -7176,7 +7431,7 @@ renders (tier1 on):
           storage: true
           subresources:
             status: {}
-  16: |
+  17: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -7337,7 +7592,7 @@ renders (tier1 on):
           storage: true
           subresources:
             status: {}
-  17: |
+  18: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -7447,7 +7702,7 @@ renders (tier1 on):
           storage: true
           subresources:
             status: {}
-  18: |
+  19: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -7688,7 +7943,7 @@ renders (tier1 on):
           storage: true
           subresources:
             status: {}
-  19: |
+  20: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -7772,7 +8027,7 @@ renders (tier1 on):
           storage: true
           subresources:
             status: {}
-  20: |
+  21: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -7865,7 +8120,7 @@ renders (tier1 on):
           storage: true
           subresources:
             status: {}
-  21: |
+  22: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -8001,7 +8256,7 @@ renders (tier1 on):
           storage: true
           subresources:
             status: {}
-  22: |
+  23: |
     apiVersion: apps/v1
     kind: DaemonSet
     metadata:
@@ -8117,7 +8372,7 @@ renders (tier1 on):
                 path: /var/run/netns
                 type: DirectoryOrCreate
               name: netns
-  23: |
+  24: |
     apiVersion: k8s.cni.cncf.io/v1
     kind: NetworkAttachmentDefinition
     metadata:
@@ -8134,7 +8389,7 @@ renders (tier1 on):
             }
           ]
         }
-  24: |
+  25: |
     apiVersion: k8s.cni.cncf.io/v1
     kind: NetworkAttachmentDefinition
     metadata:
@@ -8152,7 +8407,7 @@ renders (tier1 on):
             }
           ]
         }
-  25: |
+  26: |
     apiVersion: apps/v1
     kind: Deployment
     metadata:
@@ -8185,13 +8440,13 @@ renders (tier1 on):
                   cpu: 50m
                   memory: 64Mi
           serviceAccountName: pod-materializer
-  26: |
+  27: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: mesh-agent
       namespace: ectobase-system
-  27: |
+  28: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -8235,7 +8490,7 @@ renders (tier1 on):
           - get
           - list
           - watch
-  28: |
+  29: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -8248,13 +8503,13 @@ renders (tier1 on):
       - kind: ServiceAccount
         name: mesh-agent
         namespace: ectobase-system
-  29: |
+  30: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: dispatch-broker
       namespace: ectobase-system
-  30: |
+  31: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -8305,7 +8560,7 @@ renders (tier1 on):
           - get
           - list
           - watch
-  31: |
+  32: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -8318,13 +8573,13 @@ renders (tier1 on):
       - kind: ServiceAccount
         name: dispatch-broker
         namespace: ectobase-system
-  32: |
+  33: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: pod-materializer
       namespace: ectobase-system
-  33: |
+  34: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -8361,7 +8616,7 @@ renders (tier1 on):
           - get
           - patch
           - update
-  34: |
+  35: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -8374,7 +8629,7 @@ renders (tier1 on):
       - kind: ServiceAccount
         name: pod-materializer
         namespace: ectobase-system
-  35: |
+  36: |
     apiVersion: cert-manager.io/v1
     kind: Issuer
     metadata:
@@ -8386,7 +8641,7 @@ renders (tier1 on):
     spec:
       ca:
         secretName: ectobase-pool-ca
-  36: |
+  37: |
     apiVersion: cert-manager.io/v1
     kind: Certificate
     metadata:
@@ -8410,7 +8665,7 @@ renders (tier1 on):
           - ectobase:brokers
       usages:
         - client auth
-  37: |
+  38: |
     apiVersion: remediation.medik8s.io/v1alpha1
     kind: NodeHealthCheck
     metadata:
@@ -8435,7 +8690,7 @@ renders (tier1 on):
         - duration: 60s
           status: Unknown
           type: Ready
-  38: |
+  39: |
     apiVersion: self-node-remediation.medik8s.io/v1alpha1
     kind: SelfNodeRemediationTemplate
     metadata:
@@ -9870,6 +10125,91 @@ renders (tier1 watchdog):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+      name: ipallocations.net.ectobase.dev
+    spec:
+      group: net.ectobase.dev
+      names:
+        kind: IPAllocation
+        listKind: IPAllocationList
+        plural: ipallocations
+        singular: ipallocation
+      scope: Namespaced
+      versions:
+        - name: v1alpha1
+          schema:
+            openAPIV3Schema:
+              description: |-
+                IPAllocation is one address held out of one IPPool. It is created by the consumer's
+                allocator and reclaimed by Kubernetes garbage collection when its ownerReference's
+                consumer is deleted.
+              properties:
+                apiVersion:
+                  description: |-
+                    APIVersion defines the versioned schema of this representation of an object.
+                    Servers should convert recognized schemas to the latest internal value, and
+                    may reject unrecognized values.
+                    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+                  type: string
+                kind:
+                  description: |-
+                    Kind is a string value representing the REST resource this object represents.
+                    Servers may infer this from the endpoint the client submits requests to.
+                    Cannot be updated.
+                    In CamelCase.
+                    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+                  type: string
+                metadata:
+                  type: object
+                spec:
+                  description: |-
+                    IPAllocationSpec is the desired state of an IPAllocation.
+
+                    There is no status: the object's EXISTENCE is the state. Its name is derived from
+                    (pool, address) and object names are unique within a namespace, which makes Create a
+                    compare-and-swap — two allocators racing for one address cannot both succeed, without
+                    either of them assuming it is the only writer.
+                  properties:
+                    address:
+                      description: Address is the allocated address, canonical form.
+                      type: string
+                    consumerRef:
+                      description: |-
+                        ConsumerRef records who asked for it, for humans and diagnostics. The authoritative
+                        lifetime link is the ownerReference, not this field.
+                      properties:
+                        kind:
+                          description: Kind is the kind of the referenced object.
+                          type: string
+                        name:
+                          description: Name is the name of the referenced object.
+                          type: string
+                      required:
+                        - kind
+                        - name
+                      type: object
+                    poolRef:
+                      description: PoolRef is the IPPool this address came from.
+                      properties:
+                        name:
+                          description: Name is the name of the referenced object.
+                          type: string
+                      required:
+                        - name
+                      type: object
+                  required:
+                    - address
+                    - consumerRef
+                    - poolRef
+                  type: object
+              type: object
+          served: true
+          storage: true
+  15: |
+    apiVersion: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    metadata:
+      annotations:
+        controller-gen.kubebuilder.io/version: v0.20.1
       name: ippools.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -9949,7 +10289,7 @@ renders (tier1 watchdog):
           storage: true
           subresources:
             status: {}
-  15: |
+  16: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -10018,7 +10358,7 @@ renders (tier1 watchdog):
           storage: true
           subresources:
             status: {}
-  16: |
+  17: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -10179,7 +10519,7 @@ renders (tier1 watchdog):
           storage: true
           subresources:
             status: {}
-  17: |
+  18: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -10289,7 +10629,7 @@ renders (tier1 watchdog):
           storage: true
           subresources:
             status: {}
-  18: |
+  19: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -10530,7 +10870,7 @@ renders (tier1 watchdog):
           storage: true
           subresources:
             status: {}
-  19: |
+  20: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -10614,7 +10954,7 @@ renders (tier1 watchdog):
           storage: true
           subresources:
             status: {}
-  20: |
+  21: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -10707,7 +11047,7 @@ renders (tier1 watchdog):
           storage: true
           subresources:
             status: {}
-  21: |
+  22: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -10843,7 +11183,7 @@ renders (tier1 watchdog):
           storage: true
           subresources:
             status: {}
-  22: |
+  23: |
     apiVersion: apps/v1
     kind: DaemonSet
     metadata:
@@ -10959,7 +11299,7 @@ renders (tier1 watchdog):
                 path: /var/run/netns
                 type: DirectoryOrCreate
               name: netns
-  23: |
+  24: |
     apiVersion: k8s.cni.cncf.io/v1
     kind: NetworkAttachmentDefinition
     metadata:
@@ -10976,7 +11316,7 @@ renders (tier1 watchdog):
             }
           ]
         }
-  24: |
+  25: |
     apiVersion: k8s.cni.cncf.io/v1
     kind: NetworkAttachmentDefinition
     metadata:
@@ -10994,7 +11334,7 @@ renders (tier1 watchdog):
             }
           ]
         }
-  25: |
+  26: |
     apiVersion: apps/v1
     kind: Deployment
     metadata:
@@ -11027,13 +11367,13 @@ renders (tier1 watchdog):
                   cpu: 50m
                   memory: 64Mi
           serviceAccountName: pod-materializer
-  26: |
+  27: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: mesh-agent
       namespace: ectobase-system
-  27: |
+  28: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -11077,7 +11417,7 @@ renders (tier1 watchdog):
           - get
           - list
           - watch
-  28: |
+  29: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -11090,13 +11430,13 @@ renders (tier1 watchdog):
       - kind: ServiceAccount
         name: mesh-agent
         namespace: ectobase-system
-  29: |
+  30: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: dispatch-broker
       namespace: ectobase-system
-  30: |
+  31: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -11147,7 +11487,7 @@ renders (tier1 watchdog):
           - get
           - list
           - watch
-  31: |
+  32: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -11160,13 +11500,13 @@ renders (tier1 watchdog):
       - kind: ServiceAccount
         name: dispatch-broker
         namespace: ectobase-system
-  32: |
+  33: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: pod-materializer
       namespace: ectobase-system
-  33: |
+  34: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -11203,7 +11543,7 @@ renders (tier1 watchdog):
           - get
           - patch
           - update
-  34: |
+  35: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -11216,7 +11556,7 @@ renders (tier1 watchdog):
       - kind: ServiceAccount
         name: pod-materializer
         namespace: ectobase-system
-  35: |
+  36: |
     apiVersion: cert-manager.io/v1
     kind: Issuer
     metadata:
@@ -11228,7 +11568,7 @@ renders (tier1 watchdog):
     spec:
       ca:
         secretName: ectobase-pool-ca
-  36: |
+  37: |
     apiVersion: cert-manager.io/v1
     kind: Certificate
     metadata:
@@ -11252,7 +11592,7 @@ renders (tier1 watchdog):
           - ectobase:brokers
       usages:
         - client auth
-  37: |
+  38: |
     apiVersion: remediation.medik8s.io/v1alpha1
     kind: NodeHealthCheck
     metadata:
@@ -11277,7 +11617,7 @@ renders (tier1 watchdog):
         - duration: 60s
           status: Unknown
           type: Ready
-  38: |
+  39: |
     apiVersion: self-node-remediation.medik8s.io/v1alpha1
     kind: SelfNodeRemediationTemplate
     metadata:
@@ -11289,7 +11629,7 @@ renders (tier1 watchdog):
       template:
         spec:
           remediationStrategy: OutOfServiceTaint
-  39: |
+  40: |
     apiVersion: self-node-remediation.medik8s.io/v1alpha1
     kind: SelfNodeRemediationConfig
     metadata:
@@ -12722,6 +13062,91 @@ renders with vm-materializer enabled:
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+      name: ipallocations.net.ectobase.dev
+    spec:
+      group: net.ectobase.dev
+      names:
+        kind: IPAllocation
+        listKind: IPAllocationList
+        plural: ipallocations
+        singular: ipallocation
+      scope: Namespaced
+      versions:
+        - name: v1alpha1
+          schema:
+            openAPIV3Schema:
+              description: |-
+                IPAllocation is one address held out of one IPPool. It is created by the consumer's
+                allocator and reclaimed by Kubernetes garbage collection when its ownerReference's
+                consumer is deleted.
+              properties:
+                apiVersion:
+                  description: |-
+                    APIVersion defines the versioned schema of this representation of an object.
+                    Servers should convert recognized schemas to the latest internal value, and
+                    may reject unrecognized values.
+                    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+                  type: string
+                kind:
+                  description: |-
+                    Kind is a string value representing the REST resource this object represents.
+                    Servers may infer this from the endpoint the client submits requests to.
+                    Cannot be updated.
+                    In CamelCase.
+                    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+                  type: string
+                metadata:
+                  type: object
+                spec:
+                  description: |-
+                    IPAllocationSpec is the desired state of an IPAllocation.
+
+                    There is no status: the object's EXISTENCE is the state. Its name is derived from
+                    (pool, address) and object names are unique within a namespace, which makes Create a
+                    compare-and-swap — two allocators racing for one address cannot both succeed, without
+                    either of them assuming it is the only writer.
+                  properties:
+                    address:
+                      description: Address is the allocated address, canonical form.
+                      type: string
+                    consumerRef:
+                      description: |-
+                        ConsumerRef records who asked for it, for humans and diagnostics. The authoritative
+                        lifetime link is the ownerReference, not this field.
+                      properties:
+                        kind:
+                          description: Kind is the kind of the referenced object.
+                          type: string
+                        name:
+                          description: Name is the name of the referenced object.
+                          type: string
+                      required:
+                        - kind
+                        - name
+                      type: object
+                    poolRef:
+                      description: PoolRef is the IPPool this address came from.
+                      properties:
+                        name:
+                          description: Name is the name of the referenced object.
+                          type: string
+                      required:
+                        - name
+                      type: object
+                  required:
+                    - address
+                    - consumerRef
+                    - poolRef
+                  type: object
+              type: object
+          served: true
+          storage: true
+  15: |
+    apiVersion: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    metadata:
+      annotations:
+        controller-gen.kubebuilder.io/version: v0.20.1
       name: ippools.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -12801,7 +13226,7 @@ renders with vm-materializer enabled:
           storage: true
           subresources:
             status: {}
-  15: |
+  16: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -12870,7 +13295,7 @@ renders with vm-materializer enabled:
           storage: true
           subresources:
             status: {}
-  16: |
+  17: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -13031,7 +13456,7 @@ renders with vm-materializer enabled:
           storage: true
           subresources:
             status: {}
-  17: |
+  18: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -13141,7 +13566,7 @@ renders with vm-materializer enabled:
           storage: true
           subresources:
             status: {}
-  18: |
+  19: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -13382,7 +13807,7 @@ renders with vm-materializer enabled:
           storage: true
           subresources:
             status: {}
-  19: |
+  20: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -13466,7 +13891,7 @@ renders with vm-materializer enabled:
           storage: true
           subresources:
             status: {}
-  20: |
+  21: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -13559,7 +13984,7 @@ renders with vm-materializer enabled:
           storage: true
           subresources:
             status: {}
-  21: |
+  22: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -13695,7 +14120,7 @@ renders with vm-materializer enabled:
           storage: true
           subresources:
             status: {}
-  22: |
+  23: |
     apiVersion: apps/v1
     kind: DaemonSet
     metadata:
@@ -13811,7 +14236,7 @@ renders with vm-materializer enabled:
                 path: /var/run/netns
                 type: DirectoryOrCreate
               name: netns
-  23: |
+  24: |
     apiVersion: k8s.cni.cncf.io/v1
     kind: NetworkAttachmentDefinition
     metadata:
@@ -13828,7 +14253,7 @@ renders with vm-materializer enabled:
             }
           ]
         }
-  24: |
+  25: |
     apiVersion: k8s.cni.cncf.io/v1
     kind: NetworkAttachmentDefinition
     metadata:
@@ -13846,7 +14271,7 @@ renders with vm-materializer enabled:
             }
           ]
         }
-  25: |
+  26: |
     apiVersion: apps/v1
     kind: Deployment
     metadata:
@@ -13879,13 +14304,13 @@ renders with vm-materializer enabled:
                   cpu: 50m
                   memory: 64Mi
           serviceAccountName: pod-materializer
-  26: |
+  27: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: mesh-agent
       namespace: ectobase-system
-  27: |
+  28: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -13929,7 +14354,7 @@ renders with vm-materializer enabled:
           - get
           - list
           - watch
-  28: |
+  29: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -13942,13 +14367,13 @@ renders with vm-materializer enabled:
       - kind: ServiceAccount
         name: mesh-agent
         namespace: ectobase-system
-  29: |
+  30: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: dispatch-broker
       namespace: ectobase-system
-  30: |
+  31: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -13999,7 +14424,7 @@ renders with vm-materializer enabled:
           - get
           - list
           - watch
-  31: |
+  32: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -14012,13 +14437,13 @@ renders with vm-materializer enabled:
       - kind: ServiceAccount
         name: dispatch-broker
         namespace: ectobase-system
-  32: |
+  33: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: pod-materializer
       namespace: ectobase-system
-  33: |
+  34: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -14055,7 +14480,7 @@ renders with vm-materializer enabled:
           - get
           - patch
           - update
-  34: |
+  35: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -14068,13 +14493,13 @@ renders with vm-materializer enabled:
       - kind: ServiceAccount
         name: pod-materializer
         namespace: ectobase-system
-  35: |
+  36: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: vm-materializer
       namespace: ectobase-system
-  36: |
+  37: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -14133,7 +14558,7 @@ renders with vm-materializer enabled:
           - patch
           - update
           - watch
-  37: |
+  38: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -14146,7 +14571,7 @@ renders with vm-materializer enabled:
       - kind: ServiceAccount
         name: vm-materializer
         namespace: ectobase-system
-  38: |
+  39: |
     apiVersion: cert-manager.io/v1
     kind: Issuer
     metadata:
@@ -14158,7 +14583,7 @@ renders with vm-materializer enabled:
     spec:
       ca:
         secretName: ectobase-pool-ca
-  39: |
+  40: |
     apiVersion: cert-manager.io/v1
     kind: Certificate
     metadata:
@@ -14182,7 +14607,7 @@ renders with vm-materializer enabled:
           - ectobase:brokers
       usages:
         - client auth
-  40: |
+  41: |
     apiVersion: apps/v1
     kind: Deployment
     metadata:

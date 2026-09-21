@@ -790,6 +790,16 @@ renders the dispatch control plane:
       - apiGroups:
           - net.ectobase.dev
         resources:
+          - ipallocations
+        verbs:
+          - create
+          - delete
+          - get
+          - list
+          - watch
+      - apiGroups:
+          - net.ectobase.dev
+        resources:
           - ippools/status
           - lbpools/status
           - loadbalancers/status

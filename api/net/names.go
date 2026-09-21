@@ -20,6 +20,9 @@ func (*LBPool) ShortNames() []string    { return []string{"lbp"} }
 func (*IPPool) GetSingularName() string { return "ippool" }
 func (*IPPool) ShortNames() []string    { return []string{"ipp"} }
 
+func (*IPAllocation) GetSingularName() string { return "ipallocation" }
+func (*IPAllocation) ShortNames() []string    { return []string{"ipa"} }
+
 func (*NetworkInterface) GetSingularName() string { return "networkinterface" }
 func (*NetworkInterface) ShortNames() []string    { return []string{"nic"} }
 

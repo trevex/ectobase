@@ -73,6 +73,7 @@ func main() {
 		With(apiserver.Resource(&netapi.Subnet{}, netv1.SchemeGroupVersion)).
 		With(apiserver.Resource(&netapi.LBPool{}, netv1.SchemeGroupVersion)).
 		With(apiserver.Resource(&netapi.IPPool{}, netv1.SchemeGroupVersion)).
+		With(apiserver.Resource(&netapi.IPAllocation{}, netv1.SchemeGroupVersion)).
 		With(apiserver.Resource(&netapi.NetworkInterface{}, netv1.SchemeGroupVersion)).
 		With(apiserver.Resource(&netapi.FirewallPolicy{}, netv1.SchemeGroupVersion)).
 		With(apiserver.Resource(&netapi.FloatingIP{}, netv1.SchemeGroupVersion)).

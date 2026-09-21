@@ -13,6 +13,7 @@ the aggregated apiserver and consumed as CRDs by the mesh control plane.
 ### Resource Types
 - [FirewallPolicy](#firewallpolicy)
 - [FloatingIP](#floatingip)
+- [IPAllocation](#ipallocation)
 - [IPPool](#ippool)
 - [LBPool](#lbpool)
 - [LoadBalancer](#loadbalancer)
@@ -173,6 +174,52 @@ SCAFFOLD ONLY: intentionally empty.
 _Appears in:_
 - [FloatingIP](#floatingip)
 
+
+
+#### IPAllocation
+
+
+
+IPAllocation is one address held out of one IPPool. It is created by the consumer's
+allocator and reclaimed by Kubernetes garbage collection when its ownerReference's
+consumer is deleted.
+
+
+
+_Appears in:_
+- [IPAllocationList](#ipallocationlist)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `apiVersion` _string_ | `net.ectobase.dev/v1alpha1` | | |
+| `kind` _string_ | `IPAllocation` | | |
+| `metadata` _[ObjectMeta](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30/#objectmeta-v1-meta)_ | Refer to Kubernetes API documentation for fields of `metadata`. |  |  |
+| `spec` _[IPAllocationSpec](#ipallocationspec)_ |  |  |  |
+
+
+
+
+#### IPAllocationSpec
+
+
+
+IPAllocationSpec is the desired state of an IPAllocation.
+
+There is no status: the object's EXISTENCE is the state. Its name is derived from
+(pool, address) and object names are unique within a namespace, which makes Create a
+compare-and-swap — two allocators racing for one address cannot both succeed, without
+either of them assuming it is the only writer.
+
+
+
+_Appears in:_
+- [IPAllocation](#ipallocation)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `poolRef` _[LocalObjectReference](#localobjectreference)_ | PoolRef is the IPPool this address came from. |  |  |
+| `address` _string_ | Address is the allocated address, canonical form. |  |  |
+| `consumerRef` _[TypedLocalObjectReference](#typedlocalobjectreference)_ | ConsumerRef records who asked for it, for humans and diagnostics. The authoritative<br />lifetime link is the ownerReference, not this field. |  |  |
 
 
 #### IPPool
@@ -423,6 +470,7 @@ LocalObjectReference references an object by name within the same namespace.
 
 
 _Appears in:_
+- [IPAllocationSpec](#ipallocationspec)
 - [LoadBalancerSpec](#loadbalancerspec)
 - [NATGatewaySpec](#natgatewayspec)
 - [NetworkInterfaceSpec](#networkinterfacespec)
@@ -690,6 +738,24 @@ _Appears in:_
 | `state` _string_ | State is the current lifecycle state (e.g. Pending, Ready). |  | Optional: \{\} <br /> |
 | `v4Total` _integer_ | V4Total is the total number of allocatable IPv4 addresses. |  | Optional: \{\} <br /> |
 | `v6Total` _integer_ | V6Total is the total number of allocatable IPv6 addresses. |  | Optional: \{\} <br /> |
+
+
+#### TypedLocalObjectReference
+
+
+
+TypedLocalObjectReference references an object by kind and name within the same namespace.
+Kind alone (no group) because every consumer of one lives in net.ectobase.dev.
+
+
+
+_Appears in:_
+- [IPAllocationSpec](#ipallocationspec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `kind` _string_ | Kind is the kind of the referenced object. |  |  |
+| `name` _string_ | Name is the name of the referenced object. |  |  |
 
 
 #### VPC

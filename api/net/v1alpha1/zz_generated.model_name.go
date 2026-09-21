@@ -56,6 +56,21 @@ func (in FloatingIPStatus) OpenAPIModelName() string {
 }
 
 // OpenAPIModelName returns the OpenAPI model name for this type.
+func (in IPAllocation) OpenAPIModelName() string {
+	return "dev.ectobase.net.v1alpha1.IPAllocation"
+}
+
+// OpenAPIModelName returns the OpenAPI model name for this type.
+func (in IPAllocationList) OpenAPIModelName() string {
+	return "dev.ectobase.net.v1alpha1.IPAllocationList"
+}
+
+// OpenAPIModelName returns the OpenAPI model name for this type.
+func (in IPAllocationSpec) OpenAPIModelName() string {
+	return "dev.ectobase.net.v1alpha1.IPAllocationSpec"
+}
+
+// OpenAPIModelName returns the OpenAPI model name for this type.
 func (in IPPool) OpenAPIModelName() string {
 	return "dev.ectobase.net.v1alpha1.IPPool"
 }
@@ -203,6 +218,11 @@ func (in SubnetSpec) OpenAPIModelName() string {
 // OpenAPIModelName returns the OpenAPI model name for this type.
 func (in SubnetStatus) OpenAPIModelName() string {
 	return "dev.ectobase.net.v1alpha1.SubnetStatus"
+}
+
+// OpenAPIModelName returns the OpenAPI model name for this type.
+func (in TypedLocalObjectReference) OpenAPIModelName() string {
+	return "dev.ectobase.net.v1alpha1.TypedLocalObjectReference"
 }
 
 // OpenAPIModelName returns the OpenAPI model name for this type.

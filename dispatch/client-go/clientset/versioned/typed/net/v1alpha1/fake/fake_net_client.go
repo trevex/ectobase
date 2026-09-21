@@ -20,6 +20,10 @@ func (c *FakeNetV1alpha1) FloatingIPs(namespace string) v1alpha1.FloatingIPInter
 	return newFakeFloatingIPs(c, namespace)
 }
 
+func (c *FakeNetV1alpha1) IPAllocations(namespace string) v1alpha1.IPAllocationInterface {
+	return newFakeIPAllocations(c, namespace)
+}
+
 func (c *FakeNetV1alpha1) IPPools(namespace string) v1alpha1.IPPoolInterface {
 	return newFakeIPPools(c, namespace)
 }

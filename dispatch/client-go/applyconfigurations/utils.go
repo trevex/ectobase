@@ -108,6 +108,10 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &applyconfigurationsnetv1alpha1.FloatingIPApplyConfiguration{}
 	case netv1alpha1.SchemeGroupVersion.WithKind("InterfaceQoS"):
 		return &applyconfigurationsnetv1alpha1.InterfaceQoSApplyConfiguration{}
+	case netv1alpha1.SchemeGroupVersion.WithKind("IPAllocation"):
+		return &applyconfigurationsnetv1alpha1.IPAllocationApplyConfiguration{}
+	case netv1alpha1.SchemeGroupVersion.WithKind("IPAllocationSpec"):
+		return &applyconfigurationsnetv1alpha1.IPAllocationSpecApplyConfiguration{}
 	case netv1alpha1.SchemeGroupVersion.WithKind("IPPool"):
 		return &applyconfigurationsnetv1alpha1.IPPoolApplyConfiguration{}
 	case netv1alpha1.SchemeGroupVersion.WithKind("IPPoolSpec"):
@@ -154,6 +158,8 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &applyconfigurationsnetv1alpha1.SubnetSpecApplyConfiguration{}
 	case netv1alpha1.SchemeGroupVersion.WithKind("SubnetStatus"):
 		return &applyconfigurationsnetv1alpha1.SubnetStatusApplyConfiguration{}
+	case netv1alpha1.SchemeGroupVersion.WithKind("TypedLocalObjectReference"):
+		return &applyconfigurationsnetv1alpha1.TypedLocalObjectReferenceApplyConfiguration{}
 	case netv1alpha1.SchemeGroupVersion.WithKind("VPC"):
 		return &applyconfigurationsnetv1alpha1.VPCApplyConfiguration{}
 	case netv1alpha1.SchemeGroupVersion.WithKind("VPCPeering"):
