@@ -213,6 +213,14 @@ spec:
 	// -----------------------------------------------------------------------
 	// ASSERTION 2: swap deny-all -> allow blue's CIDR; the same ping MUST SUCCEED.
 	// Replace (not layer) so exactly one selecting policy governs green at a time.
+	//
+	// It admits green's OWN subnet as well, which is not incidental. The firewall is
+	// always-on and deny-by-default, and this VPC sets no defaultPolicy, so a direction
+	// that has any rule admits only what that rule allows (docs/features/firewall.md).
+	// This policy selects every NIC labelled side: green — green-local included — so
+	// allowing blue's CIDR alone would leave green-local rejecting its own VPC-mate, and
+	// assertion 3 below would fail on PERMISSION while appearing to be about routing.
+	// There is no intra-VPC exemption anywhere in the design.
 	// -----------------------------------------------------------------------
 	_, _ = kubectl(ctx, cfg, "dispatch", "delete", "firewallpolicy.net.ectobase.dev", "green-deny-all", "--ignore-not-found")
 	applyDispatch(t, ctx, cfg, fmt.Sprintf(`apiVersion: net.ectobase.dev/v1alpha1
@@ -222,7 +230,8 @@ spec:
   interfaceSelector: {matchLabels: {side: green}}
   ingress:
     - {cidr: %q, proto: ICMP, action: Allow}
-`, peerBlueSubnet))
+    - {cidr: %q, proto: ICMP, action: Allow}
+`, peerBlueSubnet, peerGreenSubnet))
 
 	eventually(t, 3*time.Minute, 5*time.Second, func() error {
 		return podPing(ctx, cfg, blue.node.Cluster, podByNIC[blue.nic], green.ip)
@@ -232,7 +241,12 @@ spec:
 	// -----------------------------------------------------------------------
 	// ASSERTION 3: overlap precedence — green-local@10.0.10.77 (local green /32) shadows
 	// blue's imported 10.0.10.0/24. A same-VPC ping green-guest -> green-local reaches the
-	// LOCAL green-local pod (local delivery via INTERFACES map, always allowed intra-VPC).
+	// LOCAL green-local pod: the route matches, and deliver() resolves the destination
+	// through the INTERFACES map, which says it is local, instead of encapping toward
+	// blue's node.
+	//
+	// This is a ROUTING property. Permission is a separate gate that the policy above has
+	// to grant explicitly — the firewall does not exempt traffic for being intra-VPC.
 	// Cross-check via the dataplane: ListInterfaces on the green node reports 10.0.10.77.
 	// -----------------------------------------------------------------------
 	eventually(t, 2*time.Minute, 5*time.Second, func() error {
