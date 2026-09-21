@@ -1178,7 +1178,17 @@ func Convert_net_NATGateway_To_v1alpha1_NATGateway(in *net.NATGateway, out *NATG
 
 func autoConvert_v1alpha1_NATGatewayList_To_net_NATGatewayList(in *NATGatewayList, out *net.NATGatewayList, s conversion.Scope) error {
 	out.ListMeta = in.ListMeta
-	out.Items = *(*[]net.NATGateway)(unsafe.Pointer(&in.Items))
+	if in.Items != nil {
+		in, out := &in.Items, &out.Items
+		*out = make([]net.NATGateway, len(*in))
+		for i := range *in {
+			if err := Convert_v1alpha1_NATGateway_To_net_NATGateway(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Items = nil
+	}
 	return nil
 }
 
@@ -1189,7 +1199,17 @@ func Convert_v1alpha1_NATGatewayList_To_net_NATGatewayList(in *NATGatewayList, o
 
 func autoConvert_net_NATGatewayList_To_v1alpha1_NATGatewayList(in *net.NATGatewayList, out *NATGatewayList, s conversion.Scope) error {
 	out.ListMeta = in.ListMeta
-	out.Items = *(*[]NATGateway)(unsafe.Pointer(&in.Items))
+	if in.Items != nil {
+		in, out := &in.Items, &out.Items
+		*out = make([]NATGateway, len(*in))
+		for i := range *in {
+			if err := Convert_net_NATGateway_To_v1alpha1_NATGateway(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Items = nil
+	}
 	return nil
 }
 
@@ -1205,6 +1225,9 @@ func autoConvert_v1alpha1_NATGatewaySpec_To_net_NATGatewaySpec(in *NATGatewaySpe
 	out.PublicIPs = *(*[]string)(unsafe.Pointer(&in.PublicIPs))
 	out.PortsPerSource = (*int32)(unsafe.Pointer(in.PortsPerSource))
 	out.EdgeUnderlay = in.EdgeUnderlay
+	if err := Convert_v1alpha1_LocalObjectReference_To_net_LocalObjectReference(&in.PoolRef, &out.PoolRef, s); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -1218,6 +1241,9 @@ func autoConvert_net_NATGatewaySpec_To_v1alpha1_NATGatewaySpec(in *net.NATGatewa
 		return err
 	}
 	out.PublicIPs = *(*[]string)(unsafe.Pointer(&in.PublicIPs))
+	if err := Convert_net_LocalObjectReference_To_v1alpha1_LocalObjectReference(&in.PoolRef, &out.PoolRef, s); err != nil {
+		return err
+	}
 	out.PortsPerSource = (*int32)(unsafe.Pointer(in.PortsPerSource))
 	out.EdgeUnderlay = in.EdgeUnderlay
 	return nil

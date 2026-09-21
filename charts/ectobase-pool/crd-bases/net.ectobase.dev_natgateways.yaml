@@ -50,6 +50,23 @@ spec:
                   any agent started with --edge-loopback, nexthop'd at that edge's own anycast
                   underlay. Retained only to avoid a CRD breaking change; set nothing here.
                 type: string
+              poolRef:
+                description: |-
+                  PoolRef selects the IPPool to draw public addresses from. The pool must be of type
+                  "public": a NAT address is reached from the WAN, so an internal range would SNAT onto
+                  an address the internet cannot route back to.
+
+                  Addresses are claimed on demand — one more each time every port block on the addresses
+                  the gateway already holds is taken — and released only when this gateway is deleted.
+                  They are never released while it lives: an address whose blocks a live source still
+                  uses cannot be given up without re-NATing that source's traffic.
+                properties:
+                  name:
+                    description: Name is the name of the referenced object.
+                    type: string
+                required:
+                - name
+                type: object
               portsPerSource:
                 description: |-
                   PortsPerSource is the deterministic port-block size handed to each source
@@ -57,8 +74,16 @@ spec:
                 format: int32
                 type: integer
               publicIPs:
-                description: PublicIPs is the pool of public IPv4s SNAT sources are
-                  mapped onto.
+                description: |-
+                  PublicIPs PINS addresses within PoolRef — the NAT analogue of LoadBalancer.spec.ip.
+                  It is no longer the pool itself: with a PoolRef set, the gateway's address set is the
+                  IPAllocations it holds, and these entries are the ones it is required to hold. A pin
+                  that is outside the pool's prefixes, reserved, or already claimed by another consumer
+                  leaves the gateway Invalid — the intent is wrong, not merely unsatisfiable yet.
+
+                  With NO PoolRef the old meaning stands: the entries are literal addresses the gateway
+                  SNATs onto, allocated nowhere and owned by nothing. That path exists so a gateway
+                  written before pools kept working; new gateways should set PoolRef.
                 items:
                   type: string
                 type: array

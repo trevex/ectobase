@@ -11,8 +11,10 @@ import (
 type NATGatewaySpec struct {
 	// VPCRef selects the VPC whose interfaces egress through this gateway.
 	VPCRef LocalObjectReference
-	// PublicIPs is the pool of public IPv4s SNAT sources are mapped onto.
+	// PublicIPs PINS addresses within PoolRef; it is no longer the pool itself.
 	PublicIPs []string
+	// PoolRef selects the IPPool to draw public addresses from.
+	PoolRef LocalObjectReference
 	// PortsPerSource is the deterministic port-block size handed to each source.
 	PortsPerSource *int32
 	// EdgeUnderlay is DEPRECATED and IGNORED.

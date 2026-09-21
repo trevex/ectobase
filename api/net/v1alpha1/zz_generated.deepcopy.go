@@ -716,6 +716,7 @@ func (in *NATGatewaySpec) DeepCopyInto(out *NATGatewaySpec) {
 		*out = new(int32)
 		**out = **in
 	}
+	out.PoolRef = in.PoolRef
 	return
 }
 

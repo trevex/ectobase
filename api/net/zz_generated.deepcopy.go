@@ -711,6 +711,7 @@ func (in *NATGatewaySpec) DeepCopyInto(out *NATGatewaySpec) {
 		*out = make([]string, len(*in))
 		copy(*out, *in)
 	}
+	out.PoolRef = in.PoolRef
 	if in.PortsPerSource != nil {
 		in, out := &in.PortsPerSource, &out.PortsPerSource
 		*out = new(int32)

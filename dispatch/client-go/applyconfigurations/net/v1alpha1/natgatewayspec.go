@@ -10,7 +10,15 @@ package v1alpha1
 type NATGatewaySpecApplyConfiguration struct {
 	// VPCRef selects the VPC whose interfaces egress through this gateway.
 	VPCRef *LocalObjectReferenceApplyConfiguration `json:"vpcRef,omitempty"`
-	// PublicIPs is the pool of public IPv4s SNAT sources are mapped onto.
+	// PublicIPs PINS addresses within PoolRef — the NAT analogue of LoadBalancer.spec.ip.
+	// It is no longer the pool itself: with a PoolRef set, the gateway's address set is the
+	// IPAllocations it holds, and these entries are the ones it is required to hold. A pin
+	// that is outside the pool's prefixes, reserved, or already claimed by another consumer
+	// leaves the gateway Invalid — the intent is wrong, not merely unsatisfiable yet.
+	//
+	// With NO PoolRef the old meaning stands: the entries are literal addresses the gateway
+	// SNATs onto, allocated nowhere and owned by nothing. That path exists so a gateway
+	// written before pools kept working; new gateways should set PoolRef.
 	PublicIPs []string `json:"publicIPs,omitempty"`
 	// PortsPerSource is the deterministic port-block size handed to each source
 	// (RFC 7422 / GCP-static style). Default 1024.
@@ -20,6 +28,15 @@ type NATGatewaySpecApplyConfiguration struct {
 	// any agent started with --edge-loopback, nexthop'd at that edge's own anycast
 	// underlay. Retained only to avoid a CRD breaking change; set nothing here.
 	EdgeUnderlay *string `json:"edgeUnderlay,omitempty"`
+	// PoolRef selects the IPPool to draw public addresses from. The pool must be of type
+	// "public": a NAT address is reached from the WAN, so an internal range would SNAT onto
+	// an address the internet cannot route back to.
+	//
+	// Addresses are claimed on demand — one more each time every port block on the addresses
+	// the gateway already holds is taken — and released only when this gateway is deleted.
+	// They are never released while it lives: an address whose blocks a live source still
+	// uses cannot be given up without re-NATing that source's traffic.
+	PoolRef *LocalObjectReferenceApplyConfiguration `json:"poolRef,omitempty"`
 }
 
 // NATGatewaySpecApplyConfiguration constructs a declarative configuration of the NATGatewaySpec type for use with
@@ -59,5 +76,13 @@ func (b *NATGatewaySpecApplyConfiguration) WithPortsPerSource(value int32) *NATG
 // If called multiple times, the EdgeUnderlay field is set to the value of the last call.
 func (b *NATGatewaySpecApplyConfiguration) WithEdgeUnderlay(value string) *NATGatewaySpecApplyConfiguration {
 	b.EdgeUnderlay = &value
+	return b
+}
+
+// WithPoolRef sets the PoolRef field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the PoolRef field is set to the value of the last call.
+func (b *NATGatewaySpecApplyConfiguration) WithPoolRef(value *LocalObjectReferenceApplyConfiguration) *NATGatewaySpecApplyConfiguration {
+	b.PoolRef = value
 	return b
 }

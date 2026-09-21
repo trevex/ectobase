@@ -12,7 +12,16 @@ import (
 type NATGatewaySpec struct {
 	// VPCRef selects the VPC whose interfaces egress through this gateway.
 	VPCRef LocalObjectReference `json:"vpcRef" protobuf:"bytes,1,opt,name=vpcRef"`
-	// PublicIPs is the pool of public IPv4s SNAT sources are mapped onto.
+	// PublicIPs PINS addresses within PoolRef — the NAT analogue of LoadBalancer.spec.ip.
+	// It is no longer the pool itself: with a PoolRef set, the gateway's address set is the
+	// IPAllocations it holds, and these entries are the ones it is required to hold. A pin
+	// that is outside the pool's prefixes, reserved, or already claimed by another consumer
+	// leaves the gateway Invalid — the intent is wrong, not merely unsatisfiable yet.
+	//
+	// With NO PoolRef the old meaning stands: the entries are literal addresses the gateway
+	// SNATs onto, allocated nowhere and owned by nothing. That path exists so a gateway
+	// written before pools kept working; new gateways should set PoolRef.
+	// +optional
 	PublicIPs []string `json:"publicIPs,omitempty" protobuf:"bytes,2,rep,name=publicIPs"`
 	// PortsPerSource is the deterministic port-block size handed to each source
 	// (RFC 7422 / GCP-static style). Default 1024.
@@ -24,6 +33,16 @@ type NATGatewaySpec struct {
 	// underlay. Retained only to avoid a CRD breaking change; set nothing here.
 	// +optional
 	EdgeUnderlay string `json:"edgeUnderlay,omitempty" protobuf:"bytes,4,opt,name=edgeUnderlay"`
+	// PoolRef selects the IPPool to draw public addresses from. The pool must be of type
+	// "public": a NAT address is reached from the WAN, so an internal range would SNAT onto
+	// an address the internet cannot route back to.
+	//
+	// Addresses are claimed on demand — one more each time every port block on the addresses
+	// the gateway already holds is taken — and released only when this gateway is deleted.
+	// They are never released while it lives: an address whose blocks a live source still
+	// uses cannot be given up without re-NATing that source's traffic.
+	// +optional
+	PoolRef LocalObjectReference `json:"poolRef,omitempty" protobuf:"bytes,5,opt,name=poolRef"`
 }
 
 // NATAllocation records one source's deterministic mapping.
