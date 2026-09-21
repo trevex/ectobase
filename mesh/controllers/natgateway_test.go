@@ -531,3 +531,52 @@ func TestSyncWithoutAPoolTreatsPublicIPsAsLiterals(t *testing.T) {
 		t.Fatalf("the no-pool path must claim nothing: %d ipallocations", n)
 	}
 }
+
+// A gateway that drained its pool has nothing to wake it: growth is driven by its own port blocks
+// running out, which emits no event. The delete-only IPAllocation watch is its only prompt, and it
+// must fire for an address freed by ANY consumer — a LoadBalancer releasing one unblocks a gateway.
+func TestNatgwsForFreedAddressWakesOnlyTheParkedGatewaysOnThatPool(t *testing.T) {
+	scheme := lbScheme(t)
+	mk := func(name, pool, state string) *netv1.NATGateway {
+		g := &netv1.NATGateway{}
+		g.Name, g.Namespace = name, "default"
+		g.Spec.PoolRef.Name = pool
+		g.Status.State = state
+		return g
+	}
+	parked := mk("parked", "p", "Exhausted")
+	pending := mk("pending", "p", "Pending")
+	ready := mk("ready", "p", "Ready")
+	otherPool := mk("other", "q", "Exhausted")
+
+	cl := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(parked, pending, ready, otherPool).Build()
+	r := &NATGatewayReconciler{Client: cl, APIReader: cl}
+
+	freed := &netv1.IPAllocation{}
+	freed.Name, freed.Namespace = "p-198-51-100-1", "default"
+	freed.Spec.PoolRef.Name = "p"
+
+	got := map[string]bool{}
+	for _, req := range r.natgwsForFreedAddress(context.Background(), freed) {
+		got[req.Name] = true
+	}
+	if !got["parked"] || !got["pending"] {
+		t.Errorf("a freed address must wake the parked gateways, got %v", got)
+	}
+	if got["ready"] {
+		t.Errorf("a Ready gateway needs no prompt: %v", got)
+	}
+	if got["other"] {
+		t.Errorf("a gateway on another pool is unaffected: %v", got)
+	}
+}
+
+// An IPAllocation with no pool reference names nothing to wake.
+func TestNatgwsForFreedAddressIgnoresAnUnpooledAllocation(t *testing.T) {
+	cl := fake.NewClientBuilder().WithScheme(lbScheme(t)).Build()
+	r := &NATGatewayReconciler{Client: cl, APIReader: cl}
+	if reqs := r.natgwsForFreedAddress(context.Background(), &netv1.IPAllocation{}); len(reqs) != 0 {
+		t.Fatalf("want no requests, got %v", reqs)
+	}
+}

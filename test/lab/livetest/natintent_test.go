@@ -255,10 +255,13 @@ spec: {vpcRef: {name: nati-vpc}, v4Prefix: 10.0.7.0/24}
 ---
 # The edge-owned public v4 prefix (fabric.PublicV4): both edges advertise it as our ASN and the WAN
 # routes it back via either, so any NAT address inside it is anycast across the edge fleet.
+# The upper /27 of the edge-owned prefix. lbintent_test holds the lower /27 in this same
+# namespace, and IPPoolReconciler parks the later of two OVERLAPPING pools at Conflict —
+# which would leave this gateway stuck at Pending. .40 below is inside this /27.
 apiVersion: net.ectobase.dev/v1alpha1
 kind: IPPool
 metadata: {name: %[9]s}
-spec: {type: public, v4Prefix: 192.0.2.0/24}
+spec: {type: public, v4Prefix: 192.0.2.32/27}
 ---
 # Egress NAT for the whole VPC: every NIC in nati-vpc gets a deterministic (public IP, port block).
 apiVersion: net.ectobase.dev/v1alpha1

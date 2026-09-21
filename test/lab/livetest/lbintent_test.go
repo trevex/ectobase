@@ -292,10 +292,13 @@ spec: {vpcRef: {name: lbi-vpc}, v4Prefix: 10.0.5.0/24}
 ---
 # The edge-owned public v4 prefix (fabric.PublicV4): both edges advertise it as our ASN and the WAN
 # routes it back via either, so any LB address inside it is anycast across the edge fleet.
+# A /27 of the edge-owned prefix, not the whole /24: IPPoolReconciler parks the later of two
+# OVERLAPPING pools in the same namespace at Conflict, and natintent_test's pool lives in the same
+# namespace. Disjoint halves let both tests hold a pool at once. .7 below is inside this /27.
 apiVersion: net.ectobase.dev/v1alpha1
 kind: IPPool
 metadata: {name: lbi-pool}
-spec: {type: public, v4Prefix: 192.0.2.0/24}
+spec: {type: public, v4Prefix: 192.0.2.0/27}
 ---
 apiVersion: net.ectobase.dev/v1alpha1
 kind: LoadBalancer

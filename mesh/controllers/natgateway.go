@@ -23,10 +23,13 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
@@ -300,10 +303,49 @@ func (r *NATGatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// has no other event coming: re-enqueue it when the pool changes rather than
 		// leaving it to the ~10h resync.
 		Watches(&netv1.IPPool{}, handler.EnqueueRequestsFromMapFunc(r.natgwsForPool)).
+		// A gateway that drained its pool is Exhausted with nothing to wake it: growth is driven
+		// by its own port blocks running out, not by anything that emits an event. Without this
+		// it waits for NIC churn or the ~10h resync even though an address just came free.
+		// Delete-only, so ordinary allocation churn does not amplify reconciles, and it fires for
+		// an address freed by ANY consumer — a LoadBalancer releasing one unblocks a gateway.
+		Watches(&netv1.IPAllocation{}, handler.EnqueueRequestsFromMapFunc(r.natgwsForFreedAddress),
+			builder.WithPredicates(predicate.Funcs{
+				CreateFunc:  func(event.CreateEvent) bool { return false },
+				UpdateFunc:  func(event.UpdateEvent) bool { return false },
+				DeleteFunc:  func(event.DeleteEvent) bool { return true },
+				GenericFunc: func(event.GenericEvent) bool { return false },
+			})).
 		// Serialize: the allocation table is a read-then-write over all NICs in the VPC; concurrent
 		// reconciles could race on Status. Mirrors the VPC allocator.
 		WithOptions(controller.Options{MaxConcurrentReconciles: 1}).
 		Complete(r)
+}
+
+// natgwsForFreedAddress re-enqueues the gateways that a just-deleted IPAllocation may now let
+// grow: those drawing from the same pool and parked in Exhausted or Pending.
+func (r *NATGatewayReconciler) natgwsForFreedAddress(ctx context.Context, obj client.Object) []reconcile.Request {
+	freed, ok := obj.(*netv1.IPAllocation)
+	if !ok || freed.Spec.PoolRef.Name == "" {
+		return nil
+	}
+	var list netv1.NATGatewayList
+	if err := r.Client.List(ctx, &list, client.InNamespace(freed.Namespace)); err != nil {
+		ctrl.Log.WithName("natgwsForFreedAddress").Error(err, "list NATGateways", "namespace", freed.Namespace)
+
+		return nil
+	}
+	var reqs []reconcile.Request
+	for i := range list.Items {
+		o := &list.Items[i]
+		if o.Spec.PoolRef.Name != freed.Spec.PoolRef.Name {
+			continue
+		}
+		if o.Status.State == "Exhausted" || o.Status.State == "Pending" {
+			reqs = append(reqs, reconcile.Request{NamespacedName: keyOf(o)})
+		}
+	}
+
+	return reqs
 }
 
 // natgwsForPool maps an IPPool event to the NATGateways that draw from it.
