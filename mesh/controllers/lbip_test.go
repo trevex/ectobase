@@ -401,6 +401,9 @@ func TestPoolSwapReleasesTheOldPoolsAddress(t *testing.T) {
 		t.Fatalf("precondition: want 198.51.100.1, got %q", got.Status.AllocatedIP)
 	}
 	got.Spec.PoolRef.Name = "b"
+	// Bumped by hand because the fake client runs no apiserver, so none of the strategy hooks
+	// fire. What proves the real thing advances is api/net's generation hooks and their tests,
+	// plus the live check against the dispatch — not this line.
 	got.Generation = 2
 	if err := cl.Update(ctx, &got); err != nil {
 		t.Fatal(err)
