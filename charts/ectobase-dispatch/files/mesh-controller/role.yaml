@@ -73,7 +73,6 @@ rules:
   resources:
   - firewallpolicies
   - ippools
-  - lbpools
   - loadbalancers
   - subnets
   - vpcpeerings
@@ -96,7 +95,6 @@ rules:
   - net.ectobase.dev
   resources:
   - ippools/status
-  - lbpools/status
   - loadbalancers/status
   - networkinterfaces/status
   - subnets/status

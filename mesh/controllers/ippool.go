@@ -37,10 +37,10 @@ func (r *IPPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 // Sync sets IPPool.Status.State to Invalid (bad type or bad/missing CIDR), Conflict
 // (prefixes overlap a sibling pool in the same namespace) or Ready, and fills Total.
 //
-// Overlap detection is why this is modelled on the Subnet reconciler and not on the
-// LBPool one it replaces: two overlapping pools hand the SAME address to two consumers,
-// and the IPAllocation name collision does not catch it, because allocation names are
-// pool-scoped (<pool>-<address>). Nothing below the pool can see that mistake.
+// Overlap detection is why this is modelled on the Subnet reconciler rather than on the
+// LB-specific pool reconciler this replaces: two overlapping pools hand the SAME address to
+// two consumers, and the IPAllocation name collision does not catch it, because allocation
+// names are pool-scoped (<pool>-<address>). Nothing below the pool can see that mistake.
 func (r *IPPoolReconciler) Sync(ctx context.Context, p *netv1.IPPool) error {
 	if !validIPPoolType(p.Spec.Type) {
 		return r.setState(ctx, p, "Invalid", 0, 0)

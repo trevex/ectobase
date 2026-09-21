@@ -1591,75 +1591,6 @@ renders (ebpf clab):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
-      name: lbpools.net.ectobase.dev
-    spec:
-      group: net.ectobase.dev
-      names:
-        kind: LBPool
-        listKind: LBPoolList
-        plural: lbpools
-        singular: lbpool
-      scope: Namespaced
-      versions:
-        - name: v1alpha1
-          schema:
-            openAPIV3Schema:
-              description: LBPool is a fleet-scoped range of IPv4/IPv6 LB address prefixes.
-              properties:
-                apiVersion:
-                  description: |-
-                    APIVersion defines the versioned schema of this representation of an object.
-                    Servers should convert recognized schemas to the latest internal value, and
-                    may reject unrecognized values.
-                    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
-                  type: string
-                kind:
-                  description: |-
-                    Kind is a string value representing the REST resource this object represents.
-                    Servers may infer this from the endpoint the client submits requests to.
-                    Cannot be updated.
-                    In CamelCase.
-                    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
-                  type: string
-                metadata:
-                  type: object
-                spec:
-                  description: LBPoolSpec is the desired state of an LBPool (a fleet-scoped LB address prefix range).
-                  properties:
-                    reservedIPs:
-                      description: ReservedIPs are addresses held back from allocation within this pool.
-                      items:
-                        type: string
-                      type: array
-                    v4Prefix:
-                      description: V4Prefix optionally pins the IPv4 CIDR for this LB address pool.
-                      type: string
-                    v6Prefix:
-                      description: V6Prefix optionally pins the IPv6 CIDR for this LB address pool.
-                      type: string
-                  type: object
-                status:
-                  description: LBPoolStatus is the observed state of an LBPool.
-                  properties:
-                    state:
-                      description: State is the current lifecycle state (e.g. Pending, Ready).
-                      type: string
-                    total:
-                      description: Total is the total number of allocatable LB address addresses.
-                      format: int32
-                      type: integer
-                  type: object
-              type: object
-          served: true
-          storage: true
-          subresources:
-            status: {}
-  17: |
-    apiVersion: apiextensions.k8s.io/v1
-    kind: CustomResourceDefinition
-    metadata:
-      annotations:
-        controller-gen.kubebuilder.io/version: v0.20.1
       name: loadbalancers.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -1818,7 +1749,7 @@ renders (ebpf clab):
           storage: true
           subresources:
             status: {}
-  18: |
+  17: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -1928,7 +1859,7 @@ renders (ebpf clab):
           storage: true
           subresources:
             status: {}
-  19: |
+  18: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -2169,7 +2100,7 @@ renders (ebpf clab):
           storage: true
           subresources:
             status: {}
-  20: |
+  19: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -2253,7 +2184,7 @@ renders (ebpf clab):
           storage: true
           subresources:
             status: {}
-  21: |
+  20: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -2346,7 +2277,7 @@ renders (ebpf clab):
           storage: true
           subresources:
             status: {}
-  22: |
+  21: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -2482,7 +2413,7 @@ renders (ebpf clab):
           storage: true
           subresources:
             status: {}
-  23: |
+  22: |
     apiVersion: apps/v1
     kind: DaemonSet
     metadata:
@@ -2598,7 +2529,7 @@ renders (ebpf clab):
                 path: /var/run/netns
                 type: DirectoryOrCreate
               name: netns
-  24: |
+  23: |
     apiVersion: k8s.cni.cncf.io/v1
     kind: NetworkAttachmentDefinition
     metadata:
@@ -2615,7 +2546,7 @@ renders (ebpf clab):
             }
           ]
         }
-  25: |
+  24: |
     apiVersion: k8s.cni.cncf.io/v1
     kind: NetworkAttachmentDefinition
     metadata:
@@ -2633,7 +2564,7 @@ renders (ebpf clab):
             }
           ]
         }
-  26: |
+  25: |
     apiVersion: apps/v1
     kind: Deployment
     metadata:
@@ -2666,13 +2597,13 @@ renders (ebpf clab):
                   cpu: 50m
                   memory: 64Mi
           serviceAccountName: pod-materializer
-  27: |
+  26: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: mesh-agent
       namespace: ectobase-system
-  28: |
+  27: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -2716,7 +2647,7 @@ renders (ebpf clab):
           - get
           - list
           - watch
-  29: |
+  28: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -2729,13 +2660,13 @@ renders (ebpf clab):
       - kind: ServiceAccount
         name: mesh-agent
         namespace: ectobase-system
-  30: |
+  29: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: dispatch-broker
       namespace: ectobase-system
-  31: |
+  30: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -2786,7 +2717,7 @@ renders (ebpf clab):
           - get
           - list
           - watch
-  32: |
+  31: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -2799,13 +2730,13 @@ renders (ebpf clab):
       - kind: ServiceAccount
         name: dispatch-broker
         namespace: ectobase-system
-  33: |
+  32: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: pod-materializer
       namespace: ectobase-system
-  34: |
+  33: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -2842,7 +2773,7 @@ renders (ebpf clab):
           - get
           - patch
           - update
-  35: |
+  34: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -2855,7 +2786,7 @@ renders (ebpf clab):
       - kind: ServiceAccount
         name: pod-materializer
         namespace: ectobase-system
-  36: |
+  35: |
     apiVersion: cert-manager.io/v1
     kind: Issuer
     metadata:
@@ -2867,7 +2798,7 @@ renders (ebpf clab):
     spec:
       ca:
         secretName: ectobase-pool-ca
-  37: |
+  36: |
     apiVersion: cert-manager.io/v1
     kind: Certificate
     metadata:
@@ -4484,75 +4415,6 @@ renders (ebpf hw):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
-      name: lbpools.net.ectobase.dev
-    spec:
-      group: net.ectobase.dev
-      names:
-        kind: LBPool
-        listKind: LBPoolList
-        plural: lbpools
-        singular: lbpool
-      scope: Namespaced
-      versions:
-        - name: v1alpha1
-          schema:
-            openAPIV3Schema:
-              description: LBPool is a fleet-scoped range of IPv4/IPv6 LB address prefixes.
-              properties:
-                apiVersion:
-                  description: |-
-                    APIVersion defines the versioned schema of this representation of an object.
-                    Servers should convert recognized schemas to the latest internal value, and
-                    may reject unrecognized values.
-                    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
-                  type: string
-                kind:
-                  description: |-
-                    Kind is a string value representing the REST resource this object represents.
-                    Servers may infer this from the endpoint the client submits requests to.
-                    Cannot be updated.
-                    In CamelCase.
-                    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
-                  type: string
-                metadata:
-                  type: object
-                spec:
-                  description: LBPoolSpec is the desired state of an LBPool (a fleet-scoped LB address prefix range).
-                  properties:
-                    reservedIPs:
-                      description: ReservedIPs are addresses held back from allocation within this pool.
-                      items:
-                        type: string
-                      type: array
-                    v4Prefix:
-                      description: V4Prefix optionally pins the IPv4 CIDR for this LB address pool.
-                      type: string
-                    v6Prefix:
-                      description: V6Prefix optionally pins the IPv6 CIDR for this LB address pool.
-                      type: string
-                  type: object
-                status:
-                  description: LBPoolStatus is the observed state of an LBPool.
-                  properties:
-                    state:
-                      description: State is the current lifecycle state (e.g. Pending, Ready).
-                      type: string
-                    total:
-                      description: Total is the total number of allocatable LB address addresses.
-                      format: int32
-                      type: integer
-                  type: object
-              type: object
-          served: true
-          storage: true
-          subresources:
-            status: {}
-  17: |
-    apiVersion: apiextensions.k8s.io/v1
-    kind: CustomResourceDefinition
-    metadata:
-      annotations:
-        controller-gen.kubebuilder.io/version: v0.20.1
       name: loadbalancers.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -4711,7 +4573,7 @@ renders (ebpf hw):
           storage: true
           subresources:
             status: {}
-  18: |
+  17: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -4821,7 +4683,7 @@ renders (ebpf hw):
           storage: true
           subresources:
             status: {}
-  19: |
+  18: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -5062,7 +4924,7 @@ renders (ebpf hw):
           storage: true
           subresources:
             status: {}
-  20: |
+  19: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -5146,7 +5008,7 @@ renders (ebpf hw):
           storage: true
           subresources:
             status: {}
-  21: |
+  20: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -5239,7 +5101,7 @@ renders (ebpf hw):
           storage: true
           subresources:
             status: {}
-  22: |
+  21: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -5375,7 +5237,7 @@ renders (ebpf hw):
           storage: true
           subresources:
             status: {}
-  23: |
+  22: |
     apiVersion: apps/v1
     kind: DaemonSet
     metadata:
@@ -5488,7 +5350,7 @@ renders (ebpf hw):
                 path: /var/run/netns
                 type: DirectoryOrCreate
               name: netns
-  24: |
+  23: |
     apiVersion: k8s.cni.cncf.io/v1
     kind: NetworkAttachmentDefinition
     metadata:
@@ -5505,7 +5367,7 @@ renders (ebpf hw):
             }
           ]
         }
-  25: |
+  24: |
     apiVersion: k8s.cni.cncf.io/v1
     kind: NetworkAttachmentDefinition
     metadata:
@@ -5523,7 +5385,7 @@ renders (ebpf hw):
             }
           ]
         }
-  26: |
+  25: |
     apiVersion: apps/v1
     kind: Deployment
     metadata:
@@ -5556,13 +5418,13 @@ renders (ebpf hw):
                   cpu: 50m
                   memory: 64Mi
           serviceAccountName: pod-materializer
-  27: |
+  26: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: mesh-agent
       namespace: ectobase-system
-  28: |
+  27: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -5606,7 +5468,7 @@ renders (ebpf hw):
           - get
           - list
           - watch
-  29: |
+  28: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -5619,13 +5481,13 @@ renders (ebpf hw):
       - kind: ServiceAccount
         name: mesh-agent
         namespace: ectobase-system
-  30: |
+  29: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: dispatch-broker
       namespace: ectobase-system
-  31: |
+  30: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -5676,7 +5538,7 @@ renders (ebpf hw):
           - get
           - list
           - watch
-  32: |
+  31: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -5689,13 +5551,13 @@ renders (ebpf hw):
       - kind: ServiceAccount
         name: dispatch-broker
         namespace: ectobase-system
-  33: |
+  32: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: pod-materializer
       namespace: ectobase-system
-  34: |
+  33: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -5732,7 +5594,7 @@ renders (ebpf hw):
           - get
           - patch
           - update
-  35: |
+  34: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -5745,7 +5607,7 @@ renders (ebpf hw):
       - kind: ServiceAccount
         name: pod-materializer
         namespace: ectobase-system
-  36: |
+  35: |
     apiVersion: cert-manager.io/v1
     kind: Issuer
     metadata:
@@ -5757,7 +5619,7 @@ renders (ebpf hw):
     spec:
       ca:
         secretName: ectobase-pool-ca
-  37: |
+  36: |
     apiVersion: cert-manager.io/v1
     kind: Certificate
     metadata:
@@ -7374,75 +7236,6 @@ renders (tier1 on):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
-      name: lbpools.net.ectobase.dev
-    spec:
-      group: net.ectobase.dev
-      names:
-        kind: LBPool
-        listKind: LBPoolList
-        plural: lbpools
-        singular: lbpool
-      scope: Namespaced
-      versions:
-        - name: v1alpha1
-          schema:
-            openAPIV3Schema:
-              description: LBPool is a fleet-scoped range of IPv4/IPv6 LB address prefixes.
-              properties:
-                apiVersion:
-                  description: |-
-                    APIVersion defines the versioned schema of this representation of an object.
-                    Servers should convert recognized schemas to the latest internal value, and
-                    may reject unrecognized values.
-                    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
-                  type: string
-                kind:
-                  description: |-
-                    Kind is a string value representing the REST resource this object represents.
-                    Servers may infer this from the endpoint the client submits requests to.
-                    Cannot be updated.
-                    In CamelCase.
-                    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
-                  type: string
-                metadata:
-                  type: object
-                spec:
-                  description: LBPoolSpec is the desired state of an LBPool (a fleet-scoped LB address prefix range).
-                  properties:
-                    reservedIPs:
-                      description: ReservedIPs are addresses held back from allocation within this pool.
-                      items:
-                        type: string
-                      type: array
-                    v4Prefix:
-                      description: V4Prefix optionally pins the IPv4 CIDR for this LB address pool.
-                      type: string
-                    v6Prefix:
-                      description: V6Prefix optionally pins the IPv6 CIDR for this LB address pool.
-                      type: string
-                  type: object
-                status:
-                  description: LBPoolStatus is the observed state of an LBPool.
-                  properties:
-                    state:
-                      description: State is the current lifecycle state (e.g. Pending, Ready).
-                      type: string
-                    total:
-                      description: Total is the total number of allocatable LB address addresses.
-                      format: int32
-                      type: integer
-                  type: object
-              type: object
-          served: true
-          storage: true
-          subresources:
-            status: {}
-  17: |
-    apiVersion: apiextensions.k8s.io/v1
-    kind: CustomResourceDefinition
-    metadata:
-      annotations:
-        controller-gen.kubebuilder.io/version: v0.20.1
       name: loadbalancers.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -7601,7 +7394,7 @@ renders (tier1 on):
           storage: true
           subresources:
             status: {}
-  18: |
+  17: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -7711,7 +7504,7 @@ renders (tier1 on):
           storage: true
           subresources:
             status: {}
-  19: |
+  18: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -7952,7 +7745,7 @@ renders (tier1 on):
           storage: true
           subresources:
             status: {}
-  20: |
+  19: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -8036,7 +7829,7 @@ renders (tier1 on):
           storage: true
           subresources:
             status: {}
-  21: |
+  20: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -8129,7 +7922,7 @@ renders (tier1 on):
           storage: true
           subresources:
             status: {}
-  22: |
+  21: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -8265,7 +8058,7 @@ renders (tier1 on):
           storage: true
           subresources:
             status: {}
-  23: |
+  22: |
     apiVersion: apps/v1
     kind: DaemonSet
     metadata:
@@ -8381,7 +8174,7 @@ renders (tier1 on):
                 path: /var/run/netns
                 type: DirectoryOrCreate
               name: netns
-  24: |
+  23: |
     apiVersion: k8s.cni.cncf.io/v1
     kind: NetworkAttachmentDefinition
     metadata:
@@ -8398,7 +8191,7 @@ renders (tier1 on):
             }
           ]
         }
-  25: |
+  24: |
     apiVersion: k8s.cni.cncf.io/v1
     kind: NetworkAttachmentDefinition
     metadata:
@@ -8416,7 +8209,7 @@ renders (tier1 on):
             }
           ]
         }
-  26: |
+  25: |
     apiVersion: apps/v1
     kind: Deployment
     metadata:
@@ -8449,13 +8242,13 @@ renders (tier1 on):
                   cpu: 50m
                   memory: 64Mi
           serviceAccountName: pod-materializer
-  27: |
+  26: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: mesh-agent
       namespace: ectobase-system
-  28: |
+  27: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -8499,7 +8292,7 @@ renders (tier1 on):
           - get
           - list
           - watch
-  29: |
+  28: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -8512,13 +8305,13 @@ renders (tier1 on):
       - kind: ServiceAccount
         name: mesh-agent
         namespace: ectobase-system
-  30: |
+  29: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: dispatch-broker
       namespace: ectobase-system
-  31: |
+  30: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -8569,7 +8362,7 @@ renders (tier1 on):
           - get
           - list
           - watch
-  32: |
+  31: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -8582,13 +8375,13 @@ renders (tier1 on):
       - kind: ServiceAccount
         name: dispatch-broker
         namespace: ectobase-system
-  33: |
+  32: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: pod-materializer
       namespace: ectobase-system
-  34: |
+  33: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -8625,7 +8418,7 @@ renders (tier1 on):
           - get
           - patch
           - update
-  35: |
+  34: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -8638,7 +8431,7 @@ renders (tier1 on):
       - kind: ServiceAccount
         name: pod-materializer
         namespace: ectobase-system
-  36: |
+  35: |
     apiVersion: cert-manager.io/v1
     kind: Issuer
     metadata:
@@ -8650,7 +8443,7 @@ renders (tier1 on):
     spec:
       ca:
         secretName: ectobase-pool-ca
-  37: |
+  36: |
     apiVersion: cert-manager.io/v1
     kind: Certificate
     metadata:
@@ -8674,7 +8467,7 @@ renders (tier1 on):
           - ectobase:brokers
       usages:
         - client auth
-  38: |
+  37: |
     apiVersion: remediation.medik8s.io/v1alpha1
     kind: NodeHealthCheck
     metadata:
@@ -8699,7 +8492,7 @@ renders (tier1 on):
         - duration: 60s
           status: Unknown
           type: Ready
-  39: |
+  38: |
     apiVersion: self-node-remediation.medik8s.io/v1alpha1
     kind: SelfNodeRemediationTemplate
     metadata:
@@ -10304,75 +10097,6 @@ renders (tier1 watchdog):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
-      name: lbpools.net.ectobase.dev
-    spec:
-      group: net.ectobase.dev
-      names:
-        kind: LBPool
-        listKind: LBPoolList
-        plural: lbpools
-        singular: lbpool
-      scope: Namespaced
-      versions:
-        - name: v1alpha1
-          schema:
-            openAPIV3Schema:
-              description: LBPool is a fleet-scoped range of IPv4/IPv6 LB address prefixes.
-              properties:
-                apiVersion:
-                  description: |-
-                    APIVersion defines the versioned schema of this representation of an object.
-                    Servers should convert recognized schemas to the latest internal value, and
-                    may reject unrecognized values.
-                    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
-                  type: string
-                kind:
-                  description: |-
-                    Kind is a string value representing the REST resource this object represents.
-                    Servers may infer this from the endpoint the client submits requests to.
-                    Cannot be updated.
-                    In CamelCase.
-                    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
-                  type: string
-                metadata:
-                  type: object
-                spec:
-                  description: LBPoolSpec is the desired state of an LBPool (a fleet-scoped LB address prefix range).
-                  properties:
-                    reservedIPs:
-                      description: ReservedIPs are addresses held back from allocation within this pool.
-                      items:
-                        type: string
-                      type: array
-                    v4Prefix:
-                      description: V4Prefix optionally pins the IPv4 CIDR for this LB address pool.
-                      type: string
-                    v6Prefix:
-                      description: V6Prefix optionally pins the IPv6 CIDR for this LB address pool.
-                      type: string
-                  type: object
-                status:
-                  description: LBPoolStatus is the observed state of an LBPool.
-                  properties:
-                    state:
-                      description: State is the current lifecycle state (e.g. Pending, Ready).
-                      type: string
-                    total:
-                      description: Total is the total number of allocatable LB address addresses.
-                      format: int32
-                      type: integer
-                  type: object
-              type: object
-          served: true
-          storage: true
-          subresources:
-            status: {}
-  17: |
-    apiVersion: apiextensions.k8s.io/v1
-    kind: CustomResourceDefinition
-    metadata:
-      annotations:
-        controller-gen.kubebuilder.io/version: v0.20.1
       name: loadbalancers.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -10531,7 +10255,7 @@ renders (tier1 watchdog):
           storage: true
           subresources:
             status: {}
-  18: |
+  17: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -10641,7 +10365,7 @@ renders (tier1 watchdog):
           storage: true
           subresources:
             status: {}
-  19: |
+  18: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -10882,7 +10606,7 @@ renders (tier1 watchdog):
           storage: true
           subresources:
             status: {}
-  20: |
+  19: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -10966,7 +10690,7 @@ renders (tier1 watchdog):
           storage: true
           subresources:
             status: {}
-  21: |
+  20: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -11059,7 +10783,7 @@ renders (tier1 watchdog):
           storage: true
           subresources:
             status: {}
-  22: |
+  21: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -11195,7 +10919,7 @@ renders (tier1 watchdog):
           storage: true
           subresources:
             status: {}
-  23: |
+  22: |
     apiVersion: apps/v1
     kind: DaemonSet
     metadata:
@@ -11311,7 +11035,7 @@ renders (tier1 watchdog):
                 path: /var/run/netns
                 type: DirectoryOrCreate
               name: netns
-  24: |
+  23: |
     apiVersion: k8s.cni.cncf.io/v1
     kind: NetworkAttachmentDefinition
     metadata:
@@ -11328,7 +11052,7 @@ renders (tier1 watchdog):
             }
           ]
         }
-  25: |
+  24: |
     apiVersion: k8s.cni.cncf.io/v1
     kind: NetworkAttachmentDefinition
     metadata:
@@ -11346,7 +11070,7 @@ renders (tier1 watchdog):
             }
           ]
         }
-  26: |
+  25: |
     apiVersion: apps/v1
     kind: Deployment
     metadata:
@@ -11379,13 +11103,13 @@ renders (tier1 watchdog):
                   cpu: 50m
                   memory: 64Mi
           serviceAccountName: pod-materializer
-  27: |
+  26: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: mesh-agent
       namespace: ectobase-system
-  28: |
+  27: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -11429,7 +11153,7 @@ renders (tier1 watchdog):
           - get
           - list
           - watch
-  29: |
+  28: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -11442,13 +11166,13 @@ renders (tier1 watchdog):
       - kind: ServiceAccount
         name: mesh-agent
         namespace: ectobase-system
-  30: |
+  29: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: dispatch-broker
       namespace: ectobase-system
-  31: |
+  30: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -11499,7 +11223,7 @@ renders (tier1 watchdog):
           - get
           - list
           - watch
-  32: |
+  31: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -11512,13 +11236,13 @@ renders (tier1 watchdog):
       - kind: ServiceAccount
         name: dispatch-broker
         namespace: ectobase-system
-  33: |
+  32: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: pod-materializer
       namespace: ectobase-system
-  34: |
+  33: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -11555,7 +11279,7 @@ renders (tier1 watchdog):
           - get
           - patch
           - update
-  35: |
+  34: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -11568,7 +11292,7 @@ renders (tier1 watchdog):
       - kind: ServiceAccount
         name: pod-materializer
         namespace: ectobase-system
-  36: |
+  35: |
     apiVersion: cert-manager.io/v1
     kind: Issuer
     metadata:
@@ -11580,7 +11304,7 @@ renders (tier1 watchdog):
     spec:
       ca:
         secretName: ectobase-pool-ca
-  37: |
+  36: |
     apiVersion: cert-manager.io/v1
     kind: Certificate
     metadata:
@@ -11604,7 +11328,7 @@ renders (tier1 watchdog):
           - ectobase:brokers
       usages:
         - client auth
-  38: |
+  37: |
     apiVersion: remediation.medik8s.io/v1alpha1
     kind: NodeHealthCheck
     metadata:
@@ -11629,7 +11353,7 @@ renders (tier1 watchdog):
         - duration: 60s
           status: Unknown
           type: Ready
-  39: |
+  38: |
     apiVersion: self-node-remediation.medik8s.io/v1alpha1
     kind: SelfNodeRemediationTemplate
     metadata:
@@ -11641,7 +11365,7 @@ renders (tier1 watchdog):
       template:
         spec:
           remediationStrategy: OutOfServiceTaint
-  40: |
+  39: |
     apiVersion: self-node-remediation.medik8s.io/v1alpha1
     kind: SelfNodeRemediationConfig
     metadata:
@@ -13244,75 +12968,6 @@ renders with vm-materializer enabled:
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
-      name: lbpools.net.ectobase.dev
-    spec:
-      group: net.ectobase.dev
-      names:
-        kind: LBPool
-        listKind: LBPoolList
-        plural: lbpools
-        singular: lbpool
-      scope: Namespaced
-      versions:
-        - name: v1alpha1
-          schema:
-            openAPIV3Schema:
-              description: LBPool is a fleet-scoped range of IPv4/IPv6 LB address prefixes.
-              properties:
-                apiVersion:
-                  description: |-
-                    APIVersion defines the versioned schema of this representation of an object.
-                    Servers should convert recognized schemas to the latest internal value, and
-                    may reject unrecognized values.
-                    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
-                  type: string
-                kind:
-                  description: |-
-                    Kind is a string value representing the REST resource this object represents.
-                    Servers may infer this from the endpoint the client submits requests to.
-                    Cannot be updated.
-                    In CamelCase.
-                    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
-                  type: string
-                metadata:
-                  type: object
-                spec:
-                  description: LBPoolSpec is the desired state of an LBPool (a fleet-scoped LB address prefix range).
-                  properties:
-                    reservedIPs:
-                      description: ReservedIPs are addresses held back from allocation within this pool.
-                      items:
-                        type: string
-                      type: array
-                    v4Prefix:
-                      description: V4Prefix optionally pins the IPv4 CIDR for this LB address pool.
-                      type: string
-                    v6Prefix:
-                      description: V6Prefix optionally pins the IPv6 CIDR for this LB address pool.
-                      type: string
-                  type: object
-                status:
-                  description: LBPoolStatus is the observed state of an LBPool.
-                  properties:
-                    state:
-                      description: State is the current lifecycle state (e.g. Pending, Ready).
-                      type: string
-                    total:
-                      description: Total is the total number of allocatable LB address addresses.
-                      format: int32
-                      type: integer
-                  type: object
-              type: object
-          served: true
-          storage: true
-          subresources:
-            status: {}
-  17: |
-    apiVersion: apiextensions.k8s.io/v1
-    kind: CustomResourceDefinition
-    metadata:
-      annotations:
-        controller-gen.kubebuilder.io/version: v0.20.1
       name: loadbalancers.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -13471,7 +13126,7 @@ renders with vm-materializer enabled:
           storage: true
           subresources:
             status: {}
-  18: |
+  17: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -13581,7 +13236,7 @@ renders with vm-materializer enabled:
           storage: true
           subresources:
             status: {}
-  19: |
+  18: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -13822,7 +13477,7 @@ renders with vm-materializer enabled:
           storage: true
           subresources:
             status: {}
-  20: |
+  19: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -13906,7 +13561,7 @@ renders with vm-materializer enabled:
           storage: true
           subresources:
             status: {}
-  21: |
+  20: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -13999,7 +13654,7 @@ renders with vm-materializer enabled:
           storage: true
           subresources:
             status: {}
-  22: |
+  21: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -14135,7 +13790,7 @@ renders with vm-materializer enabled:
           storage: true
           subresources:
             status: {}
-  23: |
+  22: |
     apiVersion: apps/v1
     kind: DaemonSet
     metadata:
@@ -14251,7 +13906,7 @@ renders with vm-materializer enabled:
                 path: /var/run/netns
                 type: DirectoryOrCreate
               name: netns
-  24: |
+  23: |
     apiVersion: k8s.cni.cncf.io/v1
     kind: NetworkAttachmentDefinition
     metadata:
@@ -14268,7 +13923,7 @@ renders with vm-materializer enabled:
             }
           ]
         }
-  25: |
+  24: |
     apiVersion: k8s.cni.cncf.io/v1
     kind: NetworkAttachmentDefinition
     metadata:
@@ -14286,7 +13941,7 @@ renders with vm-materializer enabled:
             }
           ]
         }
-  26: |
+  25: |
     apiVersion: apps/v1
     kind: Deployment
     metadata:
@@ -14319,13 +13974,13 @@ renders with vm-materializer enabled:
                   cpu: 50m
                   memory: 64Mi
           serviceAccountName: pod-materializer
-  27: |
+  26: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: mesh-agent
       namespace: ectobase-system
-  28: |
+  27: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -14369,7 +14024,7 @@ renders with vm-materializer enabled:
           - get
           - list
           - watch
-  29: |
+  28: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -14382,13 +14037,13 @@ renders with vm-materializer enabled:
       - kind: ServiceAccount
         name: mesh-agent
         namespace: ectobase-system
-  30: |
+  29: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: dispatch-broker
       namespace: ectobase-system
-  31: |
+  30: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -14439,7 +14094,7 @@ renders with vm-materializer enabled:
           - get
           - list
           - watch
-  32: |
+  31: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -14452,13 +14107,13 @@ renders with vm-materializer enabled:
       - kind: ServiceAccount
         name: dispatch-broker
         namespace: ectobase-system
-  33: |
+  32: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: pod-materializer
       namespace: ectobase-system
-  34: |
+  33: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -14495,7 +14150,7 @@ renders with vm-materializer enabled:
           - get
           - patch
           - update
-  35: |
+  34: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -14508,13 +14163,13 @@ renders with vm-materializer enabled:
       - kind: ServiceAccount
         name: pod-materializer
         namespace: ectobase-system
-  36: |
+  35: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: vm-materializer
       namespace: ectobase-system
-  37: |
+  36: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -14573,7 +14228,7 @@ renders with vm-materializer enabled:
           - patch
           - update
           - watch
-  38: |
+  37: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -14586,7 +14241,7 @@ renders with vm-materializer enabled:
       - kind: ServiceAccount
         name: vm-materializer
         namespace: ectobase-system
-  39: |
+  38: |
     apiVersion: cert-manager.io/v1
     kind: Issuer
     metadata:
@@ -14598,7 +14253,7 @@ renders with vm-materializer enabled:
     spec:
       ca:
         secretName: ectobase-pool-ca
-  40: |
+  39: |
     apiVersion: cert-manager.io/v1
     kind: Certificate
     metadata:
@@ -14622,7 +14277,7 @@ renders with vm-materializer enabled:
           - ectobase:brokers
       usages:
         - client auth
-  41: |
+  40: |
     apiVersion: apps/v1
     kind: Deployment
     metadata:

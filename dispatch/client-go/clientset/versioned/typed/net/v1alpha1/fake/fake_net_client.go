@@ -28,10 +28,6 @@ func (c *FakeNetV1alpha1) IPPools(namespace string) v1alpha1.IPPoolInterface {
 	return newFakeIPPools(c, namespace)
 }
 
-func (c *FakeNetV1alpha1) LBPools(namespace string) v1alpha1.LBPoolInterface {
-	return newFakeLBPools(c, namespace)
-}
-
 func (c *FakeNetV1alpha1) LoadBalancers(namespace string) v1alpha1.LoadBalancerInterface {
 	return newFakeLoadBalancers(c, namespace)
 }

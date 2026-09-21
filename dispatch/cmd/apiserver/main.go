@@ -71,7 +71,6 @@ func main() {
 		With(apiserver.Resource(&platform.RouteBusIdentity{}, v1alpha1.SchemeGroupVersion)).
 		With(apiserver.Resource(&netapi.VPC{}, netv1.SchemeGroupVersion)).
 		With(apiserver.Resource(&netapi.Subnet{}, netv1.SchemeGroupVersion)).
-		With(apiserver.Resource(&netapi.LBPool{}, netv1.SchemeGroupVersion)).
 		With(apiserver.Resource(&netapi.IPPool{}, netv1.SchemeGroupVersion)).
 		With(apiserver.Resource(&netapi.IPAllocation{}, netv1.SchemeGroupVersion)).
 		With(apiserver.Resource(&netapi.NetworkInterface{}, netv1.SchemeGroupVersion)).

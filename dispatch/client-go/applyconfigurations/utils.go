@@ -118,12 +118,6 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &applyconfigurationsnetv1alpha1.IPPoolSpecApplyConfiguration{}
 	case netv1alpha1.SchemeGroupVersion.WithKind("IPPoolStatus"):
 		return &applyconfigurationsnetv1alpha1.IPPoolStatusApplyConfiguration{}
-	case netv1alpha1.SchemeGroupVersion.WithKind("LBPool"):
-		return &applyconfigurationsnetv1alpha1.LBPoolApplyConfiguration{}
-	case netv1alpha1.SchemeGroupVersion.WithKind("LBPoolSpec"):
-		return &applyconfigurationsnetv1alpha1.LBPoolSpecApplyConfiguration{}
-	case netv1alpha1.SchemeGroupVersion.WithKind("LBPoolStatus"):
-		return &applyconfigurationsnetv1alpha1.LBPoolStatusApplyConfiguration{}
 	case netv1alpha1.SchemeGroupVersion.WithKind("LoadBalancer"):
 		return &applyconfigurationsnetv1alpha1.LoadBalancerApplyConfiguration{}
 	case netv1alpha1.SchemeGroupVersion.WithKind("LoadBalancerPort"):

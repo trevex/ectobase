@@ -10,8 +10,6 @@ type IPAllocationExpansion interface{}
 
 type IPPoolExpansion interface{}
 
-type LBPoolExpansion interface{}
-
 type LoadBalancerExpansion interface{}
 
 type NATGatewayExpansion interface{}

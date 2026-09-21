@@ -348,7 +348,7 @@ func TestLBExhaustedPool(t *testing.T) {
 }
 
 // A missing pool is Invalid; a pool that is not yet Ready is Pending, not a failed allocation.
-func TestLBPoolStatesMapToLBStates(t *testing.T) {
+func TestLBStatesFollowTheirPool(t *testing.T) {
 	scheme := lbScheme(t)
 	pending := readyPool("pending", "198.51.100.0/24")
 	pending.Status.State = "Pending"

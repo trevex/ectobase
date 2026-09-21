@@ -217,9 +217,10 @@ func TestNatFromIntent(t *testing.T) {
 
 // natIntentFixture renders the whole intent: VPC, Subnet, NATGateway and the guest NIC + Container.
 //
-// There is no address-pool object: NATGateway.spec.publicIPs is a literal list today (LB has
-// LBPool; a generic IPPool serving both is separate work). The port block IS centrally allocated —
-// mesh/allocator/portblock.go hands each source IP a disjoint block.
+// There is no address-pool object: NATGateway.spec.publicIPs is a literal list today. The LB
+// allocator already draws from a generic IPPool; teaching NAT to do the same is separate work.
+// The port block IS centrally allocated — mesh/allocator/portblock.go hands each source IP a
+// disjoint block.
 func natIntentFixture(node, cluster string) string {
 	return fmt.Sprintf(`apiVersion: net.ectobase.dev/v1alpha1
 kind: VPC

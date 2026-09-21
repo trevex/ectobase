@@ -14,9 +14,6 @@ func (*VPC) GetSingularName() string { return "vpc" }
 func (*Subnet) GetSingularName() string { return "subnet" }
 func (*Subnet) ShortNames() []string    { return []string{"sn"} }
 
-func (*LBPool) GetSingularName() string { return "lbpool" }
-func (*LBPool) ShortNames() []string    { return []string{"lbp"} }
-
 func (*IPPool) GetSingularName() string { return "ippool" }
 func (*IPPool) ShortNames() []string    { return []string{"ipp"} }
 

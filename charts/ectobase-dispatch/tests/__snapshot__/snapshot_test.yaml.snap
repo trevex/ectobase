@@ -778,7 +778,6 @@ renders the dispatch control plane:
         resources:
           - firewallpolicies
           - ippools
-          - lbpools
           - loadbalancers
           - subnets
           - vpcpeerings
@@ -801,7 +800,6 @@ renders the dispatch control plane:
           - net.ectobase.dev
         resources:
           - ippools/status
-          - lbpools/status
           - loadbalancers/status
           - networkinterfaces/status
           - subnets/status

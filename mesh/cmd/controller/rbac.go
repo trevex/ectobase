@@ -17,8 +17,6 @@ package main
 //+kubebuilder:rbac:groups=net.ectobase.dev,resources=loadbalancers/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=net.ectobase.dev,resources=subnets,verbs=get;list;watch
 //+kubebuilder:rbac:groups=net.ectobase.dev,resources=subnets/status,verbs=get;update;patch
-//+kubebuilder:rbac:groups=net.ectobase.dev,resources=lbpools,verbs=get;list;watch
-//+kubebuilder:rbac:groups=net.ectobase.dev,resources=lbpools/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=net.ectobase.dev,resources=ippools,verbs=get;list;watch
 //+kubebuilder:rbac:groups=net.ectobase.dev,resources=ippools/status,verbs=get;update;patch
 // IPAllocation is the allocation record itself: the allocator CREATEs one per address (the

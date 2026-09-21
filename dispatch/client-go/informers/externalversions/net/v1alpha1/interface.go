@@ -16,8 +16,6 @@ type Interface interface {
 	IPAllocations() IPAllocationInformer
 	// IPPools returns a IPPoolInformer.
 	IPPools() IPPoolInformer
-	// LBPools returns a LBPoolInformer.
-	LBPools() LBPoolInformer
 	// LoadBalancers returns a LoadBalancerInformer.
 	LoadBalancers() LoadBalancerInformer
 	// NATGateways returns a NATGatewayInformer.
@@ -61,11 +59,6 @@ func (v *version) IPAllocations() IPAllocationInformer {
 // IPPools returns a IPPoolInformer.
 func (v *version) IPPools() IPPoolInformer {
 	return &iPPoolInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
-}
-
-// LBPools returns a LBPoolInformer.
-func (v *version) LBPools() LBPoolInformer {
-	return &lBPoolInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
 }
 
 // LoadBalancers returns a LoadBalancerInformer.

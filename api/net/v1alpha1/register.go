@@ -45,8 +45,6 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 		&VPCList{},
 		&Subnet{},
 		&SubnetList{},
-		&LBPool{},
-		&LBPoolList{},
 		&IPPool{},
 		&IPPoolList{},
 		&IPAllocation{},

@@ -34,14 +34,6 @@ type IPPoolListerExpansion interface{}
 // IPPoolNamespaceLister.
 type IPPoolNamespaceListerExpansion interface{}
 
-// LBPoolListerExpansion allows custom methods to be added to
-// LBPoolLister.
-type LBPoolListerExpansion interface{}
-
-// LBPoolNamespaceListerExpansion allows custom methods to be added to
-// LBPoolNamespaceLister.
-type LBPoolNamespaceListerExpansion interface{}
-
 // LoadBalancerListerExpansion allows custom methods to be added to
 // LoadBalancerLister.
 type LoadBalancerListerExpansion interface{}

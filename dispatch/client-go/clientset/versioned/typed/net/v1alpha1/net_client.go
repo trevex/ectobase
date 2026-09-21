@@ -16,7 +16,6 @@ type NetV1alpha1Interface interface {
 	FloatingIPsGetter
 	IPAllocationsGetter
 	IPPoolsGetter
-	LBPoolsGetter
 	LoadBalancersGetter
 	NATGatewaysGetter
 	NetworkInterfacesGetter
@@ -44,10 +43,6 @@ func (c *NetV1alpha1Client) IPAllocations(namespace string) IPAllocationInterfac
 
 func (c *NetV1alpha1Client) IPPools(namespace string) IPPoolInterface {
 	return newIPPools(c, namespace)
-}
-
-func (c *NetV1alpha1Client) LBPools(namespace string) LBPoolInterface {
-	return newLBPools(c, namespace)
 }
 
 func (c *NetV1alpha1Client) LoadBalancers(namespace string) LoadBalancerInterface {
