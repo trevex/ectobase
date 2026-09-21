@@ -11,8 +11,21 @@ and the route bus ensures return traffic finds the node that owns that block.
 The core idea is that any node can compute a source's translation from a shared table
 without coordination. The `NATGatewayReconciler` owns that table:
 
-- A `NATGateway` selects a VPC (`Spec.VPCRef`) and carries a pool of `PublicIPs` plus a
-  `PortsPerSource` block size (default 1024).
+- A `NATGateway` selects a VPC (`Spec.VPCRef`) and draws its public addresses from an
+  [`IPPool`](../reference/crd-interactions.md) of `type: public` named by `Spec.PoolRef`, with a
+  `PortsPerSource` block size (default 1024). `Spec.PublicIPs` is no longer the pool itself: it
+  *pins* addresses inside `PoolRef`, the way `LoadBalancer.spec.ip` does. A gateway with no
+  `PoolRef` still treats `PublicIPs` as a literal list, so an older object keeps working.
+- Addresses are claimed on demand. The gateway starts with whatever it has pinned, and when a
+  source cannot be given a block because every address it holds is full, it claims **one more**
+  from the pool and lays the blocks out again. One per reconcile pass on purpose: a gateway that
+  suddenly gains hundreds of NICs must not drain a shared pool in a single tick — it grows again
+  on the next pass. When the pool has nothing left the gateway reports `Exhausted`, keeping every
+  block it had already handed out.
+- The address set never shrinks while the gateway lives. An address whose blocks a live source is
+  still using cannot be handed back without re-NATing that source mid-flow, so removing a pin from
+  `PublicIPs` does not release it either. The addresses go when the gateway does, collected with
+  the `IPAllocation` objects that hold them.
 - The reconciler lists every `NetworkInterface` in that VPC, collects each NIC's overlay
   IPs as sources, and assigns each source a deterministic block from the pool.
 - The result is written to `NATGateway.Status.Allocations`, a
@@ -164,7 +177,7 @@ NAT block explicit and self-describing on the wire.
 ## How it's wired
 
 ```
-NATGateway { VPCRef, PublicIPs[], PortsPerSource }
+NATGateway { VPCRef, PoolRef -> IPPool(public), PublicIPs[] (pins), PortsPerSource }
         │  NATGatewayReconciler
         │    · list NICs in the VPC → sources (overlay IPs)
         │    · deterministic (public IP, port block) per source (drain-safe)
