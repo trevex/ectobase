@@ -1709,7 +1709,10 @@ renders (ebpf clab):
                         validate membership in the pool + reserve (bring-your-own).
                       type: string
                     poolRef:
-                      description: PoolRef selects the LBPool to allocate the IP from.
+                      description: |-
+                        PoolRef selects the IPPool to allocate the IP from. The pool must be of type "public":
+                        a load-balancer address is reached from outside the fabric, so an internal range would
+                        advertise an address nothing can route to.
                       properties:
                         name:
                           description: Name is the name of the referenced object.
@@ -4599,7 +4602,10 @@ renders (ebpf hw):
                         validate membership in the pool + reserve (bring-your-own).
                       type: string
                     poolRef:
-                      description: PoolRef selects the LBPool to allocate the IP from.
+                      description: |-
+                        PoolRef selects the IPPool to allocate the IP from. The pool must be of type "public":
+                        a load-balancer address is reached from outside the fabric, so an internal range would
+                        advertise an address nothing can route to.
                       properties:
                         name:
                           description: Name is the name of the referenced object.
@@ -7486,7 +7492,10 @@ renders (tier1 on):
                         validate membership in the pool + reserve (bring-your-own).
                       type: string
                     poolRef:
-                      description: PoolRef selects the LBPool to allocate the IP from.
+                      description: |-
+                        PoolRef selects the IPPool to allocate the IP from. The pool must be of type "public":
+                        a load-balancer address is reached from outside the fabric, so an internal range would
+                        advertise an address nothing can route to.
                       properties:
                         name:
                           description: Name is the name of the referenced object.
@@ -10413,7 +10422,10 @@ renders (tier1 watchdog):
                         validate membership in the pool + reserve (bring-your-own).
                       type: string
                     poolRef:
-                      description: PoolRef selects the LBPool to allocate the IP from.
+                      description: |-
+                        PoolRef selects the IPPool to allocate the IP from. The pool must be of type "public":
+                        a load-balancer address is reached from outside the fabric, so an internal range would
+                        advertise an address nothing can route to.
                       properties:
                         name:
                           description: Name is the name of the referenced object.
@@ -13350,7 +13362,10 @@ renders with vm-materializer enabled:
                         validate membership in the pool + reserve (bring-your-own).
                       type: string
                     poolRef:
-                      description: PoolRef selects the LBPool to allocate the IP from.
+                      description: |-
+                        PoolRef selects the IPPool to allocate the IP from. The pool must be of type "public":
+                        a load-balancer address is reached from outside the fabric, so an internal range would
+                        advertise an address nothing can route to.
                       properties:
                         name:
                           description: Name is the name of the referenced object.

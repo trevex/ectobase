@@ -21,7 +21,7 @@ func (o *LoadBalancer) Validate(ctx context.Context) field.ErrorList {
 		}
 	}
 	if o.Spec.PoolRef.Name == "" {
-		errs = append(errs, field.Required(field.NewPath("spec", "poolRef", "name"), "an LBPool reference is required"))
+		errs = append(errs, field.Required(field.NewPath("spec", "poolRef", "name"), "an IPPool reference is required"))
 	}
 	return errs
 }

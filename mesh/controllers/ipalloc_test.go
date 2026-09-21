@@ -15,7 +15,6 @@ import (
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -157,10 +156,7 @@ func racePool() *netv1.IPPool {
 // every racer writes. The claim is the object NAME, so the apiserver — or here the fake client's
 // tracker — resolves the race for free.
 func TestTwoConsumersRacingForTheLastAddressOnlyOneWins(t *testing.T) {
-	scheme := runtime.NewScheme()
-	if err := netv1.AddToScheme(scheme); err != nil {
-		t.Fatal(err)
-	}
+	scheme := lbScheme(t)
 	pool := racePool()
 	const racers = 8
 
@@ -226,10 +222,7 @@ func TestTwoConsumersRacingForTheLastAddressOnlyOneWins(t *testing.T) {
 // claimed by another consumer is simply not available, whether it is asked for by name or
 // reached by the lowest-free walk.
 func TestClaimRefusesAnAddressAnotherConsumerHolds(t *testing.T) {
-	scheme := runtime.NewScheme()
-	if err := netv1.AddToScheme(scheme); err != nil {
-		t.Fatal(err)
-	}
+	scheme := lbScheme(t)
 	pool := racePool()
 	holder := &netv1.LoadBalancer{ObjectMeta: metav1.ObjectMeta{Name: "holder", Namespace: "default", UID: "uid-holder"}}
 	rival := &netv1.LoadBalancer{ObjectMeta: metav1.ObjectMeta{Name: "rival", Namespace: "default", UID: "uid-rival"}}
@@ -268,10 +261,7 @@ func TestClaimRefusesAnAddressAnotherConsumerHolds(t *testing.T) {
 // A consumer repointed at a different address must not keep its old claim: one address per
 // single-address consumer, or the pool leaks one address per edit.
 func TestReleaseClaimsExceptFreesTheSupersededAddress(t *testing.T) {
-	scheme := runtime.NewScheme()
-	if err := netv1.AddToScheme(scheme); err != nil {
-		t.Fatal(err)
-	}
+	scheme := lbScheme(t)
 	pool := &netv1.IPPool{
 		ObjectMeta: metav1.ObjectMeta{Name: "p", Namespace: "default"},
 		Spec:       netv1.IPPoolSpec{Type: netv1.IPPoolTypePublic, V4Prefix: sp("198.51.100.0/24")},
@@ -306,10 +296,7 @@ func TestReleaseClaimsExceptFreesTheSupersededAddress(t *testing.T) {
 // garbage collection reclaims it by. envtest runs no garbage collector, so the ownerRef FIELDS
 // are the only part of reclamation provable here; the collection itself is a live-lab check.
 func TestClaimSetsControllerOwnerRefAndPoolLabel(t *testing.T) {
-	scheme := runtime.NewScheme()
-	if err := netv1.AddToScheme(scheme); err != nil {
-		t.Fatal(err)
-	}
+	scheme := lbScheme(t)
 	pool := &netv1.IPPool{
 		ObjectMeta: metav1.ObjectMeta{Name: "pub", Namespace: "default"},
 		Spec:       netv1.IPPoolSpec{Type: netv1.IPPoolTypePublic, V4Prefix: sp("198.51.100.0/24")},

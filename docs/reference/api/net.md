@@ -437,7 +437,7 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `ip` _string_ | IP is the requested load-balancer address. Empty => allocate from PoolRef; set =><br />validate membership in the pool + reserve (bring-your-own). |  |  |
-| `poolRef` _[LocalObjectReference](#localobjectreference)_ | PoolRef selects the LBPool to allocate the IP from. |  | Optional: \{\} <br /> |
+| `poolRef` _[LocalObjectReference](#localobjectreference)_ | PoolRef selects the IPPool to allocate the IP from. The pool must be of type "public":<br />a load-balancer address is reached from outside the fabric, so an internal range would<br />advertise an address nothing can route to. |  | Optional: \{\} <br /> |
 | `ports` _[LoadBalancerPort](#loadbalancerport) array_ | Ports are the LB service (port, proto) tuples. |  |  |
 | `targetSelector` _[LabelSelector](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30/#labelselector-v1-meta)_ | TargetSelector selects backend NetworkInterfaces by label. Mutually exclusive with TargetRefs. |  | Optional: \{\} <br /> |
 | `targetRefs` _[LocalObjectReference](#localobjectreference) array_ | TargetRefs names backend NetworkInterfaces explicitly. Mutually exclusive with TargetSelector. |  | Optional: \{\} <br /> |

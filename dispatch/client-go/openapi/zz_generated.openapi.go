@@ -3295,7 +3295,7 @@ func schema_ectobase_api_net_v1alpha1_LoadBalancerSpec(ref common.ReferenceCallb
 					},
 					"poolRef": {
 						SchemaProps: spec.SchemaProps{
-							Description: "PoolRef selects the LBPool to allocate the IP from.",
+							Description: "PoolRef selects the IPPool to allocate the IP from. The pool must be of type \"public\": a load-balancer address is reached from outside the fabric, so an internal range would advertise an address nothing can route to.",
 							Default:     map[string]interface{}{},
 							Ref:         ref(netv1alpha1.LocalObjectReference{}.OpenAPIModelName()),
 						},

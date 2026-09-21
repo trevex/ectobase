@@ -12,7 +12,7 @@ type LoadBalancerSpec struct {
 	// IP is the requested load-balancer address. Empty => allocate from PoolRef; set =>
 	// validate membership in the pool + reserve (bring-your-own).
 	IP string
-	// PoolRef selects the LBPool to allocate the IP from.
+	// PoolRef selects the IPPool to allocate the IP from. The pool must be of type "public".
 	PoolRef LocalObjectReference
 	// Ports are the LB service (port, proto) tuples.
 	Ports []LoadBalancerPort

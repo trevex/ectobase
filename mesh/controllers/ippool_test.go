@@ -10,21 +10,11 @@ import (
 
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
 func ipPool(name string, spec netv1.IPPoolSpec) *netv1.IPPool {
 	return &netv1.IPPool{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"}, Spec: spec}
-}
-
-func ipPoolScheme(t *testing.T) *runtime.Scheme {
-	t.Helper()
-	scheme := runtime.NewScheme()
-	if err := netv1.AddToScheme(scheme); err != nil {
-		t.Fatal(err)
-	}
-	return scheme
 }
 
 func TestIPPoolStates(t *testing.T) {
@@ -45,7 +35,7 @@ func TestIPPoolStates(t *testing.T) {
 		{"empty type", netv1.IPPoolSpec{V4Prefix: sp("198.51.100.0/24")}, "Invalid", 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			scheme := ipPoolScheme(t)
+			scheme := lbScheme(t)
 			p := ipPool("p", tc.spec)
 			cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(p).WithStatusSubresource(&netv1.IPPool{}).Build()
 			r := &IPPoolReconciler{Client: cl, APIReader: cl}
@@ -75,7 +65,7 @@ func TestIPPoolOverlapIsDeterministic(t *testing.T) {
 
 	for _, order := range []string{"older first", "newer first"} {
 		t.Run(order, func(t *testing.T) {
-			scheme := ipPoolScheme(t)
+			scheme := lbScheme(t)
 			older := ipPool("older", netv1.IPPoolSpec{Type: netv1.IPPoolTypePublic, V4Prefix: sp("198.51.100.0/24")})
 			older.CreationTimestamp = t0
 			newer := ipPool("newer", netv1.IPPoolSpec{Type: netv1.IPPoolTypePublic, V4Prefix: sp("198.51.100.128/25")})
@@ -113,7 +103,7 @@ func TestIPPoolOverlapIsDeterministic(t *testing.T) {
 
 // A disjoint sibling is not a conflict; only genuine prefix overlap is.
 func TestIPPoolDisjointSiblingsBothReady(t *testing.T) {
-	scheme := ipPoolScheme(t)
+	scheme := lbScheme(t)
 	a := ipPool("a", netv1.IPPoolSpec{Type: netv1.IPPoolTypePublic, V4Prefix: sp("198.51.100.0/25")})
 	b := ipPool("b", netv1.IPPoolSpec{Type: netv1.IPPoolTypeInternal, V4Prefix: sp("198.51.100.128/25")})
 	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(a, b).WithStatusSubresource(&netv1.IPPool{}).Build()
