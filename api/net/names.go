@@ -17,6 +17,9 @@ func (*Subnet) ShortNames() []string    { return []string{"sn"} }
 func (*LBPool) GetSingularName() string { return "lbpool" }
 func (*LBPool) ShortNames() []string    { return []string{"lbp"} }
 
+func (*IPPool) GetSingularName() string { return "ippool" }
+func (*IPPool) ShortNames() []string    { return []string{"ipp"} }
+
 func (*NetworkInterface) GetSingularName() string { return "networkinterface" }
 func (*NetworkInterface) ShortNames() []string    { return []string{"nic"} }
 

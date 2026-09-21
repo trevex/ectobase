@@ -19,6 +19,8 @@ package main
 //+kubebuilder:rbac:groups=net.ectobase.dev,resources=subnets/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=net.ectobase.dev,resources=lbpools,verbs=get;list;watch
 //+kubebuilder:rbac:groups=net.ectobase.dev,resources=lbpools/status,verbs=get;update;patch
+//+kubebuilder:rbac:groups=net.ectobase.dev,resources=ippools,verbs=get;list;watch
+//+kubebuilder:rbac:groups=net.ectobase.dev,resources=ippools/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=net.ectobase.dev,resources=vpcs,verbs=get;list;watch
 //+kubebuilder:rbac:groups=net.ectobase.dev,resources=vpcs/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=net.ectobase.dev,resources=vpcpeerings,verbs=get;list;watch

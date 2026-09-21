@@ -13,6 +13,7 @@ the aggregated apiserver and consumed as CRDs by the mesh control plane.
 ### Resource Types
 - [FirewallPolicy](#firewallpolicy)
 - [FloatingIP](#floatingip)
+- [IPPool](#ippool)
 - [LBPool](#lbpool)
 - [LoadBalancer](#loadbalancer)
 - [NATGateway](#natgateway)
@@ -172,6 +173,86 @@ SCAFFOLD ONLY: intentionally empty.
 _Appears in:_
 - [FloatingIP](#floatingip)
 
+
+
+#### IPPool
+
+
+
+IPPool is a fleet-scoped, typed range of IPv4/IPv6 prefixes that any consumer
+(LoadBalancer, NATGateway, ...) allocates addresses from.
+
+
+
+_Appears in:_
+- [IPPoolList](#ippoollist)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `apiVersion` _string_ | `net.ectobase.dev/v1alpha1` | | |
+| `kind` _string_ | `IPPool` | | |
+| `metadata` _[ObjectMeta](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30/#objectmeta-v1-meta)_ | Refer to Kubernetes API documentation for fields of `metadata`. |  |  |
+| `spec` _[IPPoolSpec](#ippoolspec)_ |  |  |  |
+| `status` _[IPPoolStatus](#ippoolstatus)_ |  |  |  |
+
+
+
+
+#### IPPoolSpec
+
+
+
+IPPoolSpec is the desired state of an IPPool (a fleet-scoped address range).
+
+
+
+_Appears in:_
+- [IPPool](#ippool)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `type` _[IPPoolType](#ippooltype)_ | Type is what the addresses in this pool are for. |  | Enum: [public internal] <br /> |
+| `v4Prefix` _string_ | V4Prefix optionally pins the IPv4 CIDR for this pool. |  | Optional: \{\} <br /> |
+| `v6Prefix` _string_ | V6Prefix optionally pins the IPv6 CIDR for this pool. |  | Optional: \{\} <br /> |
+| `reservedIPs` _string array_ | ReservedIPs are addresses held back from allocation within this pool. |  | Optional: \{\} <br /> |
+
+
+#### IPPoolStatus
+
+
+
+IPPoolStatus is the observed state of an IPPool.
+
+
+
+_Appears in:_
+- [IPPool](#ippool)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `state` _string_ | State is the current lifecycle state: Pending, Ready, Invalid or Conflict. |  | Optional: \{\} <br /> |
+| `total` _integer_ | Total is the number of allocatable addresses across this pool's prefixes. |  | Optional: \{\} <br /> |
+| `allocated` _integer_ | Allocated is how many IPAllocations currently name this pool. A convenience for<br />operators, derived on each sync — never the source of truth for what is free. |  | Optional: \{\} <br /> |
+
+
+#### IPPoolType
+
+_Underlying type:_ _string_
+
+IPPoolType is what the addresses in a pool are for. A consumer states the type it needs and is
+refused a pool of any other type, so an internal range can never be handed out as a public NAT
+or LB address.
+
+_Validation:_
+- Enum: [public internal]
+
+_Appears in:_
+- [IPPoolSpec](#ippoolspec)
+
+| Field | Description |
+| --- | --- |
+| `public` | IPPoolTypePublic is an internet-routable range: NAT gateway addresses, LB addresses.<br /> |
+| `internal` | IPPoolTypeInternal is a range that never leaves the fabric (e.g. internal LBs).<br /> |
 
 
 #### InterfaceQoS

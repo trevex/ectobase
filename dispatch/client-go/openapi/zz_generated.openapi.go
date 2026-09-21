@@ -73,6 +73,10 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		netv1alpha1.FloatingIPList{}.OpenAPIModelName():              schema_ectobase_api_net_v1alpha1_FloatingIPList(ref),
 		netv1alpha1.FloatingIPSpec{}.OpenAPIModelName():              schema_ectobase_api_net_v1alpha1_FloatingIPSpec(ref),
 		netv1alpha1.FloatingIPStatus{}.OpenAPIModelName():            schema_ectobase_api_net_v1alpha1_FloatingIPStatus(ref),
+		netv1alpha1.IPPool{}.OpenAPIModelName():                      schema_ectobase_api_net_v1alpha1_IPPool(ref),
+		netv1alpha1.IPPoolList{}.OpenAPIModelName():                  schema_ectobase_api_net_v1alpha1_IPPoolList(ref),
+		netv1alpha1.IPPoolSpec{}.OpenAPIModelName():                  schema_ectobase_api_net_v1alpha1_IPPoolSpec(ref),
+		netv1alpha1.IPPoolStatus{}.OpenAPIModelName():                schema_ectobase_api_net_v1alpha1_IPPoolStatus(ref),
 		netv1alpha1.InterfaceQoS{}.OpenAPIModelName():                schema_ectobase_api_net_v1alpha1_InterfaceQoS(ref),
 		netv1alpha1.LBPool{}.OpenAPIModelName():                      schema_ectobase_api_net_v1alpha1_LBPool(ref),
 		netv1alpha1.LBPoolList{}.OpenAPIModelName():                  schema_ectobase_api_net_v1alpha1_LBPoolList(ref),
@@ -2638,6 +2642,187 @@ func schema_ectobase_api_net_v1alpha1_FloatingIPStatus(ref common.ReferenceCallb
 			SchemaProps: spec.SchemaProps{
 				Description: "FloatingIPStatus is the observed state of a FloatingIP.\n\nSCAFFOLD ONLY: intentionally empty.",
 				Type:        []string{"object"},
+			},
+		},
+	}
+}
+
+func schema_ectobase_api_net_v1alpha1_IPPool(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "IPPool is a fleet-scoped, typed range of IPv4/IPv6 prefixes that any consumer (LoadBalancer, NATGateway, ...) allocates addresses from.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"kind": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"apiVersion": {
+						SchemaProps: spec.SchemaProps{
+							Description: "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"metadata": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref(metav1.ObjectMeta{}.OpenAPIModelName()),
+						},
+					},
+					"spec": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref(netv1alpha1.IPPoolSpec{}.OpenAPIModelName()),
+						},
+					},
+					"status": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref(netv1alpha1.IPPoolStatus{}.OpenAPIModelName()),
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			netv1alpha1.IPPoolSpec{}.OpenAPIModelName(), netv1alpha1.IPPoolStatus{}.OpenAPIModelName(), metav1.ObjectMeta{}.OpenAPIModelName()},
+	}
+}
+
+func schema_ectobase_api_net_v1alpha1_IPPoolList(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "IPPoolList is a list of IPPool objects.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"kind": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"apiVersion": {
+						SchemaProps: spec.SchemaProps{
+							Description: "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"metadata": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref(metav1.ListMeta{}.OpenAPIModelName()),
+						},
+					},
+					"items": {
+						SchemaProps: spec.SchemaProps{
+							Type: []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref(netv1alpha1.IPPool{}.OpenAPIModelName()),
+									},
+								},
+							},
+						},
+					},
+				},
+				Required: []string{"items"},
+			},
+		},
+		Dependencies: []string{
+			netv1alpha1.IPPool{}.OpenAPIModelName(), metav1.ListMeta{}.OpenAPIModelName()},
+	}
+}
+
+func schema_ectobase_api_net_v1alpha1_IPPoolSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "IPPoolSpec is the desired state of an IPPool (a fleet-scoped address range).",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"type": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Type is what the addresses in this pool are for.",
+							Default:     "",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"v4Prefix": {
+						SchemaProps: spec.SchemaProps{
+							Description: "V4Prefix optionally pins the IPv4 CIDR for this pool.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"v6Prefix": {
+						SchemaProps: spec.SchemaProps{
+							Description: "V6Prefix optionally pins the IPv6 CIDR for this pool.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"reservedIPs": {
+						SchemaProps: spec.SchemaProps{
+							Description: "ReservedIPs are addresses held back from allocation within this pool.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: "",
+										Type:    []string{"string"},
+										Format:  "",
+									},
+								},
+							},
+						},
+					},
+				},
+				Required: []string{"type"},
+			},
+		},
+	}
+}
+
+func schema_ectobase_api_net_v1alpha1_IPPoolStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "IPPoolStatus is the observed state of an IPPool.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"state": {
+						SchemaProps: spec.SchemaProps{
+							Description: "State is the current lifecycle state: Pending, Ready, Invalid or Conflict.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"total": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Total is the number of allocatable addresses across this pool's prefixes.",
+							Type:        []string{"integer"},
+							Format:      "int32",
+						},
+					},
+					"allocated": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Allocated is how many IPAllocations currently name this pool. A convenience for operators, derived on each sync — never the source of truth for what is free.",
+							Type:        []string{"integer"},
+							Format:      "int32",
+						},
+					},
+				},
 			},
 		},
 	}

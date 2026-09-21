@@ -18,6 +18,14 @@ type FloatingIPListerExpansion interface{}
 // FloatingIPNamespaceLister.
 type FloatingIPNamespaceListerExpansion interface{}
 
+// IPPoolListerExpansion allows custom methods to be added to
+// IPPoolLister.
+type IPPoolListerExpansion interface{}
+
+// IPPoolNamespaceListerExpansion allows custom methods to be added to
+// IPPoolNamespaceLister.
+type IPPoolNamespaceListerExpansion interface{}
+
 // LBPoolListerExpansion allows custom methods to be added to
 // LBPoolLister.
 type LBPoolListerExpansion interface{}
