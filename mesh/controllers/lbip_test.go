@@ -380,7 +380,7 @@ func TestLBStatesFollowTheirPool(t *testing.T) {
 
 // Repointing spec.poolRef must hand the old pool's address back too. The claim lives in a pool
 // this reconcile never looks at, which is why release selects on the consumer and not the pool.
-func TestLBPoolSwapReleasesTheOldPoolsAddress(t *testing.T) {
+func TestPoolSwapReleasesTheOldPoolsAddress(t *testing.T) {
 	scheme := lbScheme(t)
 	a := readyPool("a", "198.51.100.0/24")
 	b := readyPool("b", "203.0.113.0/24")
