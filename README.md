@@ -36,7 +36,7 @@ Intent is authored as CRDs across five groups; the control plane lowers it into 
 
 | Group | Kinds |
 |---|---|
-| `net.ectobase.dev` | VPC, Subnet, NetworkInterface, FirewallPolicy, LoadBalancer, LBPool, NATGateway, FloatingIP, VPCPeering |
+| `net.ectobase.dev` | VPC, Subnet, NetworkInterface, FirewallPolicy, LoadBalancer, IPPool, NATGateway, FloatingIP, VPCPeering, IPAllocation *(controller-written)* |
 | `compute.ectobase.dev` | VirtualMachine, Container |
 | `storage.ectobase.dev` | Volume |
 | `compiled.ectobase.dev` | CompiledNIC, CompiledVM, CompiledContainer, CompiledVolumeAttachment *(controller-written)* |

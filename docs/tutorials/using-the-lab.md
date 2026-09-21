@@ -452,7 +452,7 @@ khub get vpcpeering        # both -> Ready once the pair is mutual
 Giving a workload internet egress (`NATGateway` + `FloatingIP`) or a public LB address
 (`LoadBalancer`) is authored the same way: a CRD on the dispatch that the compiler
 folds into the workload's `CompiledNIC`. Under IPAM a `LoadBalancer` draws its LB address
-from an `LBPool` (as NICs draw from a `Subnet`); the
+from an `IPPool` of `type: public` (as NICs draw from a `Subnet`); the
 [IPAM walkthrough](ipam-walkthrough.md) covers the LoadBalancer + NAT path end-to-end:
 
 ```yaml
