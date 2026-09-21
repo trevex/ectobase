@@ -8,34 +8,35 @@ import (
 	v1 "k8s.io/client-go/applyconfigurations/meta/v1"
 )
 
-// LBPoolApplyConfiguration represents a declarative configuration of the LBPool type for use
+// IPAllocationApplyConfiguration represents a declarative configuration of the IPAllocation type for use
 // with apply.
 //
-// LBPool is a fleet-scoped range of IPv4/IPv6 LB address prefixes.
-type LBPoolApplyConfiguration struct {
+// IPAllocation is one address held out of one IPPool. It is created by the consumer's
+// allocator and reclaimed by Kubernetes garbage collection when its ownerReference's
+// consumer is deleted.
+type IPAllocationApplyConfiguration struct {
 	v1.TypeMetaApplyConfiguration    `json:",inline"`
 	*v1.ObjectMetaApplyConfiguration `json:"metadata,omitempty"`
-	Spec                             *LBPoolSpecApplyConfiguration   `json:"spec,omitempty"`
-	Status                           *LBPoolStatusApplyConfiguration `json:"status,omitempty"`
+	Spec                             *IPAllocationSpecApplyConfiguration `json:"spec,omitempty"`
 }
 
-// LBPool constructs a declarative configuration of the LBPool type for use with
+// IPAllocation constructs a declarative configuration of the IPAllocation type for use with
 // apply.
-func LBPool(name, namespace string) *LBPoolApplyConfiguration {
-	b := &LBPoolApplyConfiguration{}
+func IPAllocation(name, namespace string) *IPAllocationApplyConfiguration {
+	b := &IPAllocationApplyConfiguration{}
 	b.WithName(name)
 	b.WithNamespace(namespace)
-	b.WithKind("LBPool")
+	b.WithKind("IPAllocation")
 	b.WithAPIVersion("net.ectobase.dev/v1alpha1")
 	return b
 }
 
-func (b LBPoolApplyConfiguration) IsApplyConfiguration() {}
+func (b IPAllocationApplyConfiguration) IsApplyConfiguration() {}
 
 // WithKind sets the Kind field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the Kind field is set to the value of the last call.
-func (b *LBPoolApplyConfiguration) WithKind(value string) *LBPoolApplyConfiguration {
+func (b *IPAllocationApplyConfiguration) WithKind(value string) *IPAllocationApplyConfiguration {
 	b.TypeMetaApplyConfiguration.Kind = &value
 	return b
 }
@@ -43,7 +44,7 @@ func (b *LBPoolApplyConfiguration) WithKind(value string) *LBPoolApplyConfigurat
 // WithAPIVersion sets the APIVersion field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the APIVersion field is set to the value of the last call.
-func (b *LBPoolApplyConfiguration) WithAPIVersion(value string) *LBPoolApplyConfiguration {
+func (b *IPAllocationApplyConfiguration) WithAPIVersion(value string) *IPAllocationApplyConfiguration {
 	b.TypeMetaApplyConfiguration.APIVersion = &value
 	return b
 }
@@ -51,7 +52,7 @@ func (b *LBPoolApplyConfiguration) WithAPIVersion(value string) *LBPoolApplyConf
 // WithName sets the Name field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the Name field is set to the value of the last call.
-func (b *LBPoolApplyConfiguration) WithName(value string) *LBPoolApplyConfiguration {
+func (b *IPAllocationApplyConfiguration) WithName(value string) *IPAllocationApplyConfiguration {
 	b.ensureObjectMetaApplyConfigurationExists()
 	b.ObjectMetaApplyConfiguration.Name = &value
 	return b
@@ -60,7 +61,7 @@ func (b *LBPoolApplyConfiguration) WithName(value string) *LBPoolApplyConfigurat
 // WithGenerateName sets the GenerateName field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the GenerateName field is set to the value of the last call.
-func (b *LBPoolApplyConfiguration) WithGenerateName(value string) *LBPoolApplyConfiguration {
+func (b *IPAllocationApplyConfiguration) WithGenerateName(value string) *IPAllocationApplyConfiguration {
 	b.ensureObjectMetaApplyConfigurationExists()
 	b.ObjectMetaApplyConfiguration.GenerateName = &value
 	return b
@@ -69,7 +70,7 @@ func (b *LBPoolApplyConfiguration) WithGenerateName(value string) *LBPoolApplyCo
 // WithNamespace sets the Namespace field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the Namespace field is set to the value of the last call.
-func (b *LBPoolApplyConfiguration) WithNamespace(value string) *LBPoolApplyConfiguration {
+func (b *IPAllocationApplyConfiguration) WithNamespace(value string) *IPAllocationApplyConfiguration {
 	b.ensureObjectMetaApplyConfigurationExists()
 	b.ObjectMetaApplyConfiguration.Namespace = &value
 	return b
@@ -78,7 +79,7 @@ func (b *LBPoolApplyConfiguration) WithNamespace(value string) *LBPoolApplyConfi
 // WithUID sets the UID field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the UID field is set to the value of the last call.
-func (b *LBPoolApplyConfiguration) WithUID(value types.UID) *LBPoolApplyConfiguration {
+func (b *IPAllocationApplyConfiguration) WithUID(value types.UID) *IPAllocationApplyConfiguration {
 	b.ensureObjectMetaApplyConfigurationExists()
 	b.ObjectMetaApplyConfiguration.UID = &value
 	return b
@@ -87,7 +88,7 @@ func (b *LBPoolApplyConfiguration) WithUID(value types.UID) *LBPoolApplyConfigur
 // WithResourceVersion sets the ResourceVersion field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the ResourceVersion field is set to the value of the last call.
-func (b *LBPoolApplyConfiguration) WithResourceVersion(value string) *LBPoolApplyConfiguration {
+func (b *IPAllocationApplyConfiguration) WithResourceVersion(value string) *IPAllocationApplyConfiguration {
 	b.ensureObjectMetaApplyConfigurationExists()
 	b.ObjectMetaApplyConfiguration.ResourceVersion = &value
 	return b
@@ -96,7 +97,7 @@ func (b *LBPoolApplyConfiguration) WithResourceVersion(value string) *LBPoolAppl
 // WithGeneration sets the Generation field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the Generation field is set to the value of the last call.
-func (b *LBPoolApplyConfiguration) WithGeneration(value int64) *LBPoolApplyConfiguration {
+func (b *IPAllocationApplyConfiguration) WithGeneration(value int64) *IPAllocationApplyConfiguration {
 	b.ensureObjectMetaApplyConfigurationExists()
 	b.ObjectMetaApplyConfiguration.Generation = &value
 	return b
@@ -105,7 +106,7 @@ func (b *LBPoolApplyConfiguration) WithGeneration(value int64) *LBPoolApplyConfi
 // WithCreationTimestamp sets the CreationTimestamp field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the CreationTimestamp field is set to the value of the last call.
-func (b *LBPoolApplyConfiguration) WithCreationTimestamp(value metav1.Time) *LBPoolApplyConfiguration {
+func (b *IPAllocationApplyConfiguration) WithCreationTimestamp(value metav1.Time) *IPAllocationApplyConfiguration {
 	b.ensureObjectMetaApplyConfigurationExists()
 	b.ObjectMetaApplyConfiguration.CreationTimestamp = &value
 	return b
@@ -114,7 +115,7 @@ func (b *LBPoolApplyConfiguration) WithCreationTimestamp(value metav1.Time) *LBP
 // WithDeletionTimestamp sets the DeletionTimestamp field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the DeletionTimestamp field is set to the value of the last call.
-func (b *LBPoolApplyConfiguration) WithDeletionTimestamp(value metav1.Time) *LBPoolApplyConfiguration {
+func (b *IPAllocationApplyConfiguration) WithDeletionTimestamp(value metav1.Time) *IPAllocationApplyConfiguration {
 	b.ensureObjectMetaApplyConfigurationExists()
 	b.ObjectMetaApplyConfiguration.DeletionTimestamp = &value
 	return b
@@ -123,7 +124,7 @@ func (b *LBPoolApplyConfiguration) WithDeletionTimestamp(value metav1.Time) *LBP
 // WithDeletionGracePeriodSeconds sets the DeletionGracePeriodSeconds field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the DeletionGracePeriodSeconds field is set to the value of the last call.
-func (b *LBPoolApplyConfiguration) WithDeletionGracePeriodSeconds(value int64) *LBPoolApplyConfiguration {
+func (b *IPAllocationApplyConfiguration) WithDeletionGracePeriodSeconds(value int64) *IPAllocationApplyConfiguration {
 	b.ensureObjectMetaApplyConfigurationExists()
 	b.ObjectMetaApplyConfiguration.DeletionGracePeriodSeconds = &value
 	return b
@@ -133,7 +134,7 @@ func (b *LBPoolApplyConfiguration) WithDeletionGracePeriodSeconds(value int64) *
 // and returns the receiver, so that objects can be build by chaining "With" function invocations.
 // If called multiple times, the entries provided by each call will be put on the Labels field,
 // overwriting an existing map entries in Labels field with the same key.
-func (b *LBPoolApplyConfiguration) WithLabels(entries map[string]string) *LBPoolApplyConfiguration {
+func (b *IPAllocationApplyConfiguration) WithLabels(entries map[string]string) *IPAllocationApplyConfiguration {
 	b.ensureObjectMetaApplyConfigurationExists()
 	if b.ObjectMetaApplyConfiguration.Labels == nil && len(entries) > 0 {
 		b.ObjectMetaApplyConfiguration.Labels = make(map[string]string, len(entries))
@@ -148,7 +149,7 @@ func (b *LBPoolApplyConfiguration) WithLabels(entries map[string]string) *LBPool
 // and returns the receiver, so that objects can be build by chaining "With" function invocations.
 // If called multiple times, the entries provided by each call will be put on the Annotations field,
 // overwriting an existing map entries in Annotations field with the same key.
-func (b *LBPoolApplyConfiguration) WithAnnotations(entries map[string]string) *LBPoolApplyConfiguration {
+func (b *IPAllocationApplyConfiguration) WithAnnotations(entries map[string]string) *IPAllocationApplyConfiguration {
 	b.ensureObjectMetaApplyConfigurationExists()
 	if b.ObjectMetaApplyConfiguration.Annotations == nil && len(entries) > 0 {
 		b.ObjectMetaApplyConfiguration.Annotations = make(map[string]string, len(entries))
@@ -162,7 +163,7 @@ func (b *LBPoolApplyConfiguration) WithAnnotations(entries map[string]string) *L
 // WithOwnerReferences adds the given value to the OwnerReferences field in the declarative configuration
 // and returns the receiver, so that objects can be build by chaining "With" function invocations.
 // If called multiple times, values provided by each call will be appended to the OwnerReferences field.
-func (b *LBPoolApplyConfiguration) WithOwnerReferences(values ...*v1.OwnerReferenceApplyConfiguration) *LBPoolApplyConfiguration {
+func (b *IPAllocationApplyConfiguration) WithOwnerReferences(values ...*v1.OwnerReferenceApplyConfiguration) *IPAllocationApplyConfiguration {
 	b.ensureObjectMetaApplyConfigurationExists()
 	for i := range values {
 		if values[i] == nil {
@@ -176,7 +177,7 @@ func (b *LBPoolApplyConfiguration) WithOwnerReferences(values ...*v1.OwnerRefere
 // WithFinalizers adds the given value to the Finalizers field in the declarative configuration
 // and returns the receiver, so that objects can be build by chaining "With" function invocations.
 // If called multiple times, values provided by each call will be appended to the Finalizers field.
-func (b *LBPoolApplyConfiguration) WithFinalizers(values ...string) *LBPoolApplyConfiguration {
+func (b *IPAllocationApplyConfiguration) WithFinalizers(values ...string) *IPAllocationApplyConfiguration {
 	b.ensureObjectMetaApplyConfigurationExists()
 	for i := range values {
 		b.ObjectMetaApplyConfiguration.Finalizers = append(b.ObjectMetaApplyConfiguration.Finalizers, values[i])
@@ -184,7 +185,7 @@ func (b *LBPoolApplyConfiguration) WithFinalizers(values ...string) *LBPoolApply
 	return b
 }
 
-func (b *LBPoolApplyConfiguration) ensureObjectMetaApplyConfigurationExists() {
+func (b *IPAllocationApplyConfiguration) ensureObjectMetaApplyConfigurationExists() {
 	if b.ObjectMetaApplyConfiguration == nil {
 		b.ObjectMetaApplyConfiguration = &v1.ObjectMetaApplyConfiguration{}
 	}
@@ -193,37 +194,29 @@ func (b *LBPoolApplyConfiguration) ensureObjectMetaApplyConfigurationExists() {
 // WithSpec sets the Spec field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the Spec field is set to the value of the last call.
-func (b *LBPoolApplyConfiguration) WithSpec(value *LBPoolSpecApplyConfiguration) *LBPoolApplyConfiguration {
+func (b *IPAllocationApplyConfiguration) WithSpec(value *IPAllocationSpecApplyConfiguration) *IPAllocationApplyConfiguration {
 	b.Spec = value
 	return b
 }
 
-// WithStatus sets the Status field in the declarative configuration to the given value
-// and returns the receiver, so that objects can be built by chaining "With" function invocations.
-// If called multiple times, the Status field is set to the value of the last call.
-func (b *LBPoolApplyConfiguration) WithStatus(value *LBPoolStatusApplyConfiguration) *LBPoolApplyConfiguration {
-	b.Status = value
-	return b
-}
-
 // GetKind retrieves the value of the Kind field in the declarative configuration.
-func (b *LBPoolApplyConfiguration) GetKind() *string {
+func (b *IPAllocationApplyConfiguration) GetKind() *string {
 	return b.TypeMetaApplyConfiguration.Kind
 }
 
 // GetAPIVersion retrieves the value of the APIVersion field in the declarative configuration.
-func (b *LBPoolApplyConfiguration) GetAPIVersion() *string {
+func (b *IPAllocationApplyConfiguration) GetAPIVersion() *string {
 	return b.TypeMetaApplyConfiguration.APIVersion
 }
 
 // GetName retrieves the value of the Name field in the declarative configuration.
-func (b *LBPoolApplyConfiguration) GetName() *string {
+func (b *IPAllocationApplyConfiguration) GetName() *string {
 	b.ensureObjectMetaApplyConfigurationExists()
 	return b.ObjectMetaApplyConfiguration.Name
 }
 
 // GetNamespace retrieves the value of the Namespace field in the declarative configuration.
-func (b *LBPoolApplyConfiguration) GetNamespace() *string {
+func (b *IPAllocationApplyConfiguration) GetNamespace() *string {
 	b.ensureObjectMetaApplyConfigurationExists()
 	return b.ObjectMetaApplyConfiguration.Namespace
 }

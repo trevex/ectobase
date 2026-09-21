@@ -5,13 +5,13 @@ with the central IPAM model. It covers four steps:
 
 1. Create a VPC and a Subnet (the VPC's address space).
 2. Boot a VM in the VPC and watch the platform allocate its overlay IP.
-3. Put a second VM behind a LoadBalancer (LB address drawn from an LBPool).
+3. Put a second VM behind a LoadBalancer (LB address drawn from an IPPool).
 4. Give the VPC NAT egress to the WAN.
 
 Everything is authored as intent on the dispatch (central) cluster. The platform
 compiles that intent into per-workload `Compiled*` objects, syncs them to the compute
 pool, and the datapath programs eBPF. The platform assigns overlay IPs and LB addresses; users
-declare address space (Subnet/LBPool) and the central allocators fill in the rest.
+declare address space (Subnet/IPPool) and the central allocators fill in the rest.
 
 For the broader tour — including containers, VMs, VPC peering, and firewall — see
 [Using the lab](using-the-lab.md).
@@ -50,7 +50,7 @@ All `khub apply` blocks below go to dispatch. Verify the API is up:
 
 ```sh
 khub api-resources --api-group=net.ectobase.dev
-# vpcs, subnets, networkinterfaces, loadbalancers, lbpools, natgateways, firewallpolicies, ...
+# vpcs, subnets, networkinterfaces, loadbalancers, ippools, ipallocations, natgateways, ...
 ```
 
 ## 1. Create a VPC and a Subnet
@@ -168,19 +168,25 @@ k02 get virtualmachineinstance -n ectobase-system -l workload=app-0
 
 ## 3. A second VM behind a LoadBalancer
 
-First register an LB address pool (`LBPool`), then a `LoadBalancer` that draws an LB address from it
+First register an address pool (`IPPool`), then a `LoadBalancer` that draws an LB address from it
 and selects backend NICs by label. Create a `web-0` VM whose NIC is labelled
 `app: web`.
+
+The pool is **typed**, and `spec.type` is required. An LB address is reached from outside
+the fabric, so it must come from a `public` pool; point a `LoadBalancer` at an `internal`
+one and it goes `Invalid` rather than quietly handing out an unroutable address. The same
+`IPPool` kind serves every consumer — there is no LB-specific pool object.
 
 ```sh
 khub apply -f - <<'EOF'
 apiVersion: net.ectobase.dev/v1alpha1
-kind: LBPool
+kind: IPPool
 metadata:
-  name: demo-lbpool
+  name: demo-pool
   namespace: default
 spec:
-  v4Prefix: 203.0.113.0/28    # the LB address address space
+  type: public                # public | internal — required
+  v4Prefix: 203.0.113.0/28    # the LB address space (optional v6Prefix: 2001:db8:b::/64)
 ---
 apiVersion: net.ectobase.dev/v1alpha1
 kind: NetworkInterface
@@ -214,7 +220,7 @@ metadata:
   namespace: default
 spec:
   ip: ""                     # empty => allocate from poolRef
-  poolRef: { name: demo-lbpool }
+  poolRef: { name: demo-pool }
   ports:
     - { port: 443, proto: TCP }
   targetSelector:             # selects backends by NIC label (or use targetRefs: [names])
@@ -223,16 +229,40 @@ spec:
 EOF
 ```
 
-Verify the LB address was allocated and that the backend NIC's compiled twin records LB
-membership with that LB address:
+Verify the pool went `Ready`, the LB address was allocated, and that the backend NIC's
+compiled twin records LB membership with that LB address:
 
 ```sh
+khub get ippool demo-pool -o jsonpath='{.status.state} total={.status.total} allocated={.status.allocated}{"\n"}'
+# Ready total=16 allocated=1
+
 khub get loadbalancer web-lb -o jsonpath='{.status.state} ip={.status.allocatedIP}{"\n"}'
 # Allocated ip=203.0.113.1
 
 k02 get compilednic default-web-0-nic0 -o jsonpath='{.spec.lb}{"\n"}'
 # [{"ip":"203.0.113.1","ports":[{"port":443,"proto":"TCP"}]}]
 ```
+
+The address itself is held by an object, one per allocated address, named
+`<pool>-<address>` with the dots turned into dashes:
+
+```sh
+khub get ipallocation -l net.ectobase.dev/pool=demo-pool
+# NAME                     AGE
+# demo-pool-203-0-113-1    10s
+```
+
+That name is not cosmetic. Object names are unique within a namespace, so creating one
+*is* the allocation: two allocators reaching for the same address cannot both succeed, and
+neither has to assume it is the only writer. `status.allocatedIP` above is a cache of this
+object, written after it — which is why a controller crash mid-allocation leaves an
+`IPAllocation` that the next reconcile simply re-adopts by name, rather than an address
+nobody owns.
+
+The allocation carries an ownerReference to the `LoadBalancer`, so deleting the LB returns
+the address through ordinary Kubernetes garbage collection. One object per address also
+means a fully-allocated `/16` would be ~65,000 objects in this namespace — fine for public
+pools, which are a handful of prefixes, but worth knowing before you write a large one.
 
 > The edge gap here is the one described in the top callout. IPAM has allocated the LB address
 > and wired the backend membership into the datapath's `CompiledNIC`, so E/W traffic to
@@ -310,10 +340,19 @@ EOF
 - `state: Invalid` on a NIC/LB. The request can't be satisfied against the address
   space: the VPC has no Subnet, the NIC's `subnetRef` is ambiguous (VPC has >1 Subnet
   and none named), or a pinned `ips`/`ip` falls outside the Subnet/Pool prefix.
-  Fix the Subnet/LBPool or the pinned address.
+  Fix the Subnet/IPPool or the pinned address. An LB also goes `Invalid` when its
+  `poolRef` names a pool whose `spec.type` is not `public`: the address would be
+  unroutable from the WAN, so that is a wrong intent to correct, not a state to wait out.
 - `state: Exhausted`. The Subnet/Pool is full. Widen the prefix or free addresses.
   A freed sibling address triggers a retry automatically, with no wait for resync.
+  Freeing a pool address means deleting its consumer, and the `IPAllocation` goes away
+  with it by garbage collection — which is asynchronous, so a pool at capacity has a
+  brief window after the delete where the next consumer is still refused. It retries on
+  its own the moment the claim actually disappears.
 - `state: Pending`. The referenced Subnet/Pool isn't `Ready` yet (transient).
+- `state: Conflict` on an IPPool. Another pool in the same namespace overlaps its
+  prefixes; the later one backs off so the same address is never handed to two
+  consumers. Repoint or delete one of them.
 - Allocation is sticky. Editing an unrelated field on a NIC/LB does not
   renumber it; the allocator re-adopts its current `allocatedIPs`/`allocatedIP`,
   and a NIC keeps its `allocatedMAC` even across an IP renumber.
@@ -339,7 +378,7 @@ khub delete natgateway demo-egress --ignore-not-found
 khub delete loadbalancer web-lb --ignore-not-found
 khub delete virtualmachine app-0 web-0 --ignore-not-found
 khub delete networkinterface app-0-nic0 web-0-nic0 --ignore-not-found
-khub delete lbpool demo-lbpool --ignore-not-found
+khub delete ippool demo-pool --ignore-not-found
 khub delete subnet demo-sn0 --ignore-not-found
 khub delete vpc demo --ignore-not-found
 ```

@@ -18,13 +18,21 @@ type FloatingIPListerExpansion interface{}
 // FloatingIPNamespaceLister.
 type FloatingIPNamespaceListerExpansion interface{}
 
-// LBPoolListerExpansion allows custom methods to be added to
-// LBPoolLister.
-type LBPoolListerExpansion interface{}
+// IPAllocationListerExpansion allows custom methods to be added to
+// IPAllocationLister.
+type IPAllocationListerExpansion interface{}
 
-// LBPoolNamespaceListerExpansion allows custom methods to be added to
-// LBPoolNamespaceLister.
-type LBPoolNamespaceListerExpansion interface{}
+// IPAllocationNamespaceListerExpansion allows custom methods to be added to
+// IPAllocationNamespaceLister.
+type IPAllocationNamespaceListerExpansion interface{}
+
+// IPPoolListerExpansion allows custom methods to be added to
+// IPPoolLister.
+type IPPoolListerExpansion interface{}
+
+// IPPoolNamespaceListerExpansion allows custom methods to be added to
+// IPPoolNamespaceLister.
+type IPPoolNamespaceListerExpansion interface{}
 
 // LoadBalancerListerExpansion allows custom methods to be added to
 // LoadBalancerLister.

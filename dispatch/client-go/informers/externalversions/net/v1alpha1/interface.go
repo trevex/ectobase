@@ -12,8 +12,10 @@ type Interface interface {
 	FirewallPolicies() FirewallPolicyInformer
 	// FloatingIPs returns a FloatingIPInformer.
 	FloatingIPs() FloatingIPInformer
-	// LBPools returns a LBPoolInformer.
-	LBPools() LBPoolInformer
+	// IPAllocations returns a IPAllocationInformer.
+	IPAllocations() IPAllocationInformer
+	// IPPools returns a IPPoolInformer.
+	IPPools() IPPoolInformer
 	// LoadBalancers returns a LoadBalancerInformer.
 	LoadBalancers() LoadBalancerInformer
 	// NATGateways returns a NATGatewayInformer.
@@ -49,9 +51,14 @@ func (v *version) FloatingIPs() FloatingIPInformer {
 	return &floatingIPInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
 }
 
-// LBPools returns a LBPoolInformer.
-func (v *version) LBPools() LBPoolInformer {
-	return &lBPoolInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
+// IPAllocations returns a IPAllocationInformer.
+func (v *version) IPAllocations() IPAllocationInformer {
+	return &iPAllocationInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
+}
+
+// IPPools returns a IPPoolInformer.
+func (v *version) IPPools() IPPoolInformer {
+	return &iPPoolInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
 }
 
 // LoadBalancers returns a LoadBalancerInformer.

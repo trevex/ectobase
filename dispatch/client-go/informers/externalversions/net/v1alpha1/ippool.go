@@ -17,38 +17,38 @@ import (
 	cache "k8s.io/client-go/tools/cache"
 )
 
-// LBPoolInformer provides access to a shared informer and lister for
-// LBPools.
-type LBPoolInformer interface {
+// IPPoolInformer provides access to a shared informer and lister for
+// IPPools.
+type IPPoolInformer interface {
 	Informer() cache.SharedIndexInformer
-	Lister() netv1alpha1.LBPoolLister
+	Lister() netv1alpha1.IPPoolLister
 }
 
-type lBPoolInformer struct {
+type iPPoolInformer struct {
 	factory          internalinterfaces.SharedInformerFactory
 	tweakListOptions internalinterfaces.TweakListOptionsFunc
 	namespace        string
 }
 
-// NewLBPoolInformer constructs a new informer for LBPool type.
+// NewIPPoolInformer constructs a new informer for IPPool type.
 // Always prefer using an informer factory to get a shared informer instead of getting an independent
 // one. This reduces memory footprint and number of connections to the server.
-func NewLBPoolInformer(client versioned.Interface, namespace string, resyncPeriod time.Duration, indexers cache.Indexers) cache.SharedIndexInformer {
-	return NewLBPoolInformerWithOptions(client, namespace, internalinterfaces.InformerOptions{ResyncPeriod: resyncPeriod, Indexers: indexers})
+func NewIPPoolInformer(client versioned.Interface, namespace string, resyncPeriod time.Duration, indexers cache.Indexers) cache.SharedIndexInformer {
+	return NewIPPoolInformerWithOptions(client, namespace, internalinterfaces.InformerOptions{ResyncPeriod: resyncPeriod, Indexers: indexers})
 }
 
-// NewFilteredLBPoolInformer constructs a new informer for LBPool type.
+// NewFilteredIPPoolInformer constructs a new informer for IPPool type.
 // Always prefer using an informer factory to get a shared informer instead of getting an independent
 // one. This reduces memory footprint and number of connections to the server.
-func NewFilteredLBPoolInformer(client versioned.Interface, namespace string, resyncPeriod time.Duration, indexers cache.Indexers, tweakListOptions internalinterfaces.TweakListOptionsFunc) cache.SharedIndexInformer {
-	return NewLBPoolInformerWithOptions(client, namespace, internalinterfaces.InformerOptions{ResyncPeriod: resyncPeriod, Indexers: indexers, TweakListOptions: tweakListOptions})
+func NewFilteredIPPoolInformer(client versioned.Interface, namespace string, resyncPeriod time.Duration, indexers cache.Indexers, tweakListOptions internalinterfaces.TweakListOptionsFunc) cache.SharedIndexInformer {
+	return NewIPPoolInformerWithOptions(client, namespace, internalinterfaces.InformerOptions{ResyncPeriod: resyncPeriod, Indexers: indexers, TweakListOptions: tweakListOptions})
 }
 
-// NewLBPoolInformerWithOptions constructs a new informer for LBPool type with additional options.
+// NewIPPoolInformerWithOptions constructs a new informer for IPPool type with additional options.
 // Always prefer using an informer factory to get a shared informer instead of getting an independent
 // one. This reduces memory footprint and number of connections to the server.
-func NewLBPoolInformerWithOptions(client versioned.Interface, namespace string, options internalinterfaces.InformerOptions) cache.SharedIndexInformer {
-	gvr := schema.GroupVersionResource{Group: "net.ectobase.dev", Version: "v1alpha1", Resource: "lbpools"}
+func NewIPPoolInformerWithOptions(client versioned.Interface, namespace string, options internalinterfaces.InformerOptions) cache.SharedIndexInformer {
+	gvr := schema.GroupVersionResource{Group: "net.ectobase.dev", Version: "v1alpha1", Resource: "ippools"}
 	identifier := options.InformerName.WithResource(gvr)
 	tweakListOptions := options.TweakListOptions
 	return cache.NewSharedIndexInformerWithOptions(
@@ -57,28 +57,28 @@ func NewLBPoolInformerWithOptions(client versioned.Interface, namespace string, 
 				if tweakListOptions != nil {
 					tweakListOptions(&opts)
 				}
-				return client.NetV1alpha1().LBPools(namespace).List(context.Background(), opts)
+				return client.NetV1alpha1().IPPools(namespace).List(context.Background(), opts)
 			},
 			WatchFunc: func(opts v1.ListOptions) (watch.Interface, error) {
 				if tweakListOptions != nil {
 					tweakListOptions(&opts)
 				}
-				return client.NetV1alpha1().LBPools(namespace).Watch(context.Background(), opts)
+				return client.NetV1alpha1().IPPools(namespace).Watch(context.Background(), opts)
 			},
 			ListWithContextFunc: func(ctx context.Context, opts v1.ListOptions) (runtime.Object, error) {
 				if tweakListOptions != nil {
 					tweakListOptions(&opts)
 				}
-				return client.NetV1alpha1().LBPools(namespace).List(ctx, opts)
+				return client.NetV1alpha1().IPPools(namespace).List(ctx, opts)
 			},
 			WatchFuncWithContext: func(ctx context.Context, opts v1.ListOptions) (watch.Interface, error) {
 				if tweakListOptions != nil {
 					tweakListOptions(&opts)
 				}
-				return client.NetV1alpha1().LBPools(namespace).Watch(ctx, opts)
+				return client.NetV1alpha1().IPPools(namespace).Watch(ctx, opts)
 			},
 		}, client),
-		&apinetv1alpha1.LBPool{},
+		&apinetv1alpha1.IPPool{},
 		cache.SharedIndexInformerOptions{
 			ResyncPeriod: options.ResyncPeriod,
 			Indexers:     options.Indexers,
@@ -87,14 +87,14 @@ func NewLBPoolInformerWithOptions(client versioned.Interface, namespace string, 
 	)
 }
 
-func (f *lBPoolInformer) defaultInformer(client versioned.Interface, resyncPeriod time.Duration) cache.SharedIndexInformer {
-	return NewLBPoolInformerWithOptions(client, f.namespace, internalinterfaces.InformerOptions{ResyncPeriod: resyncPeriod, Indexers: cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc}, InformerName: f.factory.InformerName(), TweakListOptions: f.tweakListOptions})
+func (f *iPPoolInformer) defaultInformer(client versioned.Interface, resyncPeriod time.Duration) cache.SharedIndexInformer {
+	return NewIPPoolInformerWithOptions(client, f.namespace, internalinterfaces.InformerOptions{ResyncPeriod: resyncPeriod, Indexers: cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc}, InformerName: f.factory.InformerName(), TweakListOptions: f.tweakListOptions})
 }
 
-func (f *lBPoolInformer) Informer() cache.SharedIndexInformer {
-	return f.factory.InformerFor(&apinetv1alpha1.LBPool{}, f.defaultInformer)
+func (f *iPPoolInformer) Informer() cache.SharedIndexInformer {
+	return f.factory.InformerFor(&apinetv1alpha1.IPPool{}, f.defaultInformer)
 }
 
-func (f *lBPoolInformer) Lister() netv1alpha1.LBPoolLister {
-	return netv1alpha1.NewLBPoolLister(f.Informer().GetIndexer())
+func (f *iPPoolInformer) Lister() netv1alpha1.IPPoolLister {
+	return netv1alpha1.NewIPPoolLister(f.Informer().GetIndexer())
 }

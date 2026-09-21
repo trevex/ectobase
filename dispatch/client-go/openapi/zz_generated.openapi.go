@@ -73,11 +73,14 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		netv1alpha1.FloatingIPList{}.OpenAPIModelName():              schema_ectobase_api_net_v1alpha1_FloatingIPList(ref),
 		netv1alpha1.FloatingIPSpec{}.OpenAPIModelName():              schema_ectobase_api_net_v1alpha1_FloatingIPSpec(ref),
 		netv1alpha1.FloatingIPStatus{}.OpenAPIModelName():            schema_ectobase_api_net_v1alpha1_FloatingIPStatus(ref),
+		netv1alpha1.IPAllocation{}.OpenAPIModelName():                schema_ectobase_api_net_v1alpha1_IPAllocation(ref),
+		netv1alpha1.IPAllocationList{}.OpenAPIModelName():            schema_ectobase_api_net_v1alpha1_IPAllocationList(ref),
+		netv1alpha1.IPAllocationSpec{}.OpenAPIModelName():            schema_ectobase_api_net_v1alpha1_IPAllocationSpec(ref),
+		netv1alpha1.IPPool{}.OpenAPIModelName():                      schema_ectobase_api_net_v1alpha1_IPPool(ref),
+		netv1alpha1.IPPoolList{}.OpenAPIModelName():                  schema_ectobase_api_net_v1alpha1_IPPoolList(ref),
+		netv1alpha1.IPPoolSpec{}.OpenAPIModelName():                  schema_ectobase_api_net_v1alpha1_IPPoolSpec(ref),
+		netv1alpha1.IPPoolStatus{}.OpenAPIModelName():                schema_ectobase_api_net_v1alpha1_IPPoolStatus(ref),
 		netv1alpha1.InterfaceQoS{}.OpenAPIModelName():                schema_ectobase_api_net_v1alpha1_InterfaceQoS(ref),
-		netv1alpha1.LBPool{}.OpenAPIModelName():                      schema_ectobase_api_net_v1alpha1_LBPool(ref),
-		netv1alpha1.LBPoolList{}.OpenAPIModelName():                  schema_ectobase_api_net_v1alpha1_LBPoolList(ref),
-		netv1alpha1.LBPoolSpec{}.OpenAPIModelName():                  schema_ectobase_api_net_v1alpha1_LBPoolSpec(ref),
-		netv1alpha1.LBPoolStatus{}.OpenAPIModelName():                schema_ectobase_api_net_v1alpha1_LBPoolStatus(ref),
 		netv1alpha1.LoadBalancer{}.OpenAPIModelName():                schema_ectobase_api_net_v1alpha1_LoadBalancer(ref),
 		netv1alpha1.LoadBalancerList{}.OpenAPIModelName():            schema_ectobase_api_net_v1alpha1_LoadBalancerList(ref),
 		netv1alpha1.LoadBalancerPort{}.OpenAPIModelName():            schema_ectobase_api_net_v1alpha1_LoadBalancerPort(ref),
@@ -99,6 +102,7 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		netv1alpha1.SubnetList{}.OpenAPIModelName():                  schema_ectobase_api_net_v1alpha1_SubnetList(ref),
 		netv1alpha1.SubnetSpec{}.OpenAPIModelName():                  schema_ectobase_api_net_v1alpha1_SubnetSpec(ref),
 		netv1alpha1.SubnetStatus{}.OpenAPIModelName():                schema_ectobase_api_net_v1alpha1_SubnetStatus(ref),
+		netv1alpha1.TypedLocalObjectReference{}.OpenAPIModelName():   schema_ectobase_api_net_v1alpha1_TypedLocalObjectReference(ref),
 		netv1alpha1.VPC{}.OpenAPIModelName():                         schema_ectobase_api_net_v1alpha1_VPC(ref),
 		netv1alpha1.VPCList{}.OpenAPIModelName():                     schema_ectobase_api_net_v1alpha1_VPCList(ref),
 		netv1alpha1.VPCPeering{}.OpenAPIModelName():                  schema_ectobase_api_net_v1alpha1_VPCPeering(ref),
@@ -2643,38 +2647,11 @@ func schema_ectobase_api_net_v1alpha1_FloatingIPStatus(ref common.ReferenceCallb
 	}
 }
 
-func schema_ectobase_api_net_v1alpha1_InterfaceQoS(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_IPAllocation(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
-				Description: "InterfaceQoS is per-interface traffic control. Egress is EDT-shaped (smoothed) at the uplink fq qdisc; ingress is token-bucket policed. Programmed into the dataplane via DataplaneNode/ConfigureQoS.",
-				Type:        []string{"object"},
-				Properties: map[string]spec.Schema{
-					"egress": {
-						SchemaProps: spec.SchemaProps{
-							Description: "Egress shapes outbound (VM->out) throughput.",
-							Ref:         ref(netv1alpha1.EgressQoS{}.OpenAPIModelName()),
-						},
-					},
-					"ingress": {
-						SchemaProps: spec.SchemaProps{
-							Description: "Ingress polices inbound (out->VM) throughput.",
-							Ref:         ref(netv1alpha1.RateLimit{}.OpenAPIModelName()),
-						},
-					},
-				},
-			},
-		},
-		Dependencies: []string{
-			netv1alpha1.EgressQoS{}.OpenAPIModelName(), netv1alpha1.RateLimit{}.OpenAPIModelName()},
-	}
-}
-
-func schema_ectobase_api_net_v1alpha1_LBPool(ref common.ReferenceCallback) common.OpenAPIDefinition {
-	return common.OpenAPIDefinition{
-		Schema: spec.Schema{
-			SchemaProps: spec.SchemaProps{
-				Description: "LBPool is a fleet-scoped range of IPv4/IPv6 LB address prefixes.",
+				Description: "IPAllocation is one address held out of one IPPool. It is created by the consumer's allocator and reclaimed by Kubernetes garbage collection when its ownerReference's consumer is deleted.",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
 					"kind": {
@@ -2700,28 +2677,22 @@ func schema_ectobase_api_net_v1alpha1_LBPool(ref common.ReferenceCallback) commo
 					"spec": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref(netv1alpha1.LBPoolSpec{}.OpenAPIModelName()),
-						},
-					},
-					"status": {
-						SchemaProps: spec.SchemaProps{
-							Default: map[string]interface{}{},
-							Ref:     ref(netv1alpha1.LBPoolStatus{}.OpenAPIModelName()),
+							Ref:     ref(netv1alpha1.IPAllocationSpec{}.OpenAPIModelName()),
 						},
 					},
 				},
 			},
 		},
 		Dependencies: []string{
-			netv1alpha1.LBPoolSpec{}.OpenAPIModelName(), netv1alpha1.LBPoolStatus{}.OpenAPIModelName(), metav1.ObjectMeta{}.OpenAPIModelName()},
+			netv1alpha1.IPAllocationSpec{}.OpenAPIModelName(), metav1.ObjectMeta{}.OpenAPIModelName()},
 	}
 }
 
-func schema_ectobase_api_net_v1alpha1_LBPoolList(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_IPAllocationList(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
-				Description: "LBPoolList is a list of LBPool objects.",
+				Description: "IPAllocationList is a list of IPAllocation objects.",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
 					"kind": {
@@ -2751,7 +2722,7 @@ func schema_ectobase_api_net_v1alpha1_LBPoolList(ref common.ReferenceCallback) c
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref(netv1alpha1.LBPool{}.OpenAPIModelName()),
+										Ref:     ref(netv1alpha1.IPAllocation{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -2762,27 +2733,169 @@ func schema_ectobase_api_net_v1alpha1_LBPoolList(ref common.ReferenceCallback) c
 			},
 		},
 		Dependencies: []string{
-			netv1alpha1.LBPool{}.OpenAPIModelName(), metav1.ListMeta{}.OpenAPIModelName()},
+			netv1alpha1.IPAllocation{}.OpenAPIModelName(), metav1.ListMeta{}.OpenAPIModelName()},
 	}
 }
 
-func schema_ectobase_api_net_v1alpha1_LBPoolSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_IPAllocationSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
-				Description: "LBPoolSpec is the desired state of an LBPool (a fleet-scoped LB address prefix range).",
+				Description: "IPAllocationSpec is the desired state of an IPAllocation.\n\nThere is no status: the object's EXISTENCE is the state. Its name is derived from (pool, address) and object names are unique within a namespace, which makes Create a compare-and-swap — two allocators racing for one address cannot both succeed, without either of them assuming it is the only writer.",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
+					"poolRef": {
+						SchemaProps: spec.SchemaProps{
+							Description: "PoolRef is the IPPool this address came from.",
+							Default:     map[string]interface{}{},
+							Ref:         ref(netv1alpha1.LocalObjectReference{}.OpenAPIModelName()),
+						},
+					},
+					"address": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Address is the allocated address, canonical form.",
+							Default:     "",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"consumerRef": {
+						SchemaProps: spec.SchemaProps{
+							Description: "ConsumerRef records who asked for it, for humans and diagnostics. The authoritative lifetime link is the ownerReference, not this field.",
+							Default:     map[string]interface{}{},
+							Ref:         ref(netv1alpha1.TypedLocalObjectReference{}.OpenAPIModelName()),
+						},
+					},
+				},
+				Required: []string{"poolRef", "address", "consumerRef"},
+			},
+		},
+		Dependencies: []string{
+			netv1alpha1.LocalObjectReference{}.OpenAPIModelName(), netv1alpha1.TypedLocalObjectReference{}.OpenAPIModelName()},
+	}
+}
+
+func schema_ectobase_api_net_v1alpha1_IPPool(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "IPPool is a fleet-scoped, typed range of IPv4/IPv6 prefixes that any consumer (LoadBalancer, NATGateway, ...) allocates addresses from.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"kind": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"apiVersion": {
+						SchemaProps: spec.SchemaProps{
+							Description: "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"metadata": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref(metav1.ObjectMeta{}.OpenAPIModelName()),
+						},
+					},
+					"spec": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref(netv1alpha1.IPPoolSpec{}.OpenAPIModelName()),
+						},
+					},
+					"status": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref(netv1alpha1.IPPoolStatus{}.OpenAPIModelName()),
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			netv1alpha1.IPPoolSpec{}.OpenAPIModelName(), netv1alpha1.IPPoolStatus{}.OpenAPIModelName(), metav1.ObjectMeta{}.OpenAPIModelName()},
+	}
+}
+
+func schema_ectobase_api_net_v1alpha1_IPPoolList(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "IPPoolList is a list of IPPool objects.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"kind": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"apiVersion": {
+						SchemaProps: spec.SchemaProps{
+							Description: "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"metadata": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref(metav1.ListMeta{}.OpenAPIModelName()),
+						},
+					},
+					"items": {
+						SchemaProps: spec.SchemaProps{
+							Type: []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref(netv1alpha1.IPPool{}.OpenAPIModelName()),
+									},
+								},
+							},
+						},
+					},
+				},
+				Required: []string{"items"},
+			},
+		},
+		Dependencies: []string{
+			netv1alpha1.IPPool{}.OpenAPIModelName(), metav1.ListMeta{}.OpenAPIModelName()},
+	}
+}
+
+func schema_ectobase_api_net_v1alpha1_IPPoolSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "IPPoolSpec is the desired state of an IPPool (a fleet-scoped address range).",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"type": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Type is what the addresses in this pool are for.",
+							Default:     "",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
 					"v4Prefix": {
 						SchemaProps: spec.SchemaProps{
-							Description: "V4Prefix optionally pins the IPv4 CIDR for this LB address pool.",
+							Description: "V4Prefix optionally pins the IPv4 CIDR for this pool.",
 							Type:        []string{"string"},
 							Format:      "",
 						},
 					},
 					"v6Prefix": {
 						SchemaProps: spec.SchemaProps{
-							Description: "V6Prefix optionally pins the IPv6 CIDR for this LB address pool.",
+							Description: "V6Prefix optionally pins the IPv6 CIDR for this pool.",
 							Type:        []string{"string"},
 							Format:      "",
 						},
@@ -2803,28 +2916,36 @@ func schema_ectobase_api_net_v1alpha1_LBPoolSpec(ref common.ReferenceCallback) c
 						},
 					},
 				},
+				Required: []string{"type"},
 			},
 		},
 	}
 }
 
-func schema_ectobase_api_net_v1alpha1_LBPoolStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_IPPoolStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
-				Description: "LBPoolStatus is the observed state of an LBPool.",
+				Description: "IPPoolStatus is the observed state of an IPPool.",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
 					"state": {
 						SchemaProps: spec.SchemaProps{
-							Description: "State is the current lifecycle state (e.g. Pending, Ready).",
+							Description: "State is the current lifecycle state: Pending, Ready, Invalid or Conflict.",
 							Type:        []string{"string"},
 							Format:      "",
 						},
 					},
 					"total": {
 						SchemaProps: spec.SchemaProps{
-							Description: "Total is the total number of allocatable LB address addresses.",
+							Description: "Total is the number of allocatable addresses across this pool's prefixes.",
+							Type:        []string{"integer"},
+							Format:      "int32",
+						},
+					},
+					"allocated": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Allocated is how many IPAllocations currently name this pool. A convenience for operators, derived on each sync — never the source of truth for what is free.",
 							Type:        []string{"integer"},
 							Format:      "int32",
 						},
@@ -2832,6 +2953,33 @@ func schema_ectobase_api_net_v1alpha1_LBPoolStatus(ref common.ReferenceCallback)
 				},
 			},
 		},
+	}
+}
+
+func schema_ectobase_api_net_v1alpha1_InterfaceQoS(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "InterfaceQoS is per-interface traffic control. Egress is EDT-shaped (smoothed) at the uplink fq qdisc; ingress is token-bucket policed. Programmed into the dataplane via DataplaneNode/ConfigureQoS.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"egress": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Egress shapes outbound (VM->out) throughput.",
+							Ref:         ref(netv1alpha1.EgressQoS{}.OpenAPIModelName()),
+						},
+					},
+					"ingress": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Ingress polices inbound (out->VM) throughput.",
+							Ref:         ref(netv1alpha1.RateLimit{}.OpenAPIModelName()),
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			netv1alpha1.EgressQoS{}.OpenAPIModelName(), netv1alpha1.RateLimit{}.OpenAPIModelName()},
 	}
 }
 
@@ -2978,7 +3126,7 @@ func schema_ectobase_api_net_v1alpha1_LoadBalancerSpec(ref common.ReferenceCallb
 					},
 					"poolRef": {
 						SchemaProps: spec.SchemaProps{
-							Description: "PoolRef selects the LBPool to allocate the IP from.",
+							Description: "PoolRef selects the IPPool to allocate the IP from. The pool must be of type \"public\": a load-balancer address is reached from outside the fabric, so an internal range would advertise an address nothing can route to.",
 							Default:     map[string]interface{}{},
 							Ref:         ref(netv1alpha1.LocalObjectReference{}.OpenAPIModelName()),
 						},
@@ -3810,6 +3958,36 @@ func schema_ectobase_api_net_v1alpha1_SubnetStatus(ref common.ReferenceCallback)
 						},
 					},
 				},
+			},
+		},
+	}
+}
+
+func schema_ectobase_api_net_v1alpha1_TypedLocalObjectReference(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "TypedLocalObjectReference references an object by kind and name within the same namespace. Kind alone (no group) because every consumer of one lives in net.ectobase.dev.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"kind": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Kind is the kind of the referenced object.",
+							Default:     "",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"name": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Name is the name of the referenced object.",
+							Default:     "",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+				},
+				Required: []string{"kind", "name"},
 			},
 		},
 	}

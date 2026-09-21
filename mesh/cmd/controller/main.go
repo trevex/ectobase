@@ -145,8 +145,8 @@ func main() {
 		log.Fatalf("setup subnet controller: %v", err)
 	}
 
-	if err := (&controllers.LBPoolReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader()}).SetupWithManager(mgr); err != nil {
-		log.Fatalf("setup lbpool controller: %v", err)
+	if err := (&controllers.IPPoolReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader()}).SetupWithManager(mgr); err != nil {
+		log.Fatalf("setup ippool controller: %v", err)
 	}
 
 	if err := (&controllers.NICIPAMReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader()}).SetupWithManager(mgr); err != nil {

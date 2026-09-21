@@ -4,20 +4,22 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.20.1
-  name: lbpools.net.ectobase.dev
+  name: ippools.net.ectobase.dev
 spec:
   group: net.ectobase.dev
   names:
-    kind: LBPool
-    listKind: LBPoolList
-    plural: lbpools
-    singular: lbpool
+    kind: IPPool
+    listKind: IPPoolList
+    plural: ippools
+    singular: ippool
   scope: Namespaced
   versions:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: LBPool is a fleet-scoped range of IPv4/IPv6 LB address prefixes.
+        description: |-
+          IPPool is a fleet-scoped, typed range of IPv4/IPv6 prefixes that any consumer
+          (LoadBalancer, NATGateway, ...) allocates addresses from.
         properties:
           apiVersion:
             description: |-
@@ -37,8 +39,8 @@ spec:
           metadata:
             type: object
           spec:
-            description: LBPoolSpec is the desired state of an LBPool (a fleet-scoped
-              LB address prefix range).
+            description: IPPoolSpec is the desired state of an IPPool (a fleet-scoped
+              address range).
             properties:
               reservedIPs:
                 description: ReservedIPs are addresses held back from allocation within
@@ -46,23 +48,37 @@ spec:
                 items:
                   type: string
                 type: array
+              type:
+                description: Type is what the addresses in this pool are for.
+                enum:
+                - public
+                - internal
+                type: string
               v4Prefix:
-                description: V4Prefix optionally pins the IPv4 CIDR for this LB address
-                  pool.
+                description: V4Prefix optionally pins the IPv4 CIDR for this pool.
                 type: string
               v6Prefix:
-                description: V6Prefix optionally pins the IPv6 CIDR for this LB address
-                  pool.
+                description: V6Prefix optionally pins the IPv6 CIDR for this pool.
                 type: string
+            required:
+            - type
             type: object
           status:
-            description: LBPoolStatus is the observed state of an LBPool.
+            description: IPPoolStatus is the observed state of an IPPool.
             properties:
+              allocated:
+                description: |-
+                  Allocated is how many IPAllocations currently name this pool. A convenience for
+                  operators, derived on each sync — never the source of truth for what is free.
+                format: int32
+                type: integer
               state:
-                description: State is the current lifecycle state (e.g. Pending, Ready).
+                description: 'State is the current lifecycle state: Pending, Ready,
+                  Invalid or Conflict.'
                 type: string
               total:
-                description: Total is the total number of allocatable LB address addresses.
+                description: Total is the number of allocatable addresses across this
+                  pool's prefixes.
                 format: int32
                 type: integer
             type: object

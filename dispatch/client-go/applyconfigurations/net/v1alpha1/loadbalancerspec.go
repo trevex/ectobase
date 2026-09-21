@@ -21,7 +21,9 @@ type LoadBalancerSpecApplyConfiguration struct {
 	// IP is the requested load-balancer address. Empty => allocate from PoolRef; set =>
 	// validate membership in the pool + reserve (bring-your-own).
 	IP *string `json:"ip,omitempty"`
-	// PoolRef selects the LBPool to allocate the IP from.
+	// PoolRef selects the IPPool to allocate the IP from. The pool must be of type "public":
+	// a load-balancer address is reached from outside the fabric, so an internal range would
+	// advertise an address nothing can route to.
 	PoolRef *LocalObjectReferenceApplyConfiguration `json:"poolRef,omitempty"`
 	// Ports are the LB service (port, proto) tuples.
 	Ports []LoadBalancerPortApplyConfiguration `json:"ports,omitempty"`

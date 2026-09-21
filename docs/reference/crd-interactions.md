@@ -12,7 +12,7 @@ the lifecycle. All live under `*.ectobase.dev` and are served at version
 
 | Group | Written by | Kinds |
 | --- | --- | --- |
-| [`net.ectobase.dev`](api/net.md) | users | VPC, Subnet, NetworkInterface, FirewallPolicy, LoadBalancer, LBPool, NATGateway, FloatingIP, VPCPeering |
+| [`net.ectobase.dev`](api/net.md) | users | VPC, Subnet, NetworkInterface, FirewallPolicy, LoadBalancer, IPPool, NATGateway, FloatingIP, VPCPeering, IPAllocation *(allocator-written)* |
 | [`compute.ectobase.dev`](api/compute.md) | users | VirtualMachine, Container |
 | [`storage.ectobase.dev`](api/storage.md) | users | Volume |
 | [`compiled.ectobase.dev`](api/compiled.md) | controllers | CompiledNIC, CompiledVM, CompiledContainer, CompiledVolumeAttachment |
@@ -22,6 +22,11 @@ The net, compute and storage groups are authored: a user (or a higher-level syst
 declares desired state in them. The compiled group is derived: the mesh compiler
 produces it, and no human writes it. The platform group is operational: it models the
 fleet of pool clusters that workloads can be scheduled onto.
+
+The one exception is `IPAllocation`, which sits in the authored net group but is written
+by the allocators rather than by a user: it is the record of one address being held out of
+one `IPPool`, and it lives beside the pool because that is the namespace its uniqueness is
+enforced in. See [Where addresses come from](#where-addresses-come-from-ippool-and-ipallocation).
 
 ## Intent, compiled, executed
 
@@ -42,8 +47,10 @@ flowchart LR
         PEER[VPCPeering]
         VPC[VPC]
         SUBNET[Subnet]
-        LBPOOL[LBPool]
+        POOL[IPPool]
     end
+
+    ALLOC["IPAllocation<br/>(one per address — the claim)"]
 
     subgraph compiled["Compiled (controller-written)"]
         CNIC[CompiledNIC]
@@ -60,7 +67,8 @@ flowchart LR
 
     VM & CT -->|owns placement| NIC
     SUBNET -->|allocate overlay IPs| NIC
-    LBPOOL -->|allocate LB address| LB
+    POOL -->|allocate LB address| LB
+    LB -->|claims it, and owns it| ALLOC
     NIC & FW & LB & PEER & VPC --> CNIC
     VM --> CVM
     CT --> CCT
@@ -91,8 +99,8 @@ flattens each workload's slice of the graph into a single compiled object:
   peer route imports from any VPCPeering — producing one self-contained policy
   object per NIC. The agent reads only this; it never reads the raw net-group
   resources. Address allocation is resolved centrally and lands here too: overlay
-  IPs from the interface's VPC-scoped Subnet, LB addresses from the LoadBalancer's LBPool,
-  NAT from NATGateway, and public addresses from FloatingIP.
+  IPs from the interface's VPC-scoped Subnet, LB addresses from the IPPool the
+  LoadBalancer names, NAT from NATGateway, and public addresses from FloatingIP.
 - VirtualMachine → CompiledVM. Boot / interface / placement facts flattened
   for the VM materializer.
 - Container → CompiledContainer. The same, for containers, consumed by the
@@ -142,10 +150,56 @@ Inside the pool, node-local executors turn compiled objects into real state:
 
 | Intent kind(s) | Compiled kind | Executor | Produces |
 | --- | --- | --- | --- |
-| NetworkInterface + FirewallPolicy + LoadBalancer + VPCPeering (+ VPC, Subnet, LBPool, NATGateway, FloatingIP) | CompiledNIC | mesh agent (per node) | flowplane datapath programming (firewall / NAT / LB / VNI / peer routes) |
+| NetworkInterface + FirewallPolicy + LoadBalancer + VPCPeering (+ VPC, Subnet, IPPool, NATGateway, FloatingIP) | CompiledNIC | mesh agent (per node) | flowplane datapath programming (firewall / NAT / LB / VNI / peer routes) |
 | VirtualMachine | CompiledVM | vm-materializer (per pool) | KubeVirt VirtualMachine |
 | Container | CompiledContainer | pod-materializer (per pool) | Pod on the flowplane overlay |
 | Volume | CompiledVolumeAttachment | vm-materializer (per pool) | volume attachment on the VM |
+
+## Where addresses come from: IPPool and IPAllocation
+
+Overlay IPs come from a `Subnet`, which is VPC-scoped because an overlay address only
+means anything inside its VPC. Every other address — a load-balancer address today, a NAT
+gateway's public addresses next — comes from an `IPPool`, which belongs to no VPC because
+the ranges it hands out are fabric- or internet-wide.
+
+An `IPPool` is **typed**. `spec.type` is `public` (internet-routable: LB addresses, NAT
+addresses) or `internal` (a range that never leaves the fabric), and a consumer states the
+type it needs and is refused a pool of any other type. A `LoadBalancer` pointed at an
+`internal` pool goes `Invalid` rather than `Pending`, because an LB address handed out of
+an internal range would be advertised to the WAN and be unreachable — that is the intent
+being wrong, not a wait. The type is what stops one operator's internal range from being
+spent as somebody else's public address.
+
+Allocation is recorded as an object: **one `IPAllocation` per address**, named
+`<pool>-<encoded address>` (`192.0.2.1` in pool `demo-pool` becomes
+`demo-pool-192-0-2-1`; IPv6 is expanded, never compressed, so the name splits
+unambiguously). The name is the point. Object names are unique within a namespace, so
+creating one is a compare-and-swap: two allocators racing for the last free address cannot
+both win, and neither has to assume it is the only writer. That is what lets a NAT gateway
+and a load balancer draw from the same pool without either knowing the other exists — the
+previous design scanned other `LoadBalancer` statuses for a used-set, which is only correct
+while exactly one controller allocates.
+
+Two consequences are worth stating rather than discovering:
+
+- **It is one API object per address.** A fully-allocated `/16` is roughly 65,000
+  `IPAllocation` objects in one namespace. That is acceptable at the address counts in
+  play — a public pool is a handful of prefixes, not a datacenter's worth of RFC1918 — but
+  it is a real property of the choice, and it is why `Subnet` does *not* work this way.
+- **Reclamation is asynchronous.** An `IPAllocation` carries an ownerReference to its
+  consumer, so deleting the `LoadBalancer` frees the address through ordinary Kubernetes
+  garbage collection; nothing has to run a sweeper. But the collector runs on its own
+  schedule, so between the consumer's deletion and the collection there is a window in
+  which the address still counts as used, and a pool at capacity will refuse a new consumer
+  during it. The refused consumer parks in `Exhausted` and a delete-only watch on
+  `IPAllocation` re-enqueues it the moment the claim actually disappears, so the window
+  costs a retry, not an outage. Deleting an allocation whose owner merely *looks* gone
+  would be a second allocator racing the collector, so nothing does it.
+
+`IPPool.status` reports `state` (`Pending`, `Ready`, `Invalid`, or `Conflict` when two
+pools in a namespace overlap), `total`, and `allocated`. The last is a convenience for
+operators, derived on each sync — no allocator reads it back, because a counter cannot say
+*which* addresses are free and a stale one would be a licence to double-allocate.
 
 ## Where placement lives: ClusterPool
 

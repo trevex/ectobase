@@ -2,11 +2,18 @@
 
 `flowplane` load-balances one address across a set of backend workloads using Maglev consistent
 hashing for backend selection and direct server return (DSR) for delivery. A `LoadBalancer` CRD
-allocates its address from an `LBPool` named by `spec.poolRef`, lists its service ports, and selects
+allocates its address from an `IPPool` named by `spec.poolRef`, lists its service ports, and selects
 the backend `NetworkInterface`s by selector or by name. If `spec.ip` is empty the controller
 allocates the lowest-free address in the pool; if it is set the controller validates and reserves
 it. Either way the authoritative value is `status.allocatedIP`. LB membership is pure forwarding
 data; it grants no firewall permission.
+
+The pool must be `spec.type: public`. An LB address is reached from outside the fabric, so handing
+one out of an `internal` range would advertise an address nothing can route to — a type mismatch is
+the intent being wrong, and the `LoadBalancer` goes `Invalid` rather than waiting. The claim itself
+is an `IPAllocation` object named after `(pool, address)`; see
+[Where addresses come from](../reference/crd-interactions.md#where-addresses-come-from-ippool-and-ipallocation)
+for why allocation is an object rather than a scan, and what that costs.
 
 !!! info "There is deliberately no object called a \"VIP\" here"
     Three different things get called a "virtual IP" in this problem domain, and conflating them
@@ -122,9 +129,13 @@ The two delivery models map onto two different agent responsibilities:
 
 ```
 LoadBalancer { PoolRef, LB address (optional), Ports[], TargetSelector | TargetRefs }
-        │  LoadBalancerIPReconciler — allocate lowest-free from LBPool, or validate+reserve LB address
+        │  LoadBalancerIPReconciler — IPPool must be type: public, else Invalid
+        │    · claim lowest-free, or validate+claim the pinned LB address
         ▼
-LoadBalancer.Status.AllocatedIP
+IPAllocation "<pool>-<address>" { PoolRef, Address, ConsumerRef }
+        │    the claim itself: Create is the compare-and-swap, ownerRef = this LoadBalancer
+        ▼
+LoadBalancer.Status.AllocatedIP    (written after the claim — it is a cache of it)
         │  CompiledNICReconciler.Compile()
         │    · match backend NICs (selector or refs)
         │    · consume Status.AllocatedIP

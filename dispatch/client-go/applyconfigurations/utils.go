@@ -108,12 +108,16 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &applyconfigurationsnetv1alpha1.FloatingIPApplyConfiguration{}
 	case netv1alpha1.SchemeGroupVersion.WithKind("InterfaceQoS"):
 		return &applyconfigurationsnetv1alpha1.InterfaceQoSApplyConfiguration{}
-	case netv1alpha1.SchemeGroupVersion.WithKind("LBPool"):
-		return &applyconfigurationsnetv1alpha1.LBPoolApplyConfiguration{}
-	case netv1alpha1.SchemeGroupVersion.WithKind("LBPoolSpec"):
-		return &applyconfigurationsnetv1alpha1.LBPoolSpecApplyConfiguration{}
-	case netv1alpha1.SchemeGroupVersion.WithKind("LBPoolStatus"):
-		return &applyconfigurationsnetv1alpha1.LBPoolStatusApplyConfiguration{}
+	case netv1alpha1.SchemeGroupVersion.WithKind("IPAllocation"):
+		return &applyconfigurationsnetv1alpha1.IPAllocationApplyConfiguration{}
+	case netv1alpha1.SchemeGroupVersion.WithKind("IPAllocationSpec"):
+		return &applyconfigurationsnetv1alpha1.IPAllocationSpecApplyConfiguration{}
+	case netv1alpha1.SchemeGroupVersion.WithKind("IPPool"):
+		return &applyconfigurationsnetv1alpha1.IPPoolApplyConfiguration{}
+	case netv1alpha1.SchemeGroupVersion.WithKind("IPPoolSpec"):
+		return &applyconfigurationsnetv1alpha1.IPPoolSpecApplyConfiguration{}
+	case netv1alpha1.SchemeGroupVersion.WithKind("IPPoolStatus"):
+		return &applyconfigurationsnetv1alpha1.IPPoolStatusApplyConfiguration{}
 	case netv1alpha1.SchemeGroupVersion.WithKind("LoadBalancer"):
 		return &applyconfigurationsnetv1alpha1.LoadBalancerApplyConfiguration{}
 	case netv1alpha1.SchemeGroupVersion.WithKind("LoadBalancerPort"):
@@ -148,6 +152,8 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &applyconfigurationsnetv1alpha1.SubnetSpecApplyConfiguration{}
 	case netv1alpha1.SchemeGroupVersion.WithKind("SubnetStatus"):
 		return &applyconfigurationsnetv1alpha1.SubnetStatusApplyConfiguration{}
+	case netv1alpha1.SchemeGroupVersion.WithKind("TypedLocalObjectReference"):
+		return &applyconfigurationsnetv1alpha1.TypedLocalObjectReferenceApplyConfiguration{}
 	case netv1alpha1.SchemeGroupVersion.WithKind("VPC"):
 		return &applyconfigurationsnetv1alpha1.VPCApplyConfiguration{}
 	case netv1alpha1.SchemeGroupVersion.WithKind("VPCPeering"):

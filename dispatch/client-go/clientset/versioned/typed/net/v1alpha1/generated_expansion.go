@@ -6,7 +6,9 @@ type FirewallPolicyExpansion interface{}
 
 type FloatingIPExpansion interface{}
 
-type LBPoolExpansion interface{}
+type IPAllocationExpansion interface{}
+
+type IPPoolExpansion interface{}
 
 type LoadBalancerExpansion interface{}
 

@@ -19,7 +19,10 @@ var Funcs = func(codecs runtimeserializer.CodecFactory) []any {
 		func(s *net.SubnetSpec, c randfill.Continue) {
 			c.FillNoCustom(s)
 		},
-		func(s *net.LBPoolSpec, c randfill.Continue) {
+		func(s *net.IPPoolSpec, c randfill.Continue) {
+			c.FillNoCustom(s)
+		},
+		func(s *net.IPAllocationSpec, c randfill.Continue) {
 			c.FillNoCustom(s)
 		},
 		func(s *net.NetworkInterfaceSpec, c randfill.Continue) {

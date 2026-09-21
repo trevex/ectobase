@@ -46,7 +46,8 @@ const (
 //
 // The chain under test, none of which existed end to end before:
 //
-//	LoadBalancer + LBPool          -> LoadBalancerIPReconciler assigns status.allocatedIP
+//	LoadBalancer + IPPool          -> LoadBalancerIPReconciler claims an IPAllocation and
+//	                                  assigns status.allocatedIP from it
 //	NetworkInterface (labelled)    -> compiler emits CompiledNIC.spec.lb (gated on Allocated)
 //	broker                         -> syncs the CompiledNIC into the pool
 //	BACKEND node's agent           -> desiredLB joins it to the node VTEP; announces an LB_IP
@@ -68,7 +69,7 @@ func TestLbFromIntentReachesTheWan(t *testing.T) {
 	backendVTEP := backend.IdentityAddr
 	wan := clab.ContainerName(cfg.Name, "wan")
 
-	// 1. Intent on the dispatch: a VPC + Subnet, an LBPool covering the edge's public v4 prefix, a
+	// 1. Intent on the dispatch: a VPC + Subnet, a public IPPool covering the edge's public v4 prefix, a
 	//    LoadBalancer pinned to our LB address and selecting by label, and the backend NIC carrying that
 	//    label. No FirewallPolicy: the compiler materializes an explicit allow-all for every
 	//    direction no policy governs, which is what a k8s default-allow lowers to.
@@ -76,7 +77,7 @@ func TestLbFromIntentReachesTheWan(t *testing.T) {
 	patchLbIntentVPCReady(t, ctx, cfg)
 	t.Cleanup(func() {
 		for _, kind := range []string{
-			"loadbalancer.net.ectobase.dev/lbi-lb", "lbpool.net.ectobase.dev/lbi-pool",
+			"loadbalancer.net.ectobase.dev/lbi-lb", "ippool.net.ectobase.dev/lbi-pool",
 			"containers.compute.ectobase.dev/ctr-" + lbIntentNIC,
 			"networkinterface.net.ectobase.dev/" + lbIntentNIC,
 			"subnet.net.ectobase.dev/lbi-subnet", "vpc.net.ectobase.dev/lbi-vpc",
@@ -275,7 +276,7 @@ func TestEdgeAgentsRunWithoutAnApiserver(t *testing.T) {
 	}
 }
 
-// lbIntentFixture renders the whole intent: VPC, Subnet, LBPool, LoadBalancer and the backend NIC.
+// lbIntentFixture renders the whole intent: VPC, Subnet, IPPool, LoadBalancer and the backend NIC.
 // The LoadBalancer pins spec.ip (bring-your-own) and selects its backend by label — the two halves
 // the compiler joins into CompiledNIC.spec.lb.
 func lbIntentFixture(node, cluster string) string {
@@ -292,9 +293,9 @@ spec: {vpcRef: {name: lbi-vpc}, v4Prefix: 10.0.5.0/24}
 # The edge-owned public v4 prefix (fabric.PublicV4): both edges advertise it as our ASN and the WAN
 # routes it back via either, so any LB address inside it is anycast across the edge fleet.
 apiVersion: net.ectobase.dev/v1alpha1
-kind: LBPool
+kind: IPPool
 metadata: {name: lbi-pool}
-spec: {v4Prefix: 192.0.2.0/24}
+spec: {type: public, v4Prefix: 192.0.2.0/24}
 ---
 apiVersion: net.ectobase.dev/v1alpha1
 kind: LoadBalancer

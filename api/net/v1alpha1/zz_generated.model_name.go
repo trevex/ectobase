@@ -56,28 +56,43 @@ func (in FloatingIPStatus) OpenAPIModelName() string {
 }
 
 // OpenAPIModelName returns the OpenAPI model name for this type.
+func (in IPAllocation) OpenAPIModelName() string {
+	return "dev.ectobase.net.v1alpha1.IPAllocation"
+}
+
+// OpenAPIModelName returns the OpenAPI model name for this type.
+func (in IPAllocationList) OpenAPIModelName() string {
+	return "dev.ectobase.net.v1alpha1.IPAllocationList"
+}
+
+// OpenAPIModelName returns the OpenAPI model name for this type.
+func (in IPAllocationSpec) OpenAPIModelName() string {
+	return "dev.ectobase.net.v1alpha1.IPAllocationSpec"
+}
+
+// OpenAPIModelName returns the OpenAPI model name for this type.
+func (in IPPool) OpenAPIModelName() string {
+	return "dev.ectobase.net.v1alpha1.IPPool"
+}
+
+// OpenAPIModelName returns the OpenAPI model name for this type.
+func (in IPPoolList) OpenAPIModelName() string {
+	return "dev.ectobase.net.v1alpha1.IPPoolList"
+}
+
+// OpenAPIModelName returns the OpenAPI model name for this type.
+func (in IPPoolSpec) OpenAPIModelName() string {
+	return "dev.ectobase.net.v1alpha1.IPPoolSpec"
+}
+
+// OpenAPIModelName returns the OpenAPI model name for this type.
+func (in IPPoolStatus) OpenAPIModelName() string {
+	return "dev.ectobase.net.v1alpha1.IPPoolStatus"
+}
+
+// OpenAPIModelName returns the OpenAPI model name for this type.
 func (in InterfaceQoS) OpenAPIModelName() string {
 	return "dev.ectobase.net.v1alpha1.InterfaceQoS"
-}
-
-// OpenAPIModelName returns the OpenAPI model name for this type.
-func (in LBPool) OpenAPIModelName() string {
-	return "dev.ectobase.net.v1alpha1.LBPool"
-}
-
-// OpenAPIModelName returns the OpenAPI model name for this type.
-func (in LBPoolList) OpenAPIModelName() string {
-	return "dev.ectobase.net.v1alpha1.LBPoolList"
-}
-
-// OpenAPIModelName returns the OpenAPI model name for this type.
-func (in LBPoolSpec) OpenAPIModelName() string {
-	return "dev.ectobase.net.v1alpha1.LBPoolSpec"
-}
-
-// OpenAPIModelName returns the OpenAPI model name for this type.
-func (in LBPoolStatus) OpenAPIModelName() string {
-	return "dev.ectobase.net.v1alpha1.LBPoolStatus"
 }
 
 // OpenAPIModelName returns the OpenAPI model name for this type.
@@ -183,6 +198,11 @@ func (in SubnetSpec) OpenAPIModelName() string {
 // OpenAPIModelName returns the OpenAPI model name for this type.
 func (in SubnetStatus) OpenAPIModelName() string {
 	return "dev.ectobase.net.v1alpha1.SubnetStatus"
+}
+
+// OpenAPIModelName returns the OpenAPI model name for this type.
+func (in TypedLocalObjectReference) OpenAPIModelName() string {
+	return "dev.ectobase.net.v1alpha1.TypedLocalObjectReference"
 }
 
 // OpenAPIModelName returns the OpenAPI model name for this type.

@@ -61,8 +61,10 @@ func (f *sharedInformerFactory) ForResource(resource schema.GroupVersionResource
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Net().V1alpha1().FirewallPolicies().Informer()}, nil
 	case netv1alpha1.SchemeGroupVersion.WithResource("floatingips"):
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Net().V1alpha1().FloatingIPs().Informer()}, nil
-	case netv1alpha1.SchemeGroupVersion.WithResource("lbpools"):
-		return &genericInformer{resource: resource.GroupResource(), informer: f.Net().V1alpha1().LBPools().Informer()}, nil
+	case netv1alpha1.SchemeGroupVersion.WithResource("ipallocations"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.Net().V1alpha1().IPAllocations().Informer()}, nil
+	case netv1alpha1.SchemeGroupVersion.WithResource("ippools"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.Net().V1alpha1().IPPools().Informer()}, nil
 	case netv1alpha1.SchemeGroupVersion.WithResource("loadbalancers"):
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Net().V1alpha1().LoadBalancers().Informer()}, nil
 	case netv1alpha1.SchemeGroupVersion.WithResource("natgateways"):

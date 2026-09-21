@@ -9,6 +9,14 @@ type LocalObjectReference struct {
 	Name string
 }
 
+// TypedLocalObjectReference references an object by kind and name within the same namespace.
+type TypedLocalObjectReference struct {
+	// Kind is the kind of the referenced object.
+	Kind string
+	// Name is the name of the referenced object.
+	Name string
+}
+
 // PortStatus describes the dataplane port allocated for a NetworkInterface.
 type PortStatus struct {
 	// Type is the port type (e.g. tap or vf).

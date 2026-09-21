@@ -121,6 +121,76 @@ func RegisterConversions(s *runtime.Scheme) error {
 	}); err != nil {
 		return err
 	}
+	if err := s.AddGeneratedConversionFunc((*IPAllocation)(nil), (*net.IPAllocation)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_v1alpha1_IPAllocation_To_net_IPAllocation(a.(*IPAllocation), b.(*net.IPAllocation), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*net.IPAllocation)(nil), (*IPAllocation)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_net_IPAllocation_To_v1alpha1_IPAllocation(a.(*net.IPAllocation), b.(*IPAllocation), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*IPAllocationList)(nil), (*net.IPAllocationList)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_v1alpha1_IPAllocationList_To_net_IPAllocationList(a.(*IPAllocationList), b.(*net.IPAllocationList), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*net.IPAllocationList)(nil), (*IPAllocationList)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_net_IPAllocationList_To_v1alpha1_IPAllocationList(a.(*net.IPAllocationList), b.(*IPAllocationList), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*IPAllocationSpec)(nil), (*net.IPAllocationSpec)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_v1alpha1_IPAllocationSpec_To_net_IPAllocationSpec(a.(*IPAllocationSpec), b.(*net.IPAllocationSpec), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*net.IPAllocationSpec)(nil), (*IPAllocationSpec)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_net_IPAllocationSpec_To_v1alpha1_IPAllocationSpec(a.(*net.IPAllocationSpec), b.(*IPAllocationSpec), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*IPPool)(nil), (*net.IPPool)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_v1alpha1_IPPool_To_net_IPPool(a.(*IPPool), b.(*net.IPPool), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*net.IPPool)(nil), (*IPPool)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_net_IPPool_To_v1alpha1_IPPool(a.(*net.IPPool), b.(*IPPool), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*IPPoolList)(nil), (*net.IPPoolList)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_v1alpha1_IPPoolList_To_net_IPPoolList(a.(*IPPoolList), b.(*net.IPPoolList), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*net.IPPoolList)(nil), (*IPPoolList)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_net_IPPoolList_To_v1alpha1_IPPoolList(a.(*net.IPPoolList), b.(*IPPoolList), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*IPPoolSpec)(nil), (*net.IPPoolSpec)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_v1alpha1_IPPoolSpec_To_net_IPPoolSpec(a.(*IPPoolSpec), b.(*net.IPPoolSpec), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*net.IPPoolSpec)(nil), (*IPPoolSpec)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_net_IPPoolSpec_To_v1alpha1_IPPoolSpec(a.(*net.IPPoolSpec), b.(*IPPoolSpec), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*IPPoolStatus)(nil), (*net.IPPoolStatus)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_v1alpha1_IPPoolStatus_To_net_IPPoolStatus(a.(*IPPoolStatus), b.(*net.IPPoolStatus), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*net.IPPoolStatus)(nil), (*IPPoolStatus)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_net_IPPoolStatus_To_v1alpha1_IPPoolStatus(a.(*net.IPPoolStatus), b.(*IPPoolStatus), scope)
+	}); err != nil {
+		return err
+	}
 	if err := s.AddGeneratedConversionFunc((*InterfaceQoS)(nil), (*net.InterfaceQoS)(nil), func(a, b interface{}, scope conversion.Scope) error {
 		return Convert_v1alpha1_InterfaceQoS_To_net_InterfaceQoS(a.(*InterfaceQoS), b.(*net.InterfaceQoS), scope)
 	}); err != nil {
@@ -128,46 +198,6 @@ func RegisterConversions(s *runtime.Scheme) error {
 	}
 	if err := s.AddGeneratedConversionFunc((*net.InterfaceQoS)(nil), (*InterfaceQoS)(nil), func(a, b interface{}, scope conversion.Scope) error {
 		return Convert_net_InterfaceQoS_To_v1alpha1_InterfaceQoS(a.(*net.InterfaceQoS), b.(*InterfaceQoS), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*LBPool)(nil), (*net.LBPool)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_v1alpha1_LBPool_To_net_LBPool(a.(*LBPool), b.(*net.LBPool), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*net.LBPool)(nil), (*LBPool)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_net_LBPool_To_v1alpha1_LBPool(a.(*net.LBPool), b.(*LBPool), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*LBPoolList)(nil), (*net.LBPoolList)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_v1alpha1_LBPoolList_To_net_LBPoolList(a.(*LBPoolList), b.(*net.LBPoolList), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*net.LBPoolList)(nil), (*LBPoolList)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_net_LBPoolList_To_v1alpha1_LBPoolList(a.(*net.LBPoolList), b.(*LBPoolList), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*LBPoolSpec)(nil), (*net.LBPoolSpec)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_v1alpha1_LBPoolSpec_To_net_LBPoolSpec(a.(*LBPoolSpec), b.(*net.LBPoolSpec), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*net.LBPoolSpec)(nil), (*LBPoolSpec)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_net_LBPoolSpec_To_v1alpha1_LBPoolSpec(a.(*net.LBPoolSpec), b.(*LBPoolSpec), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*LBPoolStatus)(nil), (*net.LBPoolStatus)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_v1alpha1_LBPoolStatus_To_net_LBPoolStatus(a.(*LBPoolStatus), b.(*net.LBPoolStatus), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*net.LBPoolStatus)(nil), (*LBPoolStatus)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_net_LBPoolStatus_To_v1alpha1_LBPoolStatus(a.(*net.LBPoolStatus), b.(*LBPoolStatus), scope)
 	}); err != nil {
 		return err
 	}
@@ -378,6 +408,16 @@ func RegisterConversions(s *runtime.Scheme) error {
 	}
 	if err := s.AddGeneratedConversionFunc((*net.SubnetStatus)(nil), (*SubnetStatus)(nil), func(a, b interface{}, scope conversion.Scope) error {
 		return Convert_net_SubnetStatus_To_v1alpha1_SubnetStatus(a.(*net.SubnetStatus), b.(*SubnetStatus), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*TypedLocalObjectReference)(nil), (*net.TypedLocalObjectReference)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_v1alpha1_TypedLocalObjectReference_To_net_TypedLocalObjectReference(a.(*TypedLocalObjectReference), b.(*net.TypedLocalObjectReference), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*net.TypedLocalObjectReference)(nil), (*TypedLocalObjectReference)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_net_TypedLocalObjectReference_To_v1alpha1_TypedLocalObjectReference(a.(*net.TypedLocalObjectReference), b.(*TypedLocalObjectReference), scope)
 	}); err != nil {
 		return err
 	}
@@ -720,6 +760,190 @@ func Convert_net_FloatingIPStatus_To_v1alpha1_FloatingIPStatus(in *net.FloatingI
 	return autoConvert_net_FloatingIPStatus_To_v1alpha1_FloatingIPStatus(in, out, s)
 }
 
+func autoConvert_v1alpha1_IPAllocation_To_net_IPAllocation(in *IPAllocation, out *net.IPAllocation, s conversion.Scope) error {
+	out.ObjectMeta = in.ObjectMeta
+	if err := Convert_v1alpha1_IPAllocationSpec_To_net_IPAllocationSpec(&in.Spec, &out.Spec, s); err != nil {
+		return err
+	}
+	return nil
+}
+
+// Convert_v1alpha1_IPAllocation_To_net_IPAllocation is an autogenerated conversion function.
+func Convert_v1alpha1_IPAllocation_To_net_IPAllocation(in *IPAllocation, out *net.IPAllocation, s conversion.Scope) error {
+	return autoConvert_v1alpha1_IPAllocation_To_net_IPAllocation(in, out, s)
+}
+
+func autoConvert_net_IPAllocation_To_v1alpha1_IPAllocation(in *net.IPAllocation, out *IPAllocation, s conversion.Scope) error {
+	out.ObjectMeta = in.ObjectMeta
+	if err := Convert_net_IPAllocationSpec_To_v1alpha1_IPAllocationSpec(&in.Spec, &out.Spec, s); err != nil {
+		return err
+	}
+	return nil
+}
+
+// Convert_net_IPAllocation_To_v1alpha1_IPAllocation is an autogenerated conversion function.
+func Convert_net_IPAllocation_To_v1alpha1_IPAllocation(in *net.IPAllocation, out *IPAllocation, s conversion.Scope) error {
+	return autoConvert_net_IPAllocation_To_v1alpha1_IPAllocation(in, out, s)
+}
+
+func autoConvert_v1alpha1_IPAllocationList_To_net_IPAllocationList(in *IPAllocationList, out *net.IPAllocationList, s conversion.Scope) error {
+	out.ListMeta = in.ListMeta
+	out.Items = *(*[]net.IPAllocation)(unsafe.Pointer(&in.Items))
+	return nil
+}
+
+// Convert_v1alpha1_IPAllocationList_To_net_IPAllocationList is an autogenerated conversion function.
+func Convert_v1alpha1_IPAllocationList_To_net_IPAllocationList(in *IPAllocationList, out *net.IPAllocationList, s conversion.Scope) error {
+	return autoConvert_v1alpha1_IPAllocationList_To_net_IPAllocationList(in, out, s)
+}
+
+func autoConvert_net_IPAllocationList_To_v1alpha1_IPAllocationList(in *net.IPAllocationList, out *IPAllocationList, s conversion.Scope) error {
+	out.ListMeta = in.ListMeta
+	out.Items = *(*[]IPAllocation)(unsafe.Pointer(&in.Items))
+	return nil
+}
+
+// Convert_net_IPAllocationList_To_v1alpha1_IPAllocationList is an autogenerated conversion function.
+func Convert_net_IPAllocationList_To_v1alpha1_IPAllocationList(in *net.IPAllocationList, out *IPAllocationList, s conversion.Scope) error {
+	return autoConvert_net_IPAllocationList_To_v1alpha1_IPAllocationList(in, out, s)
+}
+
+func autoConvert_v1alpha1_IPAllocationSpec_To_net_IPAllocationSpec(in *IPAllocationSpec, out *net.IPAllocationSpec, s conversion.Scope) error {
+	if err := Convert_v1alpha1_LocalObjectReference_To_net_LocalObjectReference(&in.PoolRef, &out.PoolRef, s); err != nil {
+		return err
+	}
+	out.Address = in.Address
+	if err := Convert_v1alpha1_TypedLocalObjectReference_To_net_TypedLocalObjectReference(&in.ConsumerRef, &out.ConsumerRef, s); err != nil {
+		return err
+	}
+	return nil
+}
+
+// Convert_v1alpha1_IPAllocationSpec_To_net_IPAllocationSpec is an autogenerated conversion function.
+func Convert_v1alpha1_IPAllocationSpec_To_net_IPAllocationSpec(in *IPAllocationSpec, out *net.IPAllocationSpec, s conversion.Scope) error {
+	return autoConvert_v1alpha1_IPAllocationSpec_To_net_IPAllocationSpec(in, out, s)
+}
+
+func autoConvert_net_IPAllocationSpec_To_v1alpha1_IPAllocationSpec(in *net.IPAllocationSpec, out *IPAllocationSpec, s conversion.Scope) error {
+	if err := Convert_net_LocalObjectReference_To_v1alpha1_LocalObjectReference(&in.PoolRef, &out.PoolRef, s); err != nil {
+		return err
+	}
+	out.Address = in.Address
+	if err := Convert_net_TypedLocalObjectReference_To_v1alpha1_TypedLocalObjectReference(&in.ConsumerRef, &out.ConsumerRef, s); err != nil {
+		return err
+	}
+	return nil
+}
+
+// Convert_net_IPAllocationSpec_To_v1alpha1_IPAllocationSpec is an autogenerated conversion function.
+func Convert_net_IPAllocationSpec_To_v1alpha1_IPAllocationSpec(in *net.IPAllocationSpec, out *IPAllocationSpec, s conversion.Scope) error {
+	return autoConvert_net_IPAllocationSpec_To_v1alpha1_IPAllocationSpec(in, out, s)
+}
+
+func autoConvert_v1alpha1_IPPool_To_net_IPPool(in *IPPool, out *net.IPPool, s conversion.Scope) error {
+	out.ObjectMeta = in.ObjectMeta
+	if err := Convert_v1alpha1_IPPoolSpec_To_net_IPPoolSpec(&in.Spec, &out.Spec, s); err != nil {
+		return err
+	}
+	if err := Convert_v1alpha1_IPPoolStatus_To_net_IPPoolStatus(&in.Status, &out.Status, s); err != nil {
+		return err
+	}
+	return nil
+}
+
+// Convert_v1alpha1_IPPool_To_net_IPPool is an autogenerated conversion function.
+func Convert_v1alpha1_IPPool_To_net_IPPool(in *IPPool, out *net.IPPool, s conversion.Scope) error {
+	return autoConvert_v1alpha1_IPPool_To_net_IPPool(in, out, s)
+}
+
+func autoConvert_net_IPPool_To_v1alpha1_IPPool(in *net.IPPool, out *IPPool, s conversion.Scope) error {
+	out.ObjectMeta = in.ObjectMeta
+	if err := Convert_net_IPPoolSpec_To_v1alpha1_IPPoolSpec(&in.Spec, &out.Spec, s); err != nil {
+		return err
+	}
+	if err := Convert_net_IPPoolStatus_To_v1alpha1_IPPoolStatus(&in.Status, &out.Status, s); err != nil {
+		return err
+	}
+	return nil
+}
+
+// Convert_net_IPPool_To_v1alpha1_IPPool is an autogenerated conversion function.
+func Convert_net_IPPool_To_v1alpha1_IPPool(in *net.IPPool, out *IPPool, s conversion.Scope) error {
+	return autoConvert_net_IPPool_To_v1alpha1_IPPool(in, out, s)
+}
+
+func autoConvert_v1alpha1_IPPoolList_To_net_IPPoolList(in *IPPoolList, out *net.IPPoolList, s conversion.Scope) error {
+	out.ListMeta = in.ListMeta
+	out.Items = *(*[]net.IPPool)(unsafe.Pointer(&in.Items))
+	return nil
+}
+
+// Convert_v1alpha1_IPPoolList_To_net_IPPoolList is an autogenerated conversion function.
+func Convert_v1alpha1_IPPoolList_To_net_IPPoolList(in *IPPoolList, out *net.IPPoolList, s conversion.Scope) error {
+	return autoConvert_v1alpha1_IPPoolList_To_net_IPPoolList(in, out, s)
+}
+
+func autoConvert_net_IPPoolList_To_v1alpha1_IPPoolList(in *net.IPPoolList, out *IPPoolList, s conversion.Scope) error {
+	out.ListMeta = in.ListMeta
+	out.Items = *(*[]IPPool)(unsafe.Pointer(&in.Items))
+	return nil
+}
+
+// Convert_net_IPPoolList_To_v1alpha1_IPPoolList is an autogenerated conversion function.
+func Convert_net_IPPoolList_To_v1alpha1_IPPoolList(in *net.IPPoolList, out *IPPoolList, s conversion.Scope) error {
+	return autoConvert_net_IPPoolList_To_v1alpha1_IPPoolList(in, out, s)
+}
+
+func autoConvert_v1alpha1_IPPoolSpec_To_net_IPPoolSpec(in *IPPoolSpec, out *net.IPPoolSpec, s conversion.Scope) error {
+	out.Type = string(in.Type)
+	out.V4Prefix = (*string)(unsafe.Pointer(in.V4Prefix))
+	out.V6Prefix = (*string)(unsafe.Pointer(in.V6Prefix))
+	out.ReservedIPs = *(*[]string)(unsafe.Pointer(&in.ReservedIPs))
+	return nil
+}
+
+// Convert_v1alpha1_IPPoolSpec_To_net_IPPoolSpec is an autogenerated conversion function.
+func Convert_v1alpha1_IPPoolSpec_To_net_IPPoolSpec(in *IPPoolSpec, out *net.IPPoolSpec, s conversion.Scope) error {
+	return autoConvert_v1alpha1_IPPoolSpec_To_net_IPPoolSpec(in, out, s)
+}
+
+func autoConvert_net_IPPoolSpec_To_v1alpha1_IPPoolSpec(in *net.IPPoolSpec, out *IPPoolSpec, s conversion.Scope) error {
+	out.Type = IPPoolType(in.Type)
+	out.V4Prefix = (*string)(unsafe.Pointer(in.V4Prefix))
+	out.V6Prefix = (*string)(unsafe.Pointer(in.V6Prefix))
+	out.ReservedIPs = *(*[]string)(unsafe.Pointer(&in.ReservedIPs))
+	return nil
+}
+
+// Convert_net_IPPoolSpec_To_v1alpha1_IPPoolSpec is an autogenerated conversion function.
+func Convert_net_IPPoolSpec_To_v1alpha1_IPPoolSpec(in *net.IPPoolSpec, out *IPPoolSpec, s conversion.Scope) error {
+	return autoConvert_net_IPPoolSpec_To_v1alpha1_IPPoolSpec(in, out, s)
+}
+
+func autoConvert_v1alpha1_IPPoolStatus_To_net_IPPoolStatus(in *IPPoolStatus, out *net.IPPoolStatus, s conversion.Scope) error {
+	out.State = in.State
+	out.Total = in.Total
+	out.Allocated = in.Allocated
+	return nil
+}
+
+// Convert_v1alpha1_IPPoolStatus_To_net_IPPoolStatus is an autogenerated conversion function.
+func Convert_v1alpha1_IPPoolStatus_To_net_IPPoolStatus(in *IPPoolStatus, out *net.IPPoolStatus, s conversion.Scope) error {
+	return autoConvert_v1alpha1_IPPoolStatus_To_net_IPPoolStatus(in, out, s)
+}
+
+func autoConvert_net_IPPoolStatus_To_v1alpha1_IPPoolStatus(in *net.IPPoolStatus, out *IPPoolStatus, s conversion.Scope) error {
+	out.State = in.State
+	out.Total = in.Total
+	out.Allocated = in.Allocated
+	return nil
+}
+
+// Convert_net_IPPoolStatus_To_v1alpha1_IPPoolStatus is an autogenerated conversion function.
+func Convert_net_IPPoolStatus_To_v1alpha1_IPPoolStatus(in *net.IPPoolStatus, out *IPPoolStatus, s conversion.Scope) error {
+	return autoConvert_net_IPPoolStatus_To_v1alpha1_IPPoolStatus(in, out, s)
+}
+
 func autoConvert_v1alpha1_InterfaceQoS_To_net_InterfaceQoS(in *InterfaceQoS, out *net.InterfaceQoS, s conversion.Scope) error {
 	out.Egress = (*net.EgressQoS)(unsafe.Pointer(in.Egress))
 	out.Ingress = (*net.RateLimit)(unsafe.Pointer(in.Ingress))
@@ -740,106 +964,6 @@ func autoConvert_net_InterfaceQoS_To_v1alpha1_InterfaceQoS(in *net.InterfaceQoS,
 // Convert_net_InterfaceQoS_To_v1alpha1_InterfaceQoS is an autogenerated conversion function.
 func Convert_net_InterfaceQoS_To_v1alpha1_InterfaceQoS(in *net.InterfaceQoS, out *InterfaceQoS, s conversion.Scope) error {
 	return autoConvert_net_InterfaceQoS_To_v1alpha1_InterfaceQoS(in, out, s)
-}
-
-func autoConvert_v1alpha1_LBPool_To_net_LBPool(in *LBPool, out *net.LBPool, s conversion.Scope) error {
-	out.ObjectMeta = in.ObjectMeta
-	if err := Convert_v1alpha1_LBPoolSpec_To_net_LBPoolSpec(&in.Spec, &out.Spec, s); err != nil {
-		return err
-	}
-	if err := Convert_v1alpha1_LBPoolStatus_To_net_LBPoolStatus(&in.Status, &out.Status, s); err != nil {
-		return err
-	}
-	return nil
-}
-
-// Convert_v1alpha1_LBPool_To_net_LBPool is an autogenerated conversion function.
-func Convert_v1alpha1_LBPool_To_net_LBPool(in *LBPool, out *net.LBPool, s conversion.Scope) error {
-	return autoConvert_v1alpha1_LBPool_To_net_LBPool(in, out, s)
-}
-
-func autoConvert_net_LBPool_To_v1alpha1_LBPool(in *net.LBPool, out *LBPool, s conversion.Scope) error {
-	out.ObjectMeta = in.ObjectMeta
-	if err := Convert_net_LBPoolSpec_To_v1alpha1_LBPoolSpec(&in.Spec, &out.Spec, s); err != nil {
-		return err
-	}
-	if err := Convert_net_LBPoolStatus_To_v1alpha1_LBPoolStatus(&in.Status, &out.Status, s); err != nil {
-		return err
-	}
-	return nil
-}
-
-// Convert_net_LBPool_To_v1alpha1_LBPool is an autogenerated conversion function.
-func Convert_net_LBPool_To_v1alpha1_LBPool(in *net.LBPool, out *LBPool, s conversion.Scope) error {
-	return autoConvert_net_LBPool_To_v1alpha1_LBPool(in, out, s)
-}
-
-func autoConvert_v1alpha1_LBPoolList_To_net_LBPoolList(in *LBPoolList, out *net.LBPoolList, s conversion.Scope) error {
-	out.ListMeta = in.ListMeta
-	out.Items = *(*[]net.LBPool)(unsafe.Pointer(&in.Items))
-	return nil
-}
-
-// Convert_v1alpha1_LBPoolList_To_net_LBPoolList is an autogenerated conversion function.
-func Convert_v1alpha1_LBPoolList_To_net_LBPoolList(in *LBPoolList, out *net.LBPoolList, s conversion.Scope) error {
-	return autoConvert_v1alpha1_LBPoolList_To_net_LBPoolList(in, out, s)
-}
-
-func autoConvert_net_LBPoolList_To_v1alpha1_LBPoolList(in *net.LBPoolList, out *LBPoolList, s conversion.Scope) error {
-	out.ListMeta = in.ListMeta
-	out.Items = *(*[]LBPool)(unsafe.Pointer(&in.Items))
-	return nil
-}
-
-// Convert_net_LBPoolList_To_v1alpha1_LBPoolList is an autogenerated conversion function.
-func Convert_net_LBPoolList_To_v1alpha1_LBPoolList(in *net.LBPoolList, out *LBPoolList, s conversion.Scope) error {
-	return autoConvert_net_LBPoolList_To_v1alpha1_LBPoolList(in, out, s)
-}
-
-func autoConvert_v1alpha1_LBPoolSpec_To_net_LBPoolSpec(in *LBPoolSpec, out *net.LBPoolSpec, s conversion.Scope) error {
-	out.V4Prefix = (*string)(unsafe.Pointer(in.V4Prefix))
-	out.V6Prefix = (*string)(unsafe.Pointer(in.V6Prefix))
-	out.ReservedIPs = *(*[]string)(unsafe.Pointer(&in.ReservedIPs))
-	return nil
-}
-
-// Convert_v1alpha1_LBPoolSpec_To_net_LBPoolSpec is an autogenerated conversion function.
-func Convert_v1alpha1_LBPoolSpec_To_net_LBPoolSpec(in *LBPoolSpec, out *net.LBPoolSpec, s conversion.Scope) error {
-	return autoConvert_v1alpha1_LBPoolSpec_To_net_LBPoolSpec(in, out, s)
-}
-
-func autoConvert_net_LBPoolSpec_To_v1alpha1_LBPoolSpec(in *net.LBPoolSpec, out *LBPoolSpec, s conversion.Scope) error {
-	out.V4Prefix = (*string)(unsafe.Pointer(in.V4Prefix))
-	out.V6Prefix = (*string)(unsafe.Pointer(in.V6Prefix))
-	out.ReservedIPs = *(*[]string)(unsafe.Pointer(&in.ReservedIPs))
-	return nil
-}
-
-// Convert_net_LBPoolSpec_To_v1alpha1_LBPoolSpec is an autogenerated conversion function.
-func Convert_net_LBPoolSpec_To_v1alpha1_LBPoolSpec(in *net.LBPoolSpec, out *LBPoolSpec, s conversion.Scope) error {
-	return autoConvert_net_LBPoolSpec_To_v1alpha1_LBPoolSpec(in, out, s)
-}
-
-func autoConvert_v1alpha1_LBPoolStatus_To_net_LBPoolStatus(in *LBPoolStatus, out *net.LBPoolStatus, s conversion.Scope) error {
-	out.State = in.State
-	out.Total = in.Total
-	return nil
-}
-
-// Convert_v1alpha1_LBPoolStatus_To_net_LBPoolStatus is an autogenerated conversion function.
-func Convert_v1alpha1_LBPoolStatus_To_net_LBPoolStatus(in *LBPoolStatus, out *net.LBPoolStatus, s conversion.Scope) error {
-	return autoConvert_v1alpha1_LBPoolStatus_To_net_LBPoolStatus(in, out, s)
-}
-
-func autoConvert_net_LBPoolStatus_To_v1alpha1_LBPoolStatus(in *net.LBPoolStatus, out *LBPoolStatus, s conversion.Scope) error {
-	out.State = in.State
-	out.Total = in.Total
-	return nil
-}
-
-// Convert_net_LBPoolStatus_To_v1alpha1_LBPoolStatus is an autogenerated conversion function.
-func Convert_net_LBPoolStatus_To_v1alpha1_LBPoolStatus(in *net.LBPoolStatus, out *LBPoolStatus, s conversion.Scope) error {
-	return autoConvert_net_LBPoolStatus_To_v1alpha1_LBPoolStatus(in, out, s)
 }
 
 func autoConvert_v1alpha1_LoadBalancer_To_net_LoadBalancer(in *LoadBalancer, out *net.LoadBalancer, s conversion.Scope) error {
@@ -1426,6 +1550,28 @@ func autoConvert_net_SubnetStatus_To_v1alpha1_SubnetStatus(in *net.SubnetStatus,
 // Convert_net_SubnetStatus_To_v1alpha1_SubnetStatus is an autogenerated conversion function.
 func Convert_net_SubnetStatus_To_v1alpha1_SubnetStatus(in *net.SubnetStatus, out *SubnetStatus, s conversion.Scope) error {
 	return autoConvert_net_SubnetStatus_To_v1alpha1_SubnetStatus(in, out, s)
+}
+
+func autoConvert_v1alpha1_TypedLocalObjectReference_To_net_TypedLocalObjectReference(in *TypedLocalObjectReference, out *net.TypedLocalObjectReference, s conversion.Scope) error {
+	out.Kind = in.Kind
+	out.Name = in.Name
+	return nil
+}
+
+// Convert_v1alpha1_TypedLocalObjectReference_To_net_TypedLocalObjectReference is an autogenerated conversion function.
+func Convert_v1alpha1_TypedLocalObjectReference_To_net_TypedLocalObjectReference(in *TypedLocalObjectReference, out *net.TypedLocalObjectReference, s conversion.Scope) error {
+	return autoConvert_v1alpha1_TypedLocalObjectReference_To_net_TypedLocalObjectReference(in, out, s)
+}
+
+func autoConvert_net_TypedLocalObjectReference_To_v1alpha1_TypedLocalObjectReference(in *net.TypedLocalObjectReference, out *TypedLocalObjectReference, s conversion.Scope) error {
+	out.Kind = in.Kind
+	out.Name = in.Name
+	return nil
+}
+
+// Convert_net_TypedLocalObjectReference_To_v1alpha1_TypedLocalObjectReference is an autogenerated conversion function.
+func Convert_net_TypedLocalObjectReference_To_v1alpha1_TypedLocalObjectReference(in *net.TypedLocalObjectReference, out *TypedLocalObjectReference, s conversion.Scope) error {
+	return autoConvert_net_TypedLocalObjectReference_To_v1alpha1_TypedLocalObjectReference(in, out, s)
 }
 
 func autoConvert_v1alpha1_VPC_To_net_VPC(in *VPC, out *net.VPC, s conversion.Scope) error {

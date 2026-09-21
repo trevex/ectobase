@@ -30,7 +30,7 @@ aggregated resources (`dispatch/cmd/apiserver/main.go`):
 | Group | Resources |
 |---|---|
 | `platform.ectobase.dev` | `ClusterPool`, `RouteBusIdentity` |
-| `net.ectobase.dev` | `VPC`, `Subnet`, `LBPool`, `NetworkInterface`, `FirewallPolicy`, `FloatingIP`, `LoadBalancer`, `NATGateway`, `VPCPeering` |
+| `net.ectobase.dev` | `VPC`, `Subnet`, `IPPool`, `IPAllocation`, `NetworkInterface`, `FirewallPolicy`, `FloatingIP`, `LoadBalancer`, `NATGateway`, `VPCPeering` |
 | `compute.ectobase.dev` | `VirtualMachine`, `Container` |
 | `storage.ectobase.dev` | `Volume` |
 | `compiled.ectobase.dev` | `CompiledNIC`, `CompiledVM`, `CompiledContainer`, `CompiledVolumeAttachment` |

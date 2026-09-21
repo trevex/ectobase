@@ -72,7 +72,7 @@ rules:
   - net.ectobase.dev
   resources:
   - firewallpolicies
-  - lbpools
+  - ippools
   - loadbalancers
   - subnets
   - vpcpeerings
@@ -84,7 +84,17 @@ rules:
 - apiGroups:
   - net.ectobase.dev
   resources:
-  - lbpools/status
+  - ipallocations
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - watch
+- apiGroups:
+  - net.ectobase.dev
+  resources:
+  - ippools/status
   - loadbalancers/status
   - networkinterfaces/status
   - subnets/status

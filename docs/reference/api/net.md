@@ -13,7 +13,8 @@ the aggregated apiserver and consumed as CRDs by the mesh control plane.
 ### Resource Types
 - [FirewallPolicy](#firewallpolicy)
 - [FloatingIP](#floatingip)
-- [LBPool](#lbpool)
+- [IPAllocation](#ipallocation)
+- [IPPool](#ippool)
 - [LoadBalancer](#loadbalancer)
 - [NATGateway](#natgateway)
 - [NetworkInterface](#networkinterface)
@@ -174,6 +175,132 @@ _Appears in:_
 
 
 
+#### IPAllocation
+
+
+
+IPAllocation is one address held out of one IPPool. It is created by the consumer's
+allocator and reclaimed by Kubernetes garbage collection when its ownerReference's
+consumer is deleted.
+
+
+
+_Appears in:_
+- [IPAllocationList](#ipallocationlist)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `apiVersion` _string_ | `net.ectobase.dev/v1alpha1` | | |
+| `kind` _string_ | `IPAllocation` | | |
+| `metadata` _[ObjectMeta](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30/#objectmeta-v1-meta)_ | Refer to Kubernetes API documentation for fields of `metadata`. |  |  |
+| `spec` _[IPAllocationSpec](#ipallocationspec)_ |  |  |  |
+
+
+
+
+#### IPAllocationSpec
+
+
+
+IPAllocationSpec is the desired state of an IPAllocation.
+
+There is no status: the object's EXISTENCE is the state. Its name is derived from
+(pool, address) and object names are unique within a namespace, which makes Create a
+compare-and-swap — two allocators racing for one address cannot both succeed, without
+either of them assuming it is the only writer.
+
+
+
+_Appears in:_
+- [IPAllocation](#ipallocation)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `poolRef` _[LocalObjectReference](#localobjectreference)_ | PoolRef is the IPPool this address came from. |  |  |
+| `address` _string_ | Address is the allocated address, canonical form. |  |  |
+| `consumerRef` _[TypedLocalObjectReference](#typedlocalobjectreference)_ | ConsumerRef records who asked for it, for humans and diagnostics. The authoritative<br />lifetime link is the ownerReference, not this field. |  |  |
+
+
+#### IPPool
+
+
+
+IPPool is a fleet-scoped, typed range of IPv4/IPv6 prefixes that any consumer
+(LoadBalancer, NATGateway, ...) allocates addresses from.
+
+
+
+_Appears in:_
+- [IPPoolList](#ippoollist)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `apiVersion` _string_ | `net.ectobase.dev/v1alpha1` | | |
+| `kind` _string_ | `IPPool` | | |
+| `metadata` _[ObjectMeta](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30/#objectmeta-v1-meta)_ | Refer to Kubernetes API documentation for fields of `metadata`. |  |  |
+| `spec` _[IPPoolSpec](#ippoolspec)_ |  |  |  |
+| `status` _[IPPoolStatus](#ippoolstatus)_ |  |  |  |
+
+
+
+
+#### IPPoolSpec
+
+
+
+IPPoolSpec is the desired state of an IPPool (a fleet-scoped address range).
+
+
+
+_Appears in:_
+- [IPPool](#ippool)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `type` _[IPPoolType](#ippooltype)_ | Type is what the addresses in this pool are for. |  | Enum: [public internal] <br /> |
+| `v4Prefix` _string_ | V4Prefix optionally pins the IPv4 CIDR for this pool. |  | Optional: \{\} <br /> |
+| `v6Prefix` _string_ | V6Prefix optionally pins the IPv6 CIDR for this pool. |  | Optional: \{\} <br /> |
+| `reservedIPs` _string array_ | ReservedIPs are addresses held back from allocation within this pool. |  | Optional: \{\} <br /> |
+
+
+#### IPPoolStatus
+
+
+
+IPPoolStatus is the observed state of an IPPool.
+
+
+
+_Appears in:_
+- [IPPool](#ippool)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `state` _string_ | State is the current lifecycle state: Pending, Ready, Invalid or Conflict. |  | Optional: \{\} <br /> |
+| `total` _integer_ | Total is the number of allocatable addresses across this pool's prefixes. |  | Optional: \{\} <br /> |
+| `allocated` _integer_ | Allocated is how many IPAllocations currently name this pool. A convenience for<br />operators, derived on each sync — never the source of truth for what is free. |  | Optional: \{\} <br /> |
+
+
+#### IPPoolType
+
+_Underlying type:_ _string_
+
+IPPoolType is what the addresses in a pool are for. A consumer states the type it needs and is
+refused a pool of any other type, so an internal range can never be handed out as a public NAT
+or LB address.
+
+_Validation:_
+- Enum: [public internal]
+
+_Appears in:_
+- [IPPoolSpec](#ippoolspec)
+
+| Field | Description |
+| --- | --- |
+| `public` | IPPoolTypePublic is an internet-routable range: NAT gateway addresses, LB addresses.<br /> |
+| `internal` | IPPoolTypeInternal is a range that never leaves the fabric (e.g. internal LBs).<br /> |
+
+
 #### InterfaceQoS
 
 
@@ -190,63 +317,6 @@ _Appears in:_
 | --- | --- | --- | --- |
 | `egress` _[EgressQoS](#egressqos)_ | Egress shapes outbound (VM->out) throughput. |  | Optional: \{\} <br /> |
 | `ingress` _[RateLimit](#ratelimit)_ | Ingress polices inbound (out->VM) throughput. |  | Optional: \{\} <br /> |
-
-
-#### LBPool
-
-
-
-LBPool is a fleet-scoped range of IPv4/IPv6 LB address prefixes.
-
-
-
-_Appears in:_
-- [LBPoolList](#lbpoollist)
-
-| Field | Description | Default | Validation |
-| --- | --- | --- | --- |
-| `apiVersion` _string_ | `net.ectobase.dev/v1alpha1` | | |
-| `kind` _string_ | `LBPool` | | |
-| `metadata` _[ObjectMeta](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30/#objectmeta-v1-meta)_ | Refer to Kubernetes API documentation for fields of `metadata`. |  |  |
-| `spec` _[LBPoolSpec](#lbpoolspec)_ |  |  |  |
-| `status` _[LBPoolStatus](#lbpoolstatus)_ |  |  |  |
-
-
-
-
-#### LBPoolSpec
-
-
-
-LBPoolSpec is the desired state of an LBPool (a fleet-scoped LB address prefix range).
-
-
-
-_Appears in:_
-- [LBPool](#lbpool)
-
-| Field | Description | Default | Validation |
-| --- | --- | --- | --- |
-| `v4Prefix` _string_ | V4Prefix optionally pins the IPv4 CIDR for this LB address pool. |  | Optional: \{\} <br /> |
-| `v6Prefix` _string_ | V6Prefix optionally pins the IPv6 CIDR for this LB address pool. |  | Optional: \{\} <br /> |
-| `reservedIPs` _string array_ | ReservedIPs are addresses held back from allocation within this pool. |  | Optional: \{\} <br /> |
-
-
-#### LBPoolStatus
-
-
-
-LBPoolStatus is the observed state of an LBPool.
-
-
-
-_Appears in:_
-- [LBPool](#lbpool)
-
-| Field | Description | Default | Validation |
-| --- | --- | --- | --- |
-| `state` _string_ | State is the current lifecycle state (e.g. Pending, Ready). |  | Optional: \{\} <br /> |
-| `total` _integer_ | Total is the total number of allocatable LB address addresses. |  | Optional: \{\} <br /> |
 
 
 #### LoadBalancer
@@ -309,7 +379,7 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `ip` _string_ | IP is the requested load-balancer address. Empty => allocate from PoolRef; set =><br />validate membership in the pool + reserve (bring-your-own). |  |  |
-| `poolRef` _[LocalObjectReference](#localobjectreference)_ | PoolRef selects the LBPool to allocate the IP from. |  | Optional: \{\} <br /> |
+| `poolRef` _[LocalObjectReference](#localobjectreference)_ | PoolRef selects the IPPool to allocate the IP from. The pool must be of type "public":<br />a load-balancer address is reached from outside the fabric, so an internal range would<br />advertise an address nothing can route to. |  | Optional: \{\} <br /> |
 | `ports` _[LoadBalancerPort](#loadbalancerport) array_ | Ports are the LB service (port, proto) tuples. |  |  |
 | `targetSelector` _[LabelSelector](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30/#labelselector-v1-meta)_ | TargetSelector selects backend NetworkInterfaces by label. Mutually exclusive with TargetRefs. |  | Optional: \{\} <br /> |
 | `targetRefs` _[LocalObjectReference](#localobjectreference) array_ | TargetRefs names backend NetworkInterfaces explicitly. Mutually exclusive with TargetSelector. |  | Optional: \{\} <br /> |
@@ -342,6 +412,7 @@ LocalObjectReference references an object by name within the same namespace.
 
 
 _Appears in:_
+- [IPAllocationSpec](#ipallocationspec)
 - [LoadBalancerSpec](#loadbalancerspec)
 - [NATGatewaySpec](#natgatewayspec)
 - [NetworkInterfaceSpec](#networkinterfacespec)
@@ -609,6 +680,24 @@ _Appears in:_
 | `state` _string_ | State is the current lifecycle state (e.g. Pending, Ready). |  | Optional: \{\} <br /> |
 | `v4Total` _integer_ | V4Total is the total number of allocatable IPv4 addresses. |  | Optional: \{\} <br /> |
 | `v6Total` _integer_ | V6Total is the total number of allocatable IPv6 addresses. |  | Optional: \{\} <br /> |
+
+
+#### TypedLocalObjectReference
+
+
+
+TypedLocalObjectReference references an object by kind and name within the same namespace.
+Kind alone (no group) because every consumer of one lives in net.ectobase.dev.
+
+
+
+_Appears in:_
+- [IPAllocationSpec](#ipallocationspec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `kind` _string_ | Kind is the kind of the referenced object. |  |  |
+| `name` _string_ | Name is the name of the referenced object. |  |  |
 
 
 #### VPC
