@@ -12,6 +12,17 @@ import (
 // used-set query has to go through a label.
 const PoolLabel = "net.ectobase.dev/pool"
 
+// ConsumerLabel carries the UID of the consumer holding an IPAllocation, so one consumer's
+// claims are a single label-selector list. The pool label answers "what is taken in this pool";
+// this one answers "what do I hold", which is how a consumer releases a claim it has superseded
+// — including one left in a DIFFERENT pool after spec.poolRef was repointed, where a
+// pool-scoped query would never find it. UID rather than name, because a deleted-and-recreated
+// consumer of the same name is a different consumer.
+//
+// It is an index, never an authority: the controller ownerReference decides what a consumer
+// actually owns.
+const ConsumerLabel = "net.ectobase.dev/consumer-uid"
+
 // IPAllocationSpec is the desired state of an IPAllocation.
 //
 // There is no status: the object's EXISTENCE is the state. Its name is derived from

@@ -377,3 +377,53 @@ func TestLBStatesFollowTheirPool(t *testing.T) {
 		}
 	}
 }
+
+// Repointing spec.poolRef must hand the old pool's address back too. The claim lives in a pool
+// this reconcile never looks at, which is why release selects on the consumer and not the pool.
+func TestLBPoolSwapReleasesTheOldPoolsAddress(t *testing.T) {
+	scheme := lbScheme(t)
+	a := readyPool("a", "198.51.100.0/24")
+	b := readyPool("b", "203.0.113.0/24")
+	l := lb("lb", "a", "")
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(a, b, l).
+		WithStatusSubresource(&netv1.LoadBalancer{}).Build()
+	r := &LoadBalancerIPReconciler{Client: cl, APIReader: cl}
+	ctx := context.Background()
+	if err := r.Sync(ctx, l); err != nil {
+		t.Fatal(err)
+	}
+
+	var got netv1.LoadBalancer
+	if err := cl.Get(ctx, keyOf(l), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Status.AllocatedIP != "198.51.100.1" {
+		t.Fatalf("precondition: want 198.51.100.1, got %q", got.Status.AllocatedIP)
+	}
+	got.Spec.PoolRef.Name = "b"
+	got.Generation = 2
+	if err := cl.Update(ctx, &got); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Sync(ctx, &got); err != nil {
+		t.Fatal(err)
+	}
+
+	var list netv1.IPAllocationList
+	if err := cl.List(ctx, &list, client.InNamespace("default")); err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Items) != 1 {
+		var names []string
+		for i := range list.Items {
+			names = append(names, list.Items[i].Name)
+		}
+		t.Fatalf("after pool swap: %d allocations %v, want only the one in pool b", len(list.Items), names)
+	}
+	if list.Items[0].Spec.PoolRef.Name != "b" || list.Items[0].Spec.Address != "203.0.113.1" {
+		t.Fatalf("surviving allocation = %+v want pool b / 203.0.113.1", list.Items[0].Spec)
+	}
+	if list.Items[0].Labels[netv1.ConsumerLabel] != "uid-lb" {
+		t.Fatalf("consumer index label = %q want uid-lb", list.Items[0].Labels[netv1.ConsumerLabel])
+	}
+}

@@ -125,7 +125,7 @@ func claimAddress(ctx context.Context, c client.Client, r client.Reader,
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      name,
 				Namespace: pool.Namespace,
-				Labels:    map[string]string{netv1.PoolLabel: pool.Name},
+				Labels:    allocationLabels(pool.Name, consumer),
 			},
 			Spec: netv1.IPAllocationSpec{
 				PoolRef:     netv1.LocalObjectReference{Name: pool.Name},
@@ -169,27 +169,52 @@ func claimAddress(ctx context.Context, c client.Client, r client.Reader,
 	return netip.Addr{}, false, nil
 }
 
-// releaseClaimsExcept deletes the allocations this consumer holds in pool other than keep.
-// A single-address consumer that gets repointed (spec.ip edited) would otherwise hold its old
-// claim forever and leak the address — the status-scan allocator this replaces freed it
-// implicitly, so skipping this would be a regression, not a simplification.
+// allocationLabels indexes an allocation by its pool (the used-set query) and by its consumer
+// (the release query). Aggregated APIs offer no field selectors for arbitrary fields, so both
+// lookups have to go through labels.
+func allocationLabels(pool string, consumer client.Object) map[string]string {
+	l := map[string]string{netv1.PoolLabel: pool}
+	// Only outside a real apiserver is the UID empty; an empty label value would match every
+	// other unidentified consumer, so leave the index off rather than make it wrong.
+	if uid := consumer.GetUID(); uid != "" {
+		l[netv1.ConsumerLabel] = string(uid)
+	}
+	return l
+}
+
+// releaseClaimsExcept deletes every allocation this consumer holds except keep (in pool).
+// A single-address consumer that gets repointed — spec.ip edited, or spec.poolRef moved to
+// another pool — would otherwise hold its old claim until it is itself deleted, and the
+// status-scan allocator this replaces freed that address immediately. Skipping this would be a
+// regression, not a simplification.
+//
+// The query selects on the CONSUMER, not the pool, precisely so it also finds the claim left
+// behind in the pool the consumer just moved away from. It is O(this consumer's claims), not
+// O(the namespace) — which matters, because a fully-allocated pool is one object per address.
 //
 // It deletes ONLY allocations whose controller ref is this consumer. It must never delete one
 // whose owner merely looks gone: that is a second allocator racing the garbage collector.
 func releaseClaimsExcept(ctx context.Context, c client.Client, r client.Reader,
 	pool *netv1.IPPool, consumer client.Object, consumerKind string, keep netip.Addr) error {
+	sel := client.MatchingLabels{netv1.ConsumerLabel: string(consumer.GetUID())}
+	if consumer.GetUID() == "" {
+		// No UID to index on. Fall back to this pool's claims; the ownerRef check below is
+		// what actually decides either way, this only narrows the list.
+		sel = client.MatchingLabels{netv1.PoolLabel: pool.Name}
+	}
 	var list netv1.IPAllocationList
-	if err := r.List(ctx, &list, client.InNamespace(pool.Namespace),
-		client.MatchingLabels{netv1.PoolLabel: pool.Name}); err != nil {
-		return fmt.Errorf("list ipallocations for pool %s: %w", pool.Name, err)
+	if err := r.List(ctx, &list, client.InNamespace(pool.Namespace), sel); err != nil {
+		return fmt.Errorf("list ipallocations held by %s/%s: %w", consumerKind, consumer.GetName(), err)
 	}
 	for i := range list.Items {
 		o := &list.Items[i]
-		if o.Spec.PoolRef.Name != pool.Name || !ownedBy(o, consumer, consumerKind) {
+		if !ownedBy(o, consumer, consumerKind) {
 			continue
 		}
-		if a, err := netip.ParseAddr(o.Spec.Address); err == nil && a.Unmap() == keep {
-			continue
+		if o.Spec.PoolRef.Name == pool.Name {
+			if a, err := netip.ParseAddr(o.Spec.Address); err == nil && a.Unmap() == keep {
+				continue
+			}
 		}
 		if err := c.Delete(ctx, o); err != nil && !apierrors.IsNotFound(err) {
 			return fmt.Errorf("release ipallocation %s: %w", o.Name, err)
