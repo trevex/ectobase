@@ -3386,7 +3386,7 @@ func schema_ectobase_api_net_v1alpha1_NATGatewaySpec(ref common.ReferenceCallbac
 					},
 					"publicIPs": {
 						SchemaProps: spec.SchemaProps{
-							Description: "PublicIPs is the pool of public IPv4s SNAT sources are mapped onto.",
+							Description: "PublicIPs PINS addresses within PoolRef — the NAT analogue of LoadBalancer.spec.ip. It is no longer the pool itself: with a PoolRef set, the gateway's address set is the IPAllocations it holds, and these entries are the ones it is required to hold. A pin that is outside the pool's prefixes, reserved, or already claimed by another consumer leaves the gateway Invalid — the intent is wrong, not merely unsatisfiable yet.\n\nWith NO PoolRef the old meaning stands: the entries are literal addresses the gateway SNATs onto, allocated nowhere and owned by nothing. That path exists so a gateway written before pools kept working; new gateways should set PoolRef.",
 							Type:        []string{"array"},
 							Items: &spec.SchemaOrArray{
 								Schema: &spec.Schema{
@@ -3411,6 +3411,13 @@ func schema_ectobase_api_net_v1alpha1_NATGatewaySpec(ref common.ReferenceCallbac
 							Description: "EdgeUnderlay is DEPRECATED and IGNORED. The edge fleet self-advertises via EDGE_UNDERLAY: egress (0.0.0.0/0 and 64:ff9b::/96 for NAT64) is originated by any agent started with --edge-loopback, nexthop'd at that edge's own anycast underlay. Retained only to avoid a CRD breaking change; set nothing here.",
 							Type:        []string{"string"},
 							Format:      "",
+						},
+					},
+					"poolRef": {
+						SchemaProps: spec.SchemaProps{
+							Description: "PoolRef selects the IPPool to draw public addresses from. The pool must be of type \"public\": a NAT address is reached from the WAN, so an internal range would SNAT onto an address the internet cannot route back to.\n\nAddresses are claimed on demand — one more each time every port block on the addresses the gateway already holds is taken — and released only when this gateway is deleted. They are never released while it lives: an address whose blocks a live source still uses cannot be given up without re-NATing that source's traffic.",
+							Default:     map[string]interface{}{},
+							Ref:         ref(netv1alpha1.LocalObjectReference{}.OpenAPIModelName()),
 						},
 					},
 				},

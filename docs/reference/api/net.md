@@ -481,9 +481,10 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `vpcRef` _[LocalObjectReference](#localobjectreference)_ | VPCRef selects the VPC whose interfaces egress through this gateway. |  |  |
-| `publicIPs` _string array_ | PublicIPs is the pool of public IPv4s SNAT sources are mapped onto. |  |  |
+| `publicIPs` _string array_ | PublicIPs PINS addresses within PoolRef — the NAT analogue of LoadBalancer.spec.ip.<br />It is no longer the pool itself: with a PoolRef set, the gateway's address set is the<br />IPAllocations it holds, and these entries are the ones it is required to hold. A pin<br />that is outside the pool's prefixes, reserved, or already claimed by another consumer<br />leaves the gateway Invalid — the intent is wrong, not merely unsatisfiable yet.<br />With NO PoolRef the old meaning stands: the entries are literal addresses the gateway<br />SNATs onto, allocated nowhere and owned by nothing. That path exists so a gateway<br />written before pools kept working; new gateways should set PoolRef. |  | Optional: \{\} <br /> |
 | `portsPerSource` _integer_ | PortsPerSource is the deterministic port-block size handed to each source<br />(RFC 7422 / GCP-static style). Default 1024. |  | Optional: \{\} <br /> |
 | `edgeUnderlay` _string_ | EdgeUnderlay is DEPRECATED and IGNORED. The edge fleet self-advertises via<br />EDGE_UNDERLAY: egress (0.0.0.0/0 and 64:ff9b::/96 for NAT64) is originated by<br />any agent started with --edge-loopback, nexthop'd at that edge's own anycast<br />underlay. Retained only to avoid a CRD breaking change; set nothing here. |  | Optional: \{\} <br /> |
+| `poolRef` _[LocalObjectReference](#localobjectreference)_ | PoolRef selects the IPPool to draw public addresses from. The pool must be of type<br />"public": a NAT address is reached from the WAN, so an internal range would SNAT onto<br />an address the internet cannot route back to.<br />Addresses are claimed on demand — one more each time every port block on the addresses<br />the gateway already holds is taken — and released only when this gateway is deleted.<br />They are never released while it lives: an address whose blocks a live source still<br />uses cannot be given up without re-NATing that source's traffic. |  | Optional: \{\} <br /> |
 
 
 #### NATGatewayStatus

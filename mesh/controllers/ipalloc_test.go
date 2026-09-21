@@ -337,3 +337,125 @@ func TestClaimSetsControllerOwnerRefAndPoolLabel(t *testing.T) {
 		t.Fatalf("ownerRef does not block owner deletion: %+v", ref)
 	}
 }
+
+// A consumer with several claims gets them all back, in a stable ascending order. The order is
+// part of the contract, not a nicety: the port-block allocator maps a flat block index to an
+// address BY POSITION in the list it is built over, so an unstable order would hand a NEW source
+// a block on a different address from one reconcile to the next.
+func TestConsumerAddressesAreStablySorted(t *testing.T) {
+	scheme := lbScheme(t)
+	pool := &netv1.IPPool{
+		ObjectMeta: metav1.ObjectMeta{Name: "pub", Namespace: "default"},
+		Spec:       netv1.IPPoolSpec{Type: netv1.IPPoolTypePublic, V4Prefix: sp("198.51.100.0/24")},
+	}
+	pool.Status.State = "Ready"
+	gw := &netv1.NATGateway{ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default", UID: "uid-gw"}}
+	other := &netv1.NATGateway{ObjectMeta: metav1.ObjectMeta{Name: "gw2", Namespace: "default", UID: "uid-gw2"}}
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pool, gw, other).Build()
+	ctx := context.Background()
+
+	// Claimed out of order on purpose: the answer must not depend on claim order.
+	for _, s := range []string{"198.51.100.30", "198.51.100.7", "198.51.100.200"} {
+		a := netip.MustParseAddr(s)
+		if _, ok, err := claimAddress(ctx, cl, cl, pool, gw, "NATGateway", &a, nil); err != nil || !ok {
+			t.Fatalf("claim %s = %v,%v", s, ok, err)
+		}
+	}
+	// Somebody else's address in the same pool must not leak into our list.
+	oa := netip.MustParseAddr("198.51.100.9")
+	if _, ok, err := claimAddress(ctx, cl, cl, pool, other, "NATGateway", &oa, nil); err != nil || !ok {
+		t.Fatalf("other claim = %v,%v", ok, err)
+	}
+
+	got, err := consumerAddresses(ctx, cl, pool, gw, "NATGateway")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []netip.Addr{
+		netip.MustParseAddr("198.51.100.7"),
+		netip.MustParseAddr("198.51.100.30"),
+		netip.MustParseAddr("198.51.100.200"),
+	}
+	if len(got) != len(want) {
+		t.Fatalf("consumerAddresses = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("consumerAddresses = %v, want %v (ascending, and only this consumer's)", got, want)
+		}
+	}
+}
+
+// Growing must return an address the consumer does NOT already hold. claimAddress is sticky —
+// with no pin it prefers an address the consumer already holds — so calling it in a loop returns
+// the same address forever and a NAT gateway out of port blocks would never actually grow.
+func TestClaimAnotherAddressReturnsAFreshOne(t *testing.T) {
+	scheme := lbScheme(t)
+	pool := &netv1.IPPool{
+		ObjectMeta: metav1.ObjectMeta{Name: "pub", Namespace: "default"},
+		Spec:       netv1.IPPoolSpec{Type: netv1.IPPoolTypePublic, V4Prefix: sp("198.51.100.0/24")},
+	}
+	pool.Status.State = "Ready"
+	gw := &netv1.NATGateway{ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default", UID: "uid-gw"}}
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pool, gw).Build()
+	ctx := context.Background()
+
+	first, ok, err := claimAddress(ctx, cl, cl, pool, gw, "NATGateway", nil, nil)
+	if err != nil || !ok {
+		t.Fatalf("first claim = %v,%v,%v", first, ok, err)
+	}
+	second, ok, err := claimAnotherAddress(ctx, cl, cl, pool, gw, "NATGateway")
+	if err != nil || !ok {
+		t.Fatalf("grow = %v,%v,%v", second, ok, err)
+	}
+	if second == first {
+		t.Fatalf("claimAnotherAddress returned %v, the address the consumer already holds: "+
+			"a gateway out of port blocks would never grow", second)
+	}
+	third, ok, err := claimAnotherAddress(ctx, cl, cl, pool, gw, "NATGateway")
+	if err != nil || !ok {
+		t.Fatalf("second grow = %v,%v,%v", third, ok, err)
+	}
+	if third == first || third == second {
+		t.Fatalf("second grow returned %v, already held (%v, %v)", third, first, second)
+	}
+
+	addrs, err := consumerAddresses(ctx, cl, pool, gw, "NATGateway")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(addrs) != 3 {
+		t.Fatalf("consumer holds %v, want 3 distinct addresses", addrs)
+	}
+}
+
+// When the pool has nothing left, growing reports exhaustion (ok=false) rather than an error:
+// the consumer parks in Exhausted and the delete-only watch on IPAllocation retries it.
+func TestClaimAnotherAddressReportsPoolExhaustion(t *testing.T) {
+	scheme := lbScheme(t)
+	pool := racePool() // exactly one allocatable address: 198.51.100.1
+	gw := &netv1.NATGateway{ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default", UID: "uid-gw"}}
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pool, gw).Build()
+	ctx := context.Background()
+
+	first, ok, err := claimAddress(ctx, cl, cl, pool, gw, "NATGateway", nil, nil)
+	if err != nil || !ok || first.String() != "198.51.100.1" {
+		t.Fatalf("first claim = %v,%v,%v", first, ok, err)
+	}
+	got, ok, err := claimAnotherAddress(ctx, cl, cl, pool, gw, "NATGateway")
+	if err != nil {
+		t.Fatalf("grow on an empty pool errored instead of reporting exhaustion: %v", err)
+	}
+	if ok {
+		t.Fatalf("grow on an empty pool returned %v, want ok=false", got)
+	}
+	// And it must not have taken the address it already holds away from itself, nor created
+	// a second allocation.
+	var list netv1.IPAllocationList
+	if err := cl.List(ctx, &list, client.InNamespace("default")); err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Items) != 1 || list.Items[0].Spec.Address != "198.51.100.1" {
+		t.Fatalf("after a failed grow: %d allocations %v, want the one existing claim", len(list.Items), list.Items)
+	}
+}

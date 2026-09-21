@@ -27,9 +27,15 @@ const (
 	natIntentVNI = 206
 	// natIntentPublicIP is inside fabric.PublicV4 (192.0.2.0/24), which both edges advertise as
 	// anycast and the WAN routes back — a NAT IP outside it could never receive a reply. Clear of
-	// 192.0.2.1 (lb_test) and 192.0.2.7 (lbintent).
+	// 192.0.2.1 (lb_test) and 192.0.2.7 (lbintent). It is a PIN inside natIntentPool, not a
+	// literal: the gateway holds it as an IPAllocation.
 	natIntentPublicIP = "192.0.2.40"
-	natIntentNIC      = "nati-nic"
+	// natIntentPool is the public IPPool the gateway draws from, and natIntentAllocation is the
+	// deterministic name its claim on natIntentPublicIP lands at (mesh/controllers/ipalloc.go:
+	// <pool>-<address with dots as dashes>).
+	natIntentPool       = "nati-pool"
+	natIntentAllocation = natIntentPool + "-192-0-2-40"
+	natIntentNIC        = "nati-nic"
 	// 10.0.7.0/24 is this test's own overlay subnet. Overlay addresses are VNI-scoped so an overlap
 	// would not actually break the datapath, but every other live test picks a distinct /24 and
 	// 10.0.6.0/24 is vm_overlay_test's (down to the same .10 host), which would make any
@@ -100,7 +106,7 @@ func TestNatFromIntent(t *testing.T) {
 	patchNatIntentVPCReady(t, ctx, cfg)
 	t.Cleanup(func() {
 		for _, kind := range []string{
-			"natgateway.net.ectobase.dev/nati-gw",
+			"natgateway.net.ectobase.dev/nati-gw", "ippool.net.ectobase.dev/" + natIntentPool,
 			"containers.compute.ectobase.dev/ctr-" + natIntentNIC,
 			"networkinterface.net.ectobase.dev/" + natIntentNIC,
 			"subnet.net.ectobase.dev/nati-subnet", "vpc.net.ectobase.dev/nati-vpc",
@@ -131,6 +137,18 @@ func TestNatFromIntent(t *testing.T) {
 		pod = p
 		return nil
 	})
+
+	// 3a. The public address is genuinely ALLOCATED from the pool, not a literal the gateway
+	//     copied out of its own spec. Without this the rest of the test would pass just as well
+	//     if spec.publicIPs were still the pre-pool literal list — which is the whole increment.
+	//     The claim is the IPAllocation object at its deterministic (pool, address) name; its
+	//     controller ownerReference is what Kubernetes garbage-collects it by when the gateway
+	//     goes, and the pool label is what every allocator's used-set query selects on.
+	eventually(t, 2*time.Minute, 3*time.Second, func() error {
+		return natIntentAddressIsAllocated(ctx, cfg)
+	})
+	t.Logf("public address %s is held by IPAllocation %s, owned by NATGateway/nati-gw out of pool %s",
+		natIntentPublicIP, natIntentAllocation, natIntentPool)
 
 	// 3. Central allocation landed. Everything downstream is gated on this: no allocation means no
 	//    CompiledNIC.spec.nat, which means no local SNAT and no NatBlock on the bus.
@@ -215,12 +233,15 @@ func TestNatFromIntent(t *testing.T) {
 		natIntentPortMin, natIntentPortMaxExcl, ownerVTEP)
 }
 
-// natIntentFixture renders the whole intent: VPC, Subnet, NATGateway and the guest NIC + Container.
+// natIntentFixture renders the whole intent: VPC, Subnet, IPPool, NATGateway and the guest NIC +
+// Container.
 //
-// There is no address-pool object: NATGateway.spec.publicIPs is a literal list today. The LB
-// allocator already draws from a generic IPPool; teaching NAT to do the same is separate work.
-// The port block IS centrally allocated — mesh/allocator/portblock.go hands each source IP a
-// disjoint block.
+// The gateway's public address comes from the IPPool, not from a literal list: spec.publicIPs is
+// a PIN inside spec.poolRef (the NAT analogue of LoadBalancer.spec.ip), so the address stays
+// 192.0.2.40 and every downstream assertion is exact — while the address itself is genuinely
+// allocated, as the IPAllocation assertion in stage 3 proves. The port block is centrally
+// allocated on top of it (mesh/allocator/portblock.go hands each source IP a disjoint block), and
+// a gateway that runs out of blocks claims one more address from this same pool.
 func natIntentFixture(node, cluster string) string {
 	return fmt.Sprintf(`apiVersion: net.ectobase.dev/v1alpha1
 kind: VPC
@@ -232,12 +253,23 @@ kind: Subnet
 metadata: {name: nati-subnet}
 spec: {vpcRef: {name: nati-vpc}, v4Prefix: 10.0.7.0/24}
 ---
+# The edge-owned public v4 prefix (fabric.PublicV4): both edges advertise it as our ASN and the WAN
+# routes it back via either, so any NAT address inside it is anycast across the edge fleet.
+# The upper /27 of the edge-owned prefix. lbintent_test holds the lower /27 in this same
+# namespace, and IPPoolReconciler parks the later of two OVERLAPPING pools at Conflict —
+# which would leave this gateway stuck at Pending. .40 below is inside this /27.
+apiVersion: net.ectobase.dev/v1alpha1
+kind: IPPool
+metadata: {name: %[9]s}
+spec: {type: public, v4Prefix: 192.0.2.32/27}
+---
 # Egress NAT for the whole VPC: every NIC in nati-vpc gets a deterministic (public IP, port block).
 apiVersion: net.ectobase.dev/v1alpha1
 kind: NATGateway
 metadata: {name: nati-gw}
 spec:
   vpcRef: {name: nati-vpc}
+  poolRef: {name: %[9]s}
   publicIPs: [%[2]q]
   portsPerSource: %[3]d
 ---
@@ -259,7 +291,37 @@ spec:
   image: busybox:1.36
   command: ["sh", "-c", "exec sleep 3600"]
 `, natIntentVNI, natIntentPublicIP, natIntentPorts, natIntentNIC,
-		natIntentGuestIP, natIntentMAC, node, cluster)
+		natIntentGuestIP, natIntentMAC, node, cluster, natIntentPool)
+}
+
+// natIntentAddressIsAllocated checks the gateway's claim on natIntentPublicIP: an IPAllocation at
+// the deterministic name, naming the pool and the address, labelled with the pool, and carrying a
+// CONTROLLER ownerReference to the NATGateway — the last being what reclaims it on deletion.
+//
+// One jsonpath, five fields, because a partial claim is the interesting failure: an allocation
+// with no ownerRef leaks the address forever, and one with no pool label is invisible to the very
+// used-set query the next allocator runs.
+func natIntentAddressIsAllocated(ctx context.Context, cfg *config.Config) error {
+	const jp = `{.spec.poolRef.name}|{.spec.address}|{.metadata.labels.net\.ectobase\.dev/pool}` +
+		`|{.metadata.ownerReferences[0].kind}|{.metadata.ownerReferences[0].name}` +
+		`|{.metadata.ownerReferences[0].controller}`
+	out, err := kubectl(ctx, cfg, "dispatch", "get", "ipallocations.net.ectobase.dev",
+		natIntentAllocation, "-o", "jsonpath="+jp)
+	if err != nil {
+		state, _ := kubectl(ctx, cfg, "dispatch", "get", "natgateways.net.ectobase.dev", "nati-gw",
+			"-o", "jsonpath={.status.state}")
+		pool, _ := kubectl(ctx, cfg, "dispatch", "get", "ippools.net.ectobase.dev", natIntentPool,
+			"-o", "jsonpath={.status.state}")
+		return fmt.Errorf("no IPAllocation %s (NATGateway state %q, IPPool state %q): %w",
+			natIntentAllocation, strings.TrimSpace(state), strings.TrimSpace(pool), err)
+	}
+	want := fmt.Sprintf("%s|%s|%s|NATGateway|nati-gw|true", natIntentPool, natIntentPublicIP, natIntentPool)
+	if got := strings.TrimSpace(out); got != want {
+		return fmt.Errorf("IPAllocation %s = %q, want %q "+
+			"(poolRef|address|pool label|owner kind|owner name|controller)",
+			natIntentAllocation, got, want)
+	}
+	return nil
 }
 
 func patchNatIntentVPCReady(t *testing.T, ctx context.Context, cfg *config.Config) {

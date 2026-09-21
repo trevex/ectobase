@@ -48,6 +48,7 @@ flowchart LR
         VPC[VPC]
         SUBNET[Subnet]
         POOL[IPPool]
+        NATGW[NATGateway]
     end
 
     ALLOC["IPAllocation<br/>(one per address — the claim)"]
@@ -68,7 +69,9 @@ flowchart LR
     VM & CT -->|owns placement| NIC
     SUBNET -->|allocate overlay IPs| NIC
     POOL -->|allocate LB address| LB
+    POOL -->|allocate public NAT addresses| NATGW
     LB -->|claims it, and owns it| ALLOC
+    NATGW -->|claims them, and owns them| ALLOC
     NIC & FW & LB & PEER & VPC --> CNIC
     VM --> CVM
     CT --> CCT

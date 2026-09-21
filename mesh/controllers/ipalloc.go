@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"slices"
 	"strings"
 
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
@@ -79,6 +80,48 @@ func allocationName(pool string, addr netip.Addr) (string, error) {
 func claimAddress(ctx context.Context, c client.Client, r client.Reader,
 	pool *netv1.IPPool, consumer client.Object, consumerKind string,
 	pinned *netip.Addr, preferred *netip.Addr) (netip.Addr, bool, error) {
+	return claim(ctx, c, r, pool, consumer, consumerKind, pinned, preferred, false)
+}
+
+// claimAnotherAddress claims an address the consumer does not already hold, for a consumer that
+// needs MORE than one: a NAT gateway whose port blocks ran out grows by one address.
+//
+// Unlike claimAddress it is deliberately NOT sticky. claimAddress prefers an address the consumer
+// already holds — which is exactly right for a single-address consumer and useless here, because
+// calling it in a loop hands back the same address forever. Folding the consumer's own addresses
+// into the used-set is what makes "another" mean another.
+//
+// ok=false means the pool has nothing free; the consumer parks and the delete-only watch on
+// IPAllocation retries it when an address frees up.
+func claimAnotherAddress(ctx context.Context, c client.Client, r client.Reader,
+	pool *netv1.IPPool, consumer client.Object, consumerKind string) (netip.Addr, bool, error) {
+	return claim(ctx, c, r, pool, consumer, consumerKind, nil, nil, true)
+}
+
+// consumerAddresses returns every address this consumer currently holds in pool, ascending.
+//
+// The order is part of the contract, not presentation: the port-block allocator maps a flat block
+// index to an address BY POSITION in the list it is built over (allocator.blockAt), so an
+// unstable order would move a new source's block between reconciles.
+func consumerAddresses(ctx context.Context, r client.Reader, pool *netv1.IPPool,
+	consumer client.Object, consumerKind string) ([]netip.Addr, error) {
+	_, mine, err := poolAllocations(ctx, r, pool, consumer, consumerKind)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]netip.Addr, 0, len(mine))
+	for a := range mine {
+		out = append(out, a)
+	}
+	slices.SortFunc(out, func(x, y netip.Addr) int { return x.Compare(y) })
+	return out, nil
+}
+
+// claim is the shared claim loop. grow=true suppresses every sticky path, so the consumer's own
+// addresses are just as taken as anybody else's.
+func claim(ctx context.Context, c client.Client, r client.Reader,
+	pool *netv1.IPPool, consumer client.Object, consumerKind string,
+	pinned *netip.Addr, preferred *netip.Addr, grow bool) (netip.Addr, bool, error) {
 	prefix, err := poolPrefixFor(pool, pinned)
 	if err != nil {
 		return netip.Addr{}, false, fmt.Errorf("%w: %s", errNotAllocatable, err)
@@ -103,7 +146,7 @@ func claimAddress(ctx context.Context, c client.Client, r client.Reader,
 				}
 			}
 			want = p
-		} else if a, ok := heldIn(mine, prefix, resv); ok {
+		} else if a, ok := heldIn(mine, prefix, resv); ok && !grow {
 			// The allocation this consumer already holds is the strongest sticky record
 			// there is — the consumer's own status is only a cache of it.
 			want = a
@@ -113,7 +156,7 @@ func claimAddress(ctx context.Context, c client.Client, r client.Reader,
 			return netip.Addr{}, false, nil // pool exhausted
 		}
 
-		if _, ours := mine[want]; ours {
+		if _, ours := mine[want]; ours && !grow {
 			return want, true, nil // already ours; nothing to create
 		}
 
@@ -158,6 +201,13 @@ func claimAddress(ctx context.Context, c client.Client, r client.Reader,
 			return netip.Addr{}, false, fmt.Errorf("get ipallocation %s: %w", name, err)
 		}
 		if ownedBy(&existing, consumer, consumerKind) {
+			if grow {
+				// It is ours, but it appeared after the used-set read — a concurrent
+				// reconcile of this same consumer. Returning it would hand the caller an
+				// address it may already be building its block layout over, so go round
+				// and pick one the fresh used-set says is genuinely free.
+				continue
+			}
 			return want, true, nil
 		}
 		if pinned != nil {
