@@ -15,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	crconfig "sigs.k8s.io/controller-runtime/pkg/config"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 )
@@ -176,4 +177,124 @@ func eventually(t *testing.T, timeout time.Duration, fn func() error) {
 		time.Sleep(200 * time.Millisecond)
 	}
 	t.Fatalf("condition not met within %s: %v", timeout, last)
+}
+
+// TestNATGatewayGrowsOverSuccessivePassesEnvtest proves the half of grow-on-demand a fake client
+// cannot: that a gateway needing MORE than one extra address actually gets there.
+//
+// Growth is bounded to one new address per pass on purpose, so a gateway short three addresses
+// converges only if each pass triggers the next. Nothing re-enqueues it explicitly — the status
+// write does, via the manager's own NATGateway watch. If that self-trigger ever stops working
+// this test times out at two allocations, which is exactly the production symptom: a gateway
+// stuck in Exhausted with free addresses sitting in the pool.
+func TestNATGatewayGrowsOverSuccessivePassesEnvtest(t *testing.T) {
+	if os.Getenv("KUBEBUILDER_ASSETS") == "" {
+		t.Skip("KUBEBUILDER_ASSETS unset; run inside `nix develop` for the envtest apiserver assets")
+	}
+
+	scheme := runtime.NewScheme()
+	if err := netv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	env := &envtest.Environment{
+		CRDDirectoryPaths: []string{
+			filepath.Join("..", "..", "charts", "ectobase-pool", "crd-bases"),
+			filepath.Join("..", "..", "test", "crds"),
+		},
+		ErrorIfCRDPathMissing: true,
+	}
+	cfg, err := env.Start()
+	if err != nil {
+		t.Fatalf("start envtest: %v", err)
+	}
+	defer func() { _ = env.Stop() }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	direct, err := client.New(cfg, client.Options{Scheme: scheme})
+	if err != nil {
+		t.Fatalf("direct client: %v", err)
+	}
+
+	// The pool and every NIC exist BEFORE the manager starts, and nothing writes one
+	// afterwards. That is what isolates the self-trigger: the NIC and IPPool watches can only
+	// fire during the initial cache sync, when there is no NATGateway for them to map to, so
+	// the reconciles that grow the address set can have come from nothing but the gateway's
+	// own status writes.
+	pool := &netv1.IPPool{}
+	pool.Name = "pub"
+	pool.Namespace = "default"
+	v4 := "198.51.100.0/24"
+	pool.Spec = netv1.IPPoolSpec{Type: netv1.IPPoolTypePublic, V4Prefix: &v4}
+	mustCreate(ctx, t, direct, pool)
+	// No IPPoolReconciler runs here, so Ready is set by hand — a real apiserver drops status
+	// on create, exactly like the NIC status above.
+	pool.Status.State = "Ready"
+	if err := direct.Status().Update(ctx, pool); err != nil {
+		t.Fatalf("mark pool Ready: %v", err)
+	}
+
+	for _, ip := range []string{"10.0.0.1", "10.0.0.2", "10.0.0.3"} {
+		mustCreateAllocatedNIC(ctx, t, direct, "nic-"+ip, "blue", ip)
+	}
+
+	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
+		Scheme:  scheme,
+		Metrics: metricsserver.Options{BindAddress: "0"},
+		// Controller names are unique per PROCESS (they name a metric), and the envtest
+		// above already registered "natgateway" in this same test binary.
+		Controller: crconfig.Controller{SkipNameValidation: ptr(true)},
+	})
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+	if err := (&NATGatewayReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
+		t.Fatalf("setup reconciler: %v", err)
+	}
+	mgrDone := make(chan error, 1)
+	go func() { mgrDone <- mgr.Start(ctx) }()
+	if !mgr.GetCache().WaitForCacheSync(ctx) {
+		t.Fatal("manager cache did not sync")
+	}
+
+	gw := &netv1.NATGateway{}
+	gw.Name = "gw"
+	gw.Namespace = "default"
+	gw.Spec.VPCRef = netv1.LocalObjectReference{Name: "blue"}
+	gw.Spec.PoolRef = netv1.LocalObjectReference{Name: "pub"}
+	// 64512 usable ports per address / 64512 == exactly one source per address, so three
+	// sources need three addresses and therefore three passes.
+	gw.Spec.PortsPerSource = ptr(int32(64512))
+	mustCreate(ctx, t, direct, gw)
+
+	eventually(t, 30*time.Second, func() error {
+		var got netv1.NATGateway
+		if err := direct.Get(ctx, client.ObjectKey{Namespace: "default", Name: "gw"}, &got); err != nil {
+			return err
+		}
+		var allocs netv1.IPAllocationList
+		if err := direct.List(ctx, &allocs, client.InNamespace("default")); err != nil {
+			return err
+		}
+		if got.Status.State != "Ready" || len(got.Status.Allocations) != 3 || len(allocs.Items) != 3 {
+			return fmt.Errorf("state=%q blocks=%d ipallocations=%d, want Ready/3/3",
+				got.Status.State, len(got.Status.Allocations), len(allocs.Items))
+		}
+		// One source per address, and every address genuinely distinct.
+		ips := map[string]bool{}
+		for _, a := range got.Status.Allocations {
+			if ips[a.PublicIP] {
+				return fmt.Errorf("two sources share %s: %+v", a.PublicIP, got.Status.Allocations)
+			}
+			ips[a.PublicIP] = true
+		}
+		return nil
+	})
+
+	cancel()
+	select {
+	case <-mgrDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("manager did not shut down")
+	}
 }
