@@ -47,7 +47,10 @@ func TestDNS64Synthesis(t *testing.T) {
 	eventually(t, 90*time.Second, 5*time.Second, func() error {
 		// +short prints one address per line; the forwarder reaches its upstream
 		// (8.8.8.8 via its own NAT64) so first-query latency can spike — retry.
-		out, err := nodeNetnsExec(ctx, container,
+		// nodeNetnsResolverExec, not nodeNetnsExec: dig reads the HOST's /etc/resolv.conf even
+		// inside the node's netns, and a scoped link-local nameserver there (an IPv6 RA hands
+		// one out on some networks) makes it abort before querying anything. See the helper.
+		out, err := nodeNetnsResolverExec(ctx, container,
 			"dig", "@"+resolver, "AAAA", "ipv4only.arpa", "+short", "+time=3", "+tries=1")
 		if err != nil {
 			return fmt.Errorf("dig @%s ipv4only.arpa AAAA from %s: %w\n%s", resolver, container, err, out)
