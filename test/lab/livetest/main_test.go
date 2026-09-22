@@ -105,6 +105,40 @@ func nodeNetnsExec(ctx context.Context, container string, args ...string) (strin
 	return string(out), err
 }
 
+// shQuote single-quotes s so it survives interpolation into a `sh -c` script.
+func shQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// nodeNetnsResolverExec runs a DNS client inside container's NETWORK namespace with an EMPTY
+// /etc/resolv.conf, bind-mounted from /dev/null inside a private MOUNT namespace.
+//
+// It exists because `nsenter -n` enters only the network namespace: a resolver client run that
+// way still reads the HOST's /etc/resolv.conf. When the host names a SCOPED link-local nameserver
+// — `nameserver fe80::...%wlan0`, which an IPv6 router advertisement on e.g. a phone hotspot hands
+// out — dig cannot resolve that scope id inside a netns that has no wlan0, and exits
+// "parse of /etc/resolv.conf failed" BEFORE sending a single query. The failure reads as a broken
+// fabric while being entirely host-side, and it appears and disappears with whatever network the
+// machine happens to be on.
+//
+// Callers name their server explicitly (`dig @<addr>`), so resolv.conf has no bearing on what is
+// under test; emptying it drops a dependency the test never wanted. /dev/null rather than a
+// written file so there is no temp file to place or clean up — reads just return EOF.
+func nodeNetnsResolverExec(ctx context.Context, container string, args ...string) (string, error) {
+	pid, err := dockerPID(ctx, container)
+	if err != nil {
+		return "", err
+	}
+	inner := append([]string{"nsenter", "-t", pid, "-n"}, args...)
+	for i, a := range inner {
+		inner[i] = shQuote(a)
+	}
+	script := "mount --bind /dev/null /etc/resolv.conf && exec " + strings.Join(inner, " ")
+	out, err := exec.SudoOutput(ctx, "unshare", "-m", "--propagation", "private", "sh", "-c", script)
+
+	return string(out), err
+}
+
 // kubectl runs `sudo kubectl --kubeconfig build/<name>/<cluster>.kubeconfig <args>`
 // (root-owned kubeconfig), returning combined stdout.
 func kubectl(ctx context.Context, cfg *config.Config, cluster string, args ...string) (string, error) {
