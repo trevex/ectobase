@@ -16,15 +16,14 @@ declare address space (Subnet/IPPool) and the central allocators fill in the res
 For the broader tour — including containers, VMs, VPC peering, and firewall — see
 [Using the lab](using-the-lab.md).
 
-> Steps 1–2 (VPC/Subnet/VM overlay connectivity) are exercised by the live suite and
-> work end-to-end. For steps 3–4, IPAM does allocate the LB address and NAT port-blocks and
-> records LB membership / SNAT sources in the compiled `CompiledNIC`, and those
-> allocations are observable via the status fields shown below, but the North-South
-> edge control plane is not yet driven by the `LoadBalancer` / `NATGateway` CRDs.
-> Actual WAN reachability is still programmed directly over the
-> dataplane gRPC socket (see `test/lab/livetest/lb_test.go`,
-> `nategress_test.go`). So a WAN client won't reach an LB address or egress from
-> `kubectl apply` alone yet. The steps below verify the parts that are wired.
+> Every step here works end to end from `kubectl apply` alone, and the live suite proves it:
+> `TestLbFromIntentReachesTheWan` has a WAN client reach a `LoadBalancer` address, and
+> `TestNatFromIntent` has a pod egress through a `NATGateway` and receive the reply. Neither
+> test issues a single dataplane gRPC call.
+>
+> (`lb_test.go` and `nategress_test.go` still program the dataplane directly, but they are the
+> datapath tier — they isolate Maglev/DSR and the SNAT rewrite from the control path above them,
+> not a substitute for it.)
 
 ## 0. Prerequisites
 
@@ -273,12 +272,28 @@ pools, which are a handful of prefixes, but worth knowing before you write a lar
 
 ## 4. NAT egress for the VPC
 
-A `NATGateway` is VPC-scoped: it gives every interface in the VPC source-NAT to a
-pool of public IPs. The platform deterministically allocates a `(publicIP, portrange)`
+A `NATGateway` is VPC-scoped: it gives every interface in the VPC source-NAT to public
+addresses drawn from an `IPPool`, and deterministically allocates a `(publicIP, portrange)`
 block per source.
+
+It takes its addresses from the pool on demand rather than up front. It starts with whatever
+`publicIPs` pins — that field is a pin list inside `poolRef`, the same way `LoadBalancer.spec.ip`
+pins an address — and claims one more address whenever a source cannot be given a block because
+every address it holds is full. One per reconcile pass, so a VPC that suddenly gains hundreds of
+interfaces cannot drain a shared pool in a single tick. Pinning nothing is fine; the gateway then
+grows entirely on demand.
 
 ```sh
 khub apply -f - <<'EOF'
+apiVersion: net.ectobase.dev/v1alpha1
+kind: IPPool
+metadata:
+  name: demo-egress-pool
+  namespace: default
+spec:
+  type: public
+  v4Prefix: 198.51.100.0/24
+---
 apiVersion: net.ectobase.dev/v1alpha1
 kind: NATGateway
 metadata:
@@ -286,9 +301,9 @@ metadata:
   namespace: default
 spec:
   vpcRef: { name: demo }
-  publicIPs:
+  poolRef: { name: demo-egress-pool }
+  publicIPs:                  # optional pins inside the pool; omit to grow on demand
     - 198.51.100.10
-    - 198.51.100.11
   portsPerSource: 1024        # optional (default 1024)
 EOF
 ```
@@ -302,10 +317,23 @@ khub get natgateway demo-egress -o jsonpath='{.status.state}{"\n"}{range .status
 # 10.10.0.2 -> 198.51.100.10:2048-3071
 ```
 
-The compiled `CompiledNIC` for each source carries its SNAT mapping (`spec.nat`), so
-egress from inside the fabric is programmed. As with the LB, the edge WAN hop for
-these public IPs is still driven directly over the dataplane gRPC path
-(`nategress_test.go`), not from the `NATGateway` CRD; see the top callout.
+Each claimed address is held by an `IPAllocation`, exactly as an LB address is:
+
+```sh
+khub get ipallocations
+# NAME                        AGE
+# demo-egress-pool-198-51-100-10   10s
+```
+
+The compiled `CompiledNIC` for each source carries its SNAT mapping (`spec.nat`), and the owning
+node announces the block on the route bus so the WAN edges can relay returns to it. That whole
+path — gateway, allocation, compile, announce, edge relay, and a real reply — is what
+`TestNatFromIntent` exercises from the CRD alone.
+
+The address set never shrinks while the gateway lives: an address whose blocks a live source is
+still using cannot be handed back without re-NATing that source mid-flow, so removing a pin does
+not release it either. The addresses are freed when the gateway is deleted, with the
+`IPAllocation`s that hold them.
 
 ## 5. Optional: default-deny with an allow rule
 
