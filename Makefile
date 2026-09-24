@@ -187,6 +187,24 @@ lab-test: ## Run the live lab suite
 # leaving them out of lint and test means nothing checks them.
 GO_MODULES := api cni mesh dispatch test/lab test/e2e
 GO_SRC      = git ls-files '*.go' | grep -v '^dispatch/bin/\.modules/'
+# Package list for ONE Go module, run from that module's dir. Used instead of `./...`, which makes
+# the Go toolchain walk the entire module tree: test/lab/ contains the gitignored, root-owned lab
+# output build/, so with a lab up `go list ./...` — and therefore golangci-lint and go test — dies on
+# "pattern ./...: open build/ectobase/mounts/dispatch-1/run/cilium/state: permission denied" without
+# checking a single package. (`go list -e` does not help; the walk itself is what fails.)
+#
+# Tracked files give the dirs, so the gitignored build output can never be one; the grep mirrors
+# GO_SRC so the two lists cannot drift. `go list` then keeps only dirs with files buildable under the
+# default tags, because naming a package explicitly turns "build constraints exclude all Go files"
+# into a hard error where `./...` skipped it silently — that would otherwise fail on dispatch/hack
+# (tools tag) and test/lab/livetest (live tag), neither of which `./...` ever checked either.
+#
+# It emits .Dir, not .ImportPath: golangci-lint resolves its arguments as filesystem paths, so import
+# paths make it look for ./github.com/trevex/... under the module and report "directory not found".
+# TestGoFiles/XTestGoFiles are in the test alongside GoFiles because a TEST-ONLY package has no
+# GoFiles at all — dropping those would silently stop running dispatch/test, the envtest suite.
+GO_PKGS     = git ls-files '*.go' | grep -v '^bin/\.modules/' | xargs -n1 dirname | sort -u | sed 's|^|./|' \
+	        | xargs go list -e -f '{{if or .GoFiles .CgoFiles .TestGoFiles .XTestGoFiles}}{{.Dir}}{{end}}'
 
 .PHONY: fmt
 fmt: ## Format all Rust + Go code
@@ -198,7 +216,7 @@ lint: ## Clippy (host crates) + golangci-lint per Go module + gofmt check
 	cargo clippy --all-targets
 	@for m in $(GO_MODULES); do \
 	  echo "golangci-lint run ($$m)"; \
-	  ( cd $$m && golangci-lint run ./... ) || exit 1; \
+	  ( cd $$m && golangci-lint run $$($(GO_PKGS)) ) || exit 1; \
 	done
 	@unformatted="$$($(GO_SRC) | xargs gofmt -l)"; \
 	  if [ -n "$$unformatted" ]; then \
@@ -227,7 +245,7 @@ ci: ## Everything CI runs (non-privileged): lint + sim + host tests + chart test
 	$(MAKE) chart-test
 	@for m in $(GO_MODULES); do \
 	  echo "go test ($$m)"; \
-	  ( cd $$m && go test ./... ) || exit 1; \
+	  ( cd $$m && go test $$($(GO_PKGS)) ) || exit 1; \
 	done
 
 .PHONY: verifier
