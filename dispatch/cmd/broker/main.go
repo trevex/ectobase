@@ -310,7 +310,13 @@ func (s *statusReporter) reportOnce(ctx context.Context) error {
 	}
 	vmNode := s.gatherVMNodes(ctx)
 	b := &broker.Broker{Dispatch: s.dispatch, Pools: s.pools, Downstream: s.downstream, ClusterName: s.clusterName}
-	return b.ReportStatus(ctx, nodes, vmNode)
+	if err := b.ReportStatus(ctx, nodes, vmNode); err != nil {
+		return err
+	}
+	// Reported on the same tick, but its failures are not folded into the fence signal above:
+	// a disk identity that never reaches the dispatch means a later rebind of that workload
+	// provisions a blank disk, so it has to be retried rather than logged and forgotten.
+	return b.ReportDiskIdentities(ctx)
 }
 
 // nodePrefixFromNode returns the node's underlay /64 fence prefix from the annotation the

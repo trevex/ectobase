@@ -126,6 +126,12 @@ func main() {
 		log.Fatalf("setup vmplacementmirror controller: %v", err)
 	}
 
+	// The same cross-namespace hop for a provisioned disk's identity: from the attachment a pool
+	// reported it on, onto the Volume, which has no cluster and so survives a rebind of the VM.
+	if err := (&controllers.DiskIdentityMirrorReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
+		log.Fatalf("setup diskidentitymirror controller: %v", err)
+	}
+
 	// Backstop for the compiled-twin finalizers: reclaims twins whose source is gone (a
 	// force-removed finalizer, or a leftover from an older layout). APIReader, not the cache —
 	// a lagging cache reporting a live source as missing would delete a twin still in use.
