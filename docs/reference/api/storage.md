@@ -16,6 +16,34 @@ and consumed as CRDs by the mesh control plane.
 
 
 
+#### DiskIdentity
+
+
+
+DiskIdentity is the CSI identity of the disk actually provisioned for this Volume, as observed by
+the pool that provisioned it. It is what makes the disk's lifetime belong to the Volume — which is
+cluster-agnostic — rather than to the placement-scoped attachment that happens to reference it.
+
+The entire CSI source is kept verbatim rather than a handle plus reconstructed parameters:
+rebuilding a ceph-csi PV from StorageClass parameters means re-deriving clusterID, pool, imageName,
+journalPool and up to five distinct secret references by hand, and dropping any one of them yields
+a PV that binds and then fails to mount at NodeStage.
+
+Deliberately a separate declaration from compiled.DiskIdentity, mirroring the
+compute.VMPlacement / compiled.VMPlacement split: the compiled group is self-contained so a pool
+never needs the source API, and an import either way would break that.
+
+
+
+_Appears in:_
+- [VolumeStatus](#volumestatus)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `csi` _[CSIPersistentVolumeSource](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30/#csipersistentvolumesource-v1-core)_ | CSI is the provisioned PersistentVolume's CSI source, copied as-is. |  | Optional: \{\} <br /> |
+| `capacity` _[Quantity](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30/#quantity-resource-api)_ | Capacity is the PV's actual capacity, which a driver may round up from the requested Size. |  | Optional: \{\} <br /> |
+
+
 #### Volume
 
 
@@ -86,5 +114,6 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `phase` _string_ | Phase is the current lifecycle phase of the Volume. |  | Optional: \{\} <br /> |
+| `diskIdentity` _[DiskIdentity](#diskidentity)_ | DiskIdentity, once set, is the disk backing this Volume. It is mirrored here from the<br />CompiledVolumeAttachment a pool reported it on, and is what a later attachment in ANOTHER<br />cluster is stamped with so it adopts this disk instead of provisioning a blank one. |  | Optional: \{\} <br /> |
 
 

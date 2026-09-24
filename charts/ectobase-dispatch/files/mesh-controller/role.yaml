@@ -129,3 +129,11 @@ rules:
   - get
   - list
   - watch
+- apiGroups:
+  - storage.ectobase.dev
+  resources:
+  - volumes/status
+  verbs:
+  - get
+  - patch
+  - update

@@ -547,9 +547,15 @@ spec:
 # RoleBinding only authorizes requests carrying this namespace, so the broker cannot list another
 # pool's compiled state even if it drops its own client-side filter.
 #
-# Read-only on the objects themselves — the compiler owns them. The one write is compiledvms/status
-# (the placement a pool observes), and only the status subresource, so a broker can never edit a
-# spec (e.g. re-home a workload by rewriting spec.clusterName) nor create or delete twins.
+# Read-only on the objects themselves — the compiler owns them. The only writes are to status
+# subresources — the placement a pool observes, and the identity of the disk it provisioned — so a
+# broker can never edit a spec (e.g. re-home a workload by rewriting spec.clusterName) nor create or
+# delete twins.
+#
+# compiledvolumeattachments/status carries the provisioned disk's CSI identity upward. It goes on the
+# attachment, not on the source Volume, for the same reason placement goes on the CompiledVM: the
+# Volume lives in a shared tenant namespace, and granting a pool a write there is a grant no
+# per-pool Role can scope. A mesh controller on the dispatch mirrors it across.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -560,7 +566,7 @@ rules:
     resources: ["compilednics", "compiledvms", "compiledvolumeattachments", "compiledcontainers"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["compiled.ectobase.dev"]
-    resources: ["compiledvms/status"]
+    resources: ["compiledvms/status", "compiledvolumeattachments/status"]
     verbs: ["get", "update", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1

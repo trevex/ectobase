@@ -6,6 +6,11 @@
 package v1alpha1
 
 // OpenAPIModelName returns the OpenAPI model name for this type.
+func (in DiskIdentity) OpenAPIModelName() string {
+	return "dev.ectobase.storage.v1alpha1.DiskIdentity"
+}
+
+// OpenAPIModelName returns the OpenAPI model name for this type.
 func (in Volume) OpenAPIModelName() string {
 	return "dev.ectobase.storage.v1alpha1.Volume"
 }

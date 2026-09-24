@@ -5,6 +5,19 @@ metadata:
   name: vm-materializer
 rules:
 - apiGroups:
+  - ""
+  resources:
+  - persistentvolumeclaims
+  - persistentvolumes
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
   - cdi.kubevirt.io
   resources:
   - datavolumes

@@ -34,6 +34,7 @@ package main
 //+kubebuilder:rbac:groups=compute.ectobase.dev,resources=containers,verbs=get;list;watch;update
 //+kubebuilder:rbac:groups=compute.ectobase.dev,resources=containers/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=storage.ectobase.dev,resources=volumes,verbs=get;list;watch
+//+kubebuilder:rbac:groups=storage.ectobase.dev,resources=volumes/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=compiled.ectobase.dev,resources=compilednics;compiledvms;compiledvolumeattachments;compiledcontainers,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=compiled.ectobase.dev,resources=compilednics/status;compiledvms/status;compiledvolumeattachments/status;compiledcontainers/status,verbs=get;update;patch
 

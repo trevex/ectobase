@@ -24,6 +24,20 @@ type CompiledVolumeAttachmentSpecApplyConfiguration struct {
 	BootImage *string `json:"bootImage,omitempty"`
 	// Boot marks this attachment as the VM's boot disk.
 	Boot *bool `json:"boot,omitempty"`
+	// VolumeRef is the name of the source Volume, in the VM's namespace.
+	//
+	// Carried explicitly because consumers need to get back to the Volume and neither alternative
+	// works: this object's name is <vmNamespace>-<vmName>-<volumeRef>, which is ambiguous to split
+	// as soon as any component contains a '-', and the stamped source annotations name the
+	// VirtualMachine, since attachments are 1:N per VM.
+	VolumeRef *string `json:"volumeRef,omitempty"`
+	// DiskIdentity, if set, is an existing disk this attachment must ADOPT rather than provision.
+	// The compiler stamps it from the Volume's observed identity, so a twin landing in a new cluster
+	// binds the image that already holds the data.
+	//
+	// It travels downward in spec, while the same information travels upward in status: the target
+	// cluster must be handed the identity, never have to go and read an observation.
+	DiskIdentity *DiskIdentityApplyConfiguration `json:"diskIdentity,omitempty"`
 }
 
 // CompiledVolumeAttachmentSpecApplyConfiguration constructs a declarative configuration of the CompiledVolumeAttachmentSpec type for use with
@@ -69,5 +83,21 @@ func (b *CompiledVolumeAttachmentSpecApplyConfiguration) WithBootImage(value str
 // If called multiple times, the Boot field is set to the value of the last call.
 func (b *CompiledVolumeAttachmentSpecApplyConfiguration) WithBoot(value bool) *CompiledVolumeAttachmentSpecApplyConfiguration {
 	b.Boot = &value
+	return b
+}
+
+// WithVolumeRef sets the VolumeRef field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the VolumeRef field is set to the value of the last call.
+func (b *CompiledVolumeAttachmentSpecApplyConfiguration) WithVolumeRef(value string) *CompiledVolumeAttachmentSpecApplyConfiguration {
+	b.VolumeRef = &value
+	return b
+}
+
+// WithDiskIdentity sets the DiskIdentity field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the DiskIdentity field is set to the value of the last call.
+func (b *CompiledVolumeAttachmentSpecApplyConfiguration) WithDiskIdentity(value *DiskIdentityApplyConfiguration) *CompiledVolumeAttachmentSpecApplyConfiguration {
+	b.DiskIdentity = value
 	return b
 }

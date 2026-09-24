@@ -48,6 +48,7 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		v1alpha1.CompiledVolumeAttachmentList{}.OpenAPIModelName():   schema_ectobase_api_compiled_v1alpha1_CompiledVolumeAttachmentList(ref),
 		v1alpha1.CompiledVolumeAttachmentSpec{}.OpenAPIModelName():   schema_ectobase_api_compiled_v1alpha1_CompiledVolumeAttachmentSpec(ref),
 		v1alpha1.CompiledVolumeAttachmentStatus{}.OpenAPIModelName(): schema_ectobase_api_compiled_v1alpha1_CompiledVolumeAttachmentStatus(ref),
+		v1alpha1.DiskIdentity{}.OpenAPIModelName():                   schema_ectobase_api_compiled_v1alpha1_DiskIdentity(ref),
 		v1alpha1.LocalObjectReference{}.OpenAPIModelName():           schema_ectobase_api_compiled_v1alpha1_LocalObjectReference(ref),
 		v1alpha1.PortStatus{}.OpenAPIModelName():                     schema_ectobase_api_compiled_v1alpha1_PortStatus(ref),
 		v1alpha1.VMPlacement{}.OpenAPIModelName():                    schema_ectobase_api_compiled_v1alpha1_VMPlacement(ref),
@@ -122,6 +123,7 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		platformv1alpha1.RouteBusIdentityList{}.OpenAPIModelName():   schema_ectobase_api_platform_v1alpha1_RouteBusIdentityList(ref),
 		platformv1alpha1.RouteBusIdentitySpec{}.OpenAPIModelName():   schema_ectobase_api_platform_v1alpha1_RouteBusIdentitySpec(ref),
 		platformv1alpha1.RouteBusIdentityStatus{}.OpenAPIModelName(): schema_ectobase_api_platform_v1alpha1_RouteBusIdentityStatus(ref),
+		storagev1alpha1.DiskIdentity{}.OpenAPIModelName():            schema_ectobase_api_storage_v1alpha1_DiskIdentity(ref),
 		storagev1alpha1.Volume{}.OpenAPIModelName():                  schema_ectobase_api_storage_v1alpha1_Volume(ref),
 		storagev1alpha1.VolumeList{}.OpenAPIModelName():              schema_ectobase_api_storage_v1alpha1_VolumeList(ref),
 		storagev1alpha1.VolumeSpec{}.OpenAPIModelName():              schema_ectobase_api_storage_v1alpha1_VolumeSpec(ref),
@@ -1583,12 +1585,25 @@ func schema_ectobase_api_compiled_v1alpha1_CompiledVolumeAttachmentSpec(ref comm
 							Format:      "",
 						},
 					},
+					"volumeRef": {
+						SchemaProps: spec.SchemaProps{
+							Description: "VolumeRef is the name of the source Volume, in the VM's namespace.\n\nCarried explicitly because consumers need to get back to the Volume and neither alternative works: this object's name is <vmNamespace>-<vmName>-<volumeRef>, which is ambiguous to split as soon as any component contains a '-', and the stamped source annotations name the VirtualMachine, since attachments are 1:N per VM.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"diskIdentity": {
+						SchemaProps: spec.SchemaProps{
+							Description: "DiskIdentity, if set, is an existing disk this attachment must ADOPT rather than provision. The compiler stamps it from the Volume's observed identity, so a twin landing in a new cluster binds the image that already holds the data.\n\nIt travels downward in spec, while the same information travels upward in status: the target cluster must be handed the identity, never have to go and read an observation.",
+							Ref:         ref(v1alpha1.DiskIdentity{}.OpenAPIModelName()),
+						},
+					},
 				},
 				Required: []string{"size"},
 			},
 		},
 		Dependencies: []string{
-			resource.Quantity{}.OpenAPIModelName()},
+			v1alpha1.DiskIdentity{}.OpenAPIModelName(), resource.Quantity{}.OpenAPIModelName()},
 	}
 }
 
@@ -1606,9 +1621,44 @@ func schema_ectobase_api_compiled_v1alpha1_CompiledVolumeAttachmentStatus(ref co
 							Format:      "",
 						},
 					},
+					"diskIdentity": {
+						SchemaProps: spec.SchemaProps{
+							Description: "DiskIdentity is the identity of the disk actually provisioned for this attachment, reported upward by the pool that provisioned it. It lands here rather than directly on the source Volume because the broker's writes are scoped to its own pool namespace; a mesh controller mirrors it onto the Volume.",
+							Ref:         ref(v1alpha1.DiskIdentity{}.OpenAPIModelName()),
+						},
+					},
 				},
 			},
 		},
+		Dependencies: []string{
+			v1alpha1.DiskIdentity{}.OpenAPIModelName()},
+	}
+}
+
+func schema_ectobase_api_compiled_v1alpha1_DiskIdentity(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "DiskIdentity is the CSI identity of an already-provisioned disk, captured from the PersistentVolume the driver produced for it. It is what lets an attachment compiled into a DIFFERENT cluster bind the SAME underlying image instead of provisioning a blank one: without it a cluster rebind destroys the disk (see docs/superpowers/plans/2026-09-24-phase0-non-destructive-move.md).\n\nThe entire CSI source is kept verbatim rather than a handle plus reconstructed parameters. Rebuilding a ceph-csi PV from StorageClass parameters means re-deriving clusterID, pool, imageName, journalPool and up to five distinct secret references by hand, and dropping any one of them yields a PV that binds and then fails to mount at NodeStage. Replaying what the driver itself emitted cannot drift from the driver's own conventions.\n\nDeliberately redeclared here rather than reusing storage.DiskIdentity, for the same reason VMPlacement is (compiledvm_types.go): the compiled group is self-contained, and a pool consumes only compiled.ectobase.dev and never needs the source API.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"csi": {
+						SchemaProps: spec.SchemaProps{
+							Description: "CSI is the provisioned PersistentVolume's CSI source, copied as-is.",
+							Ref:         ref(v1.CSIPersistentVolumeSource{}.OpenAPIModelName()),
+						},
+					},
+					"capacity": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Capacity is the PV's actual capacity, which a driver may round up from the requested Size; a replayed PV must declare what exists, not what was asked for.",
+							Ref:         ref(resource.Quantity{}.OpenAPIModelName()),
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			v1.CSIPersistentVolumeSource{}.OpenAPIModelName(), resource.Quantity{}.OpenAPIModelName()},
 	}
 }
 
@@ -4868,6 +4918,33 @@ func schema_ectobase_api_platform_v1alpha1_RouteBusIdentityStatus(ref common.Ref
 	}
 }
 
+func schema_ectobase_api_storage_v1alpha1_DiskIdentity(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "DiskIdentity is the CSI identity of the disk actually provisioned for this Volume, as observed by the pool that provisioned it. It is what makes the disk's lifetime belong to the Volume — which is cluster-agnostic — rather than to the placement-scoped attachment that happens to reference it.\n\nThe entire CSI source is kept verbatim rather than a handle plus reconstructed parameters: rebuilding a ceph-csi PV from StorageClass parameters means re-deriving clusterID, pool, imageName, journalPool and up to five distinct secret references by hand, and dropping any one of them yields a PV that binds and then fails to mount at NodeStage.\n\nDeliberately a separate declaration from compiled.DiskIdentity, mirroring the compute.VMPlacement / compiled.VMPlacement split: the compiled group is self-contained so a pool never needs the source API, and an import either way would break that.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"csi": {
+						SchemaProps: spec.SchemaProps{
+							Description: "CSI is the provisioned PersistentVolume's CSI source, copied as-is.",
+							Ref:         ref(v1.CSIPersistentVolumeSource{}.OpenAPIModelName()),
+						},
+					},
+					"capacity": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Capacity is the PV's actual capacity, which a driver may round up from the requested Size.",
+							Ref:         ref(resource.Quantity{}.OpenAPIModelName()),
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			v1.CSIPersistentVolumeSource{}.OpenAPIModelName(), resource.Quantity{}.OpenAPIModelName()},
+	}
+}
+
 func schema_ectobase_api_storage_v1alpha1_Volume(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
@@ -5014,9 +5091,17 @@ func schema_ectobase_api_storage_v1alpha1_VolumeStatus(ref common.ReferenceCallb
 							Format:      "",
 						},
 					},
+					"diskIdentity": {
+						SchemaProps: spec.SchemaProps{
+							Description: "DiskIdentity, once set, is the disk backing this Volume. It is mirrored here from the CompiledVolumeAttachment a pool reported it on, and is what a later attachment in ANOTHER cluster is stamped with so it adopts this disk instead of provisioning a blank one.",
+							Ref:         ref(storagev1alpha1.DiskIdentity{}.OpenAPIModelName()),
+						},
+					},
 				},
 			},
 		},
+		Dependencies: []string{
+			storagev1alpha1.DiskIdentity{}.OpenAPIModelName()},
 	}
 }
 
