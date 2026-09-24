@@ -1,0 +1,127 @@
+// Copyright 2026 ectobase contributors
+// SPDX-License-Identifier: Apache-2.0
+
+package controllers
+
+import (
+	"context"
+	"fmt"
+	"strings"
+
+	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
+	"k8s.io/apimachinery/pkg/types"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+)
+
+// provisionerAttrPrefix and provisionerIdentityAttr are the volumeAttributes an external provisioner
+// adds about the claim it happened to provision for, as opposed to the driver's own facts about the
+// volume. They name objects and a provisioner instance in ONE cluster, so replaying them into another
+// points the driver at names that do not exist there.
+const (
+	provisionerAttrPrefix   = "csi.storage.k8s.io/"
+	provisionerIdentityAttr = "storage.kubernetes.io/csiProvisionerIdentity"
+)
+
+// diskIdentityFromPV captures a provisioned PersistentVolume's CSI source as a portable identity,
+// or nil if the PV is not CSI-backed and therefore has nothing that names it from another cluster.
+//
+// The source is deep-copied before the provisioner's bookkeeping is stripped: the attribute map is
+// shared with the live object, so stripping in place would silently edit the PV being read.
+func diskIdentityFromPV(pv *corev1.PersistentVolume) *compiledv1.DiskIdentity {
+	if pv == nil || pv.Spec.CSI == nil {
+		return nil
+	}
+	csi := pv.Spec.CSI.DeepCopy()
+	for k := range csi.VolumeAttributes {
+		if k == provisionerIdentityAttr || strings.HasPrefix(k, provisionerAttrPrefix) {
+			delete(csi.VolumeAttributes, k)
+		}
+	}
+	return &compiledv1.DiskIdentity{CSI: csi, Capacity: pv.Spec.Capacity[corev1.ResourceStorage]}
+}
+
+// DiskIdentityReconciler makes an attachment's disk outlive the attachment, and records what it is.
+//
+// It runs on the DOWNSTREAM cluster, beside the VolumeMaterializer, because a PersistentVolume only
+// exists there. It does two things to each disk once it is bound:
+//
+//  1. flips the PV's reclaimPolicy to Retain. A dynamically provisioned PV inherits the
+//     StorageClass's policy — Delete, in the lab — so the RBD image dies with its PVC. A clusterName
+//     change prunes the CompiledVolumeAttachment, which cascades through the DataVolume it owns into
+//     the PVC, and the image is destroyed. Retain turns that from destruction into a detach.
+//
+//  2. records the PV's CSI identity on the attachment's status, from where the broker carries it up
+//     to the dispatch and a mesh controller mirrors it onto the Volume. That is what a later
+//     attachment in another cluster is stamped with, so it adopts this disk instead of a blank one.
+//
+// Retain creates an obligation in return: the image now outlives its PVC by construction, so
+// deleting a Volume has to reclaim it explicitly or every deleted volume leaks an image.
+type DiskIdentityReconciler struct{ Client client.Client }
+
+func (r *DiskIdentityReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	var cva compiledv1.CompiledVolumeAttachment
+	if err := r.Client.Get(ctx, req.NamespacedName, &cva); err != nil {
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+	// On the way out the disk is being detached, not captured; the PV cleanup is elsewhere.
+	if !cva.DeletionTimestamp.IsZero() {
+		return ctrl.Result{}, nil
+	}
+
+	// The PVC the VolumeMaterializer's DataVolume produces carries the attachment's name.
+	var pvc corev1.PersistentVolumeClaim
+	if err := r.Client.Get(ctx, req.NamespacedName, &pvc); err != nil {
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+	// Bound is the readiness rule, and it is deliberately about this PVC rather than about any
+	// importer: CDI populates a block DataVolume through a separate "prime" PVC and only rebinds
+	// that PV onto this one when the import finishes. So Bound here means the disk is fully written,
+	// and capturing earlier would publish the identity of a half-imported disk that a move would
+	// then adopt as if it were complete.
+	if pvc.Status.Phase != corev1.ClaimBound || pvc.Spec.VolumeName == "" {
+		return ctrl.Result{}, nil
+	}
+
+	var pv corev1.PersistentVolume
+	if err := r.Client.Get(ctx, client.ObjectKey{Name: pvc.Spec.VolumeName}, &pv); err != nil {
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+
+	if pv.Spec.PersistentVolumeReclaimPolicy != corev1.PersistentVolumeReclaimRetain {
+		orig := pv.DeepCopy()
+		pv.Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimRetain
+		if err := r.Client.Patch(ctx, &pv, client.MergeFrom(orig)); err != nil {
+			return ctrl.Result{}, fmt.Errorf("retain pv %s: %w", pv.Name, err)
+		}
+	}
+
+	id := diskIdentityFromPV(&pv)
+	if id == nil || equality.Semantic.DeepEqual(cva.Status.DiskIdentity, id) {
+		return ctrl.Result{}, nil
+	}
+	orig := cva.DeepCopy()
+	cva.Status.DiskIdentity = id
+	if err := r.Client.Status().Patch(ctx, &cva, client.MergeFrom(orig)); err != nil {
+		return ctrl.Result{}, fmt.Errorf("record disk identity on %s/%s: %w", cva.Namespace, cva.Name, err)
+	}
+	return ctrl.Result{}, nil
+}
+
+// requestForPVCOfAttachment maps a PVC to the attachment of the same name, so the identity is
+// captured the moment the disk binds rather than on the next resync. A PVC that belongs to no
+// attachment resolves to a request that finds nothing and is dropped.
+func requestForPVCOfAttachment(_ context.Context, obj client.Object) []reconcile.Request {
+	return []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: obj.GetNamespace(), Name: obj.GetName()}}}
+}
+
+func (r *DiskIdentityReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	return ctrl.NewControllerManagedBy(mgr).
+		For(&compiledv1.CompiledVolumeAttachment{}).
+		Watches(&corev1.PersistentVolumeClaim{}, handler.EnqueueRequestsFromMapFunc(requestForPVCOfAttachment)).
+		Complete(r)
+}
