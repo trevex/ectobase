@@ -717,6 +717,17 @@ renders the dispatch control plane:
           - create
           - patch
       - apiGroups:
+          - ""
+        resources:
+          - persistentvolumeclaims
+          - persistentvolumes
+        verbs:
+          - create
+          - delete
+          - get
+          - list
+          - watch
+      - apiGroups:
           - compiled.ectobase.dev
         resources:
           - compiledcontainers
@@ -833,6 +844,7 @@ renders the dispatch control plane:
         verbs:
           - get
           - list
+          - update
           - watch
       - apiGroups:
           - storage.ectobase.dev

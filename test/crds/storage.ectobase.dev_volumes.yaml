@@ -200,6 +200,15 @@ spec:
                     - volumeHandle
                     type: object
                 type: object
+              diskReclaimStarted:
+                description: |-
+                  DiskReclaimStarted records that the objects handing this Volume's image back to its CSI
+                  driver for deletion have been created.
+
+                  It exists to tell two states apart that look identical from outside: "the reclaim has not
+                  begun" and "the driver finished and removed the PersistentVolume". Both present as an absent
+                  PV, and only the second means the image is actually gone.
+                type: boolean
               phase:
                 description: Phase is the current lifecycle phase of the Volume.
                 type: string

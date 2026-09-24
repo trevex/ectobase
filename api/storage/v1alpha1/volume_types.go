@@ -54,6 +54,14 @@ type VolumeStatus struct {
 	// cluster is stamped with so it adopts this disk instead of provisioning a blank one.
 	// +optional
 	DiskIdentity *DiskIdentity `json:"diskIdentity,omitempty"`
+	// DiskReclaimStarted records that the objects handing this Volume's image back to its CSI
+	// driver for deletion have been created.
+	//
+	// It exists to tell two states apart that look identical from outside: "the reclaim has not
+	// begun" and "the driver finished and removed the PersistentVolume". Both present as an absent
+	// PV, and only the second means the image is actually gone.
+	// +optional
+	DiskReclaimStarted bool `json:"diskReclaimStarted,omitempty"`
 }
 
 // +genclient

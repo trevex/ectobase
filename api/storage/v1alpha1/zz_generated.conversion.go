@@ -177,6 +177,7 @@ func Convert_storage_VolumeSpec_To_v1alpha1_VolumeSpec(in *storage.VolumeSpec, o
 func autoConvert_v1alpha1_VolumeStatus_To_storage_VolumeStatus(in *VolumeStatus, out *storage.VolumeStatus, s conversion.Scope) error {
 	out.Phase = in.Phase
 	out.DiskIdentity = (*storage.DiskIdentity)(unsafe.Pointer(in.DiskIdentity))
+	out.DiskReclaimStarted = in.DiskReclaimStarted
 	return nil
 }
 
@@ -188,6 +189,7 @@ func Convert_v1alpha1_VolumeStatus_To_storage_VolumeStatus(in *VolumeStatus, out
 func autoConvert_storage_VolumeStatus_To_v1alpha1_VolumeStatus(in *storage.VolumeStatus, out *VolumeStatus, s conversion.Scope) error {
 	out.Phase = in.Phase
 	out.DiskIdentity = (*DiskIdentity)(unsafe.Pointer(in.DiskIdentity))
+	out.DiskReclaimStarted = in.DiskReclaimStarted
 	return nil
 }
 

@@ -40,6 +40,10 @@ type VolumeStatus struct {
 	// DiskIdentity, once set, is the disk backing this Volume. Mirrored here from the
 	// CompiledVolumeAttachment a pool reported it on.
 	DiskIdentity *DiskIdentity
+	// DiskReclaimStarted records that the objects handing this Volume's image back to its CSI driver
+	// for deletion have been created. It distinguishes "the reclaim has not begun" from "the driver
+	// finished and removed the PersistentVolume" — both of which present as an absent PV.
+	DiskReclaimStarted bool
 }
 
 // +genclient

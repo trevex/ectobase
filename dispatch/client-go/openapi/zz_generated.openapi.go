@@ -5097,6 +5097,13 @@ func schema_ectobase_api_storage_v1alpha1_VolumeStatus(ref common.ReferenceCallb
 							Ref:         ref(storagev1alpha1.DiskIdentity{}.OpenAPIModelName()),
 						},
 					},
+					"diskReclaimStarted": {
+						SchemaProps: spec.SchemaProps{
+							Description: "DiskReclaimStarted records that the objects handing this Volume's image back to its CSI driver for deletion have been created.\n\nIt exists to tell two states apart that look identical from outside: \"the reclaim has not begun\" and \"the driver finished and removed the PersistentVolume\". Both present as an absent PV, and only the second means the image is actually gone.",
+							Type:        []string{"boolean"},
+							Format:      "",
+						},
+					},
 				},
 			},
 		},

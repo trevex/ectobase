@@ -115,5 +115,6 @@ _Appears in:_
 | --- | --- | --- | --- |
 | `phase` _string_ | Phase is the current lifecycle phase of the Volume. |  | Optional: \{\} <br /> |
 | `diskIdentity` _[DiskIdentity](#diskidentity)_ | DiskIdentity, once set, is the disk backing this Volume. It is mirrored here from the<br />CompiledVolumeAttachment a pool reported it on, and is what a later attachment in ANOTHER<br />cluster is stamped with so it adopts this disk instead of provisioning a blank one. |  | Optional: \{\} <br /> |
+| `diskReclaimStarted` _boolean_ | DiskReclaimStarted records that the objects handing this Volume's image back to its CSI<br />driver for deletion have been created.<br />It exists to tell two states apart that look identical from outside: "the reclaim has not<br />begun" and "the driver finished and removed the PersistentVolume". Both present as an absent<br />PV, and only the second means the image is actually gone. |  | Optional: \{\} <br /> |
 
 

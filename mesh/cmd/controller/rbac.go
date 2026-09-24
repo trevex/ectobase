@@ -33,8 +33,16 @@ package main
 //+kubebuilder:rbac:groups=compute.ectobase.dev,resources=virtualmachines/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=compute.ectobase.dev,resources=containers,verbs=get;list;watch;update
 //+kubebuilder:rbac:groups=compute.ectobase.dev,resources=containers/status,verbs=get;update;patch
-//+kubebuilder:rbac:groups=storage.ectobase.dev,resources=volumes,verbs=get;list;watch
+//+kubebuilder:rbac:groups=storage.ectobase.dev,resources=volumes,verbs=get;list;watch;update
 //+kubebuilder:rbac:groups=storage.ectobase.dev,resources=volumes/status,verbs=get;update;patch
+
+// Reclaiming a Volume's RBD image. `update` on volumes above is for the finalizer that holds a
+// Volume open until its image is gone. The PersistentVolume/Claim pair is how the image is handed
+// back: an image is deleted by its CSI driver, which runs its deleter when a Delete-policy PV it
+// owns goes Bound -> Released, so the reclaim replays the recorded identity, binds a claim and drops
+// it. Cluster-scoped, on the dispatch, which already runs ceph-csi as the Tier-2 fence executor.
+//+kubebuilder:rbac:groups="",resources=persistentvolumes,verbs=get;list;watch;create;delete
+//+kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create;delete
 //+kubebuilder:rbac:groups=compiled.ectobase.dev,resources=compilednics;compiledvms;compiledvolumeattachments;compiledcontainers,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=compiled.ectobase.dev,resources=compilednics/status;compiledvms/status;compiledvolumeattachments/status;compiledcontainers/status,verbs=get;update;patch
 
