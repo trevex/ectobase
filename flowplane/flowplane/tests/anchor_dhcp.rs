@@ -210,14 +210,19 @@ fn bpf_prog_test_run(prog_fd: RawFd, input: &[u8]) -> std::io::Result<TestRunOut
 /// Load the compiled object, install PORT_META[1] / DHCP_CONFIG[0] / DHCP_META[1], and return the
 /// loaded `Ebpf` + the verified `tc_guest_dhcp` fd. In production this classifier is a tail-call
 /// target at `GUEST_PROG_DHCP`, but `BPF_PROG_TEST_RUN` invokes it as a standalone tc program.
-fn load_prog() -> (Ebpf, RawFd) {
+/// The returned `TempDir` MUST be held for as long as the caller uses the `Ebpf`, and dropped
+/// afterwards: dropping it removes the bpffs pin directory, which is what releases the pinned maps.
+///
+/// It used to be `Box::leak`ed, which suppressed that Drop and orphaned the whole pin directory on
+/// every run — one full map set (a 1M-entry NAT_CT6 alone is 144 MB) of kernel memory per test
+/// invocation, never reclaimed. 32 leaked directories were found holding ~13 GB, which is invisible
+/// to process accounting because BPF maps are charged to the kernel, not to any RSS.
+fn load_prog() -> (Ebpf, RawFd, tempfile::TempDir) {
     let bytes = aya::include_bytes_aligned!(concat!(env!("OUT_DIR"), "/flowplane-prog"));
-    let pin = Box::leak(Box::new(
-        tempfile::Builder::new()
-            .prefix("flowplane-anchor-dhcp-")
-            .tempdir_in("/sys/fs/bpf")
-            .expect("bpffs tempdir"),
-    ));
+    let pin = tempfile::Builder::new()
+        .prefix("flowplane-anchor-dhcp-")
+        .tempdir_in("/sys/fs/bpf")
+        .expect("bpffs tempdir");
     let mut ebpf = EbpfLoader::new()
         .default_map_pin_directory(pin.path())
         .load(bytes)
@@ -248,7 +253,7 @@ fn load_prog() -> (Ebpf, RawFd) {
         .expect("tc_guest_dhcp is a SchedClassifier program");
     prog.load().expect("verify/load tc_guest_dhcp");
     let prog_fd = prog.fd().expect("tc_guest_dhcp fd").as_fd().as_raw_fd();
-    (ebpf, prog_fd)
+    (ebpf, prog_fd, pin)
 }
 
 /// Build a native `SimNode` with the SAME maps the eBPF anchor installs.
@@ -276,7 +281,8 @@ fn dhcp_bytecode_matches_native_sim() {
         "sanity: native sim reflects the OFFER back to the guest"
     );
 
-    let (_ebpf, prog_fd) = load_prog();
+    // _pin last: dropping it unpins the maps, so it must outlive their use.
+    let (_ebpf, prog_fd, _pin) = load_prog();
     let out = bpf_prog_test_run(prog_fd, &frame)
         .unwrap_or_else(|e| panic!("BPF_PROG_TEST_RUN on tc_guest_dhcp failed: {e}"));
     assert_eq!(
@@ -333,7 +339,8 @@ const OFFER_OUT: &[u8] = &[
 #[test]
 #[ignore = "privileged: run via `make sim-anchor` (needs CAP_BPF + kernel tc test-run)"]
 fn dhcp_bytecode_matches_original_golden() {
-    let (_ebpf, prog_fd) = load_prog();
+    // _pin last: dropping it unpins the maps, so it must outlive their use.
+    let (_ebpf, prog_fd, _pin) = load_prog();
     let out = bpf_prog_test_run(prog_fd, &discover_frame())
         .unwrap_or_else(|e| panic!("BPF_PROG_TEST_RUN on tc_guest_dhcp failed: {e}"));
     assert_eq!(
