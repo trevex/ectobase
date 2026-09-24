@@ -3,9 +3,18 @@
 # whose spec.clusterName is already set, so this hard-binds the VM to k02 without a labelled pool.
 #
 # On k02 node death the failover controller re-binds every VM with spec.clusterName==k02 to a
-# surviving pool (k03) AFTER the k02 /64 is fenced (Ceph NetworkFence result==Succeeded). The same
-# RBD (volumeRefs) reattaches on k03. Mirrors test/e2e/fixtures/multicluster-tier2/vm.yaml but is the
-# canonical fixture the live TestTier2Failover gate applies.
+# surviving pool (k03) AFTER the k02 /64 is fenced (Ceph NetworkFence result==Succeeded). Mirrors
+# test/e2e/fixtures/multicluster-tier2/vm.yaml but is the canonical fixture the live
+# TestTier2Failover gate applies.
+#
+# This header used to claim "The same RBD (volumeRefs) reattaches on k03." It does NOT, and that
+# sentence was wrong for as long as it existed: there is no volumeHandle on CompiledVolumeAttachment
+# and no adopt-existing path anywhere, so a rebind provisions a blank image. On a PLANNED move of a
+# healthy pool the original is destroyed outright — reproduced live on 2026-09-24, the image vanished
+# from the shared Ceph pool within ten seconds. TestTier2Failover creates a Volume but never asserts
+# anything about the disk, which is how the claim survived unchallenged.
+# Red test: TestVolumeSurvivesClusterRebind (livetest/volumemove_test.go).
+# Fix:      docs/superpowers/plans/2026-09-24-phase0-non-destructive-move.md.
 ---
 apiVersion: net.ectobase.dev/v1alpha1
 kind: VPC

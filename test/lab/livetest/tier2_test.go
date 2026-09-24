@@ -53,10 +53,13 @@ func readFixture(t *testing.T, name string) string {
 // TestTier2Failover is the Tier-2 fenced cross-cluster VM-reschedule gate. It boots a
 // stateful RBD-backed VirtualMachine on pool k02, hard-kills the k02 node container,
 // and asserts dispatch FENCES k02 (Ceph NetworkFence result==Succeeded + OSD blocklist)
-// then RE-BINDS the VM to k03, where the VMI + the same RBD reattach. Recovery
-// restarts k02 and asserts the fence releases. Best-effort on VMI Running (guest boot
-// under software emulation + CDI import over the fabric is slow); the fence + reschedule
-// core is the gate.
+// then RE-BINDS the VM to k03, where the VMI restarts. Recovery restarts k02 and asserts
+// the fence releases. Best-effort on VMI Running (guest boot under software emulation +
+// CDI import over the fabric is slow); the fence + reschedule core is the gate.
+//
+// It asserts NOTHING about the disk, and must not be read as covering one: this comment used to say
+// "the same RBD reattaches", which is false (see testdata/tier2-vm.yaml). Disk survival across a
+// rebind is TestVolumeSurvivesClusterRebind's job.
 func TestTier2Failover(t *testing.T) {
 	cfg := loadConfig(t)
 	requireFabricUp(t, cfg)
