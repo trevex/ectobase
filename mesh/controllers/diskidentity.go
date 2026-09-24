@@ -11,6 +11,8 @@ import (
 	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -26,6 +28,14 @@ const (
 	provisionerAttrPrefix   = "csi.storage.k8s.io/"
 	provisionerIdentityAttr = "storage.kubernetes.io/csiProvisionerIdentity"
 )
+
+// finalizerDisk holds a downstream attachment open long enough to let go of its disk.
+//
+// Without it a prune deletes the attachment outright: the DataVolume it owns cascades into the
+// claim, the Retain PV is left Released forever, and — for an adopted disk, whose claim this
+// controller owns nothing of — the claim itself is left behind holding a ReadWriteOnce reference to
+// an image the target cluster is about to adopt.
+const finalizerDisk = "compiled.ectobase.dev/disk"
 
 // diskIdentityFromPV captures a provisioned PersistentVolume's CSI source as a portable identity,
 // or nil if the PV is not CSI-backed and therefore has nothing that names it from another cluster.
@@ -68,9 +78,15 @@ func (r *DiskIdentityReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	if err := r.Client.Get(ctx, req.NamespacedName, &cva); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
-	// On the way out the disk is being detached, not captured; the PV cleanup is elsewhere.
+	// On the way out the disk is detached rather than captured.
 	if !cva.DeletionTimestamp.IsZero() {
-		return ctrl.Result{}, nil
+		if err := r.releaseDisk(ctx, &cva); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, releaseFinalizer(ctx, r.Client, &cva, finalizerDisk)
+	}
+	if err := ensureFinalizer(ctx, r.Client, &cva, finalizerDisk); err != nil {
+		return ctrl.Result{}, fmt.Errorf("ensure disk finalizer: %w", err)
 	}
 
 	// The PVC the VolumeMaterializer's DataVolume produces carries the attachment's name.
@@ -110,6 +126,36 @@ func (r *DiskIdentityReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, fmt.Errorf("record disk identity on %s/%s: %w", cva.Namespace, cva.Name, err)
 	}
 	return ctrl.Result{}, nil
+}
+
+// releaseDisk lets this cluster go of an attachment's disk, without destroying it.
+//
+// The claim goes first and the PersistentVolume object after, because deleting a PV that is still
+// bound only marks it and waits. The IMAGE is untouched by both: the PV is Retain by the time
+// anything here can delete it, and deleting a Retain PV object never touches the volume behind it.
+// Reclaiming the image itself belongs to the Volume, which is the thing that actually owns it.
+func (r *DiskIdentityReconciler) releaseDisk(ctx context.Context, cva *compiledv1.CompiledVolumeAttachment) error {
+	key := client.ObjectKey{Namespace: cva.Namespace, Name: cva.Name}
+	var pvc corev1.PersistentVolumeClaim
+	err := r.Client.Get(ctx, key, &pvc)
+	if apierrors.IsNotFound(err) {
+		return nil // already gone (a provisioned disk's claim follows its DataVolume)
+	}
+	if err != nil {
+		return fmt.Errorf("get claim %s: %w", key, err)
+	}
+	pvName := pvc.Spec.VolumeName
+	if err := r.Client.Delete(ctx, &pvc); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("release claim %s: %w", key, err)
+	}
+	if pvName == "" {
+		return nil
+	}
+	pv := &corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: pvName}}
+	if err := r.Client.Delete(ctx, pv); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("release persistentvolume %s: %w", pvName, err)
+	}
+	return nil
 }
 
 // requestForPVCOfAttachment maps a PVC to the attachment of the same name, so the identity is

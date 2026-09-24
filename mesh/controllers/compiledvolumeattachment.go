@@ -51,6 +51,12 @@ func CompileVolumeAttachments(vm *computev1.VirtualMachine, volumes []storagev1.
 				StorageClass: vol.Spec.StorageClass,
 				BootImage:    vol.Spec.BootImage,
 				Boot:         vol.Spec.BootImage != "",
+				VolumeRef:    ref.Name,
+				// If the Volume already has a disk, hand its identity to whichever cluster this
+				// compiles into, so the attachment ADOPTS that disk rather than provisioning a blank
+				// one. This is what makes a clusterName change a move: the identity is stamped from
+				// the Volume, which has no cluster, so it survives being re-compiled elsewhere.
+				DiskIdentity: diskIdentityForAttachment(vol),
 			},
 		}
 		if placement.WorkloadID != "" {
@@ -59,6 +65,21 @@ func CompileVolumeAttachments(vm *computev1.VirtualMachine, volumes []storagev1.
 		out = append(out, att)
 	}
 	return out
+}
+
+// diskIdentityForAttachment converts a Volume's observed disk identity into the compiled group's
+// declaration of it, or nil when the Volume has no disk yet and there is nothing to adopt.
+//
+// The two types are deliberately separate — a pool consumes only compiled.ectobase.dev and never
+// imports the source API — so this crossing is where one becomes the other.
+func diskIdentityForAttachment(vol *storagev1.Volume) *compiledv1.DiskIdentity {
+	if vol.Status.DiskIdentity == nil || vol.Status.DiskIdentity.CSI == nil {
+		return nil
+	}
+	return &compiledv1.DiskIdentity{
+		CSI:      vol.Status.DiskIdentity.CSI.DeepCopy(),
+		Capacity: vol.Status.DiskIdentity.Capacity,
+	}
 }
 
 // CompiledVolumeAttachmentReconciler upserts a VM's CompiledVolumeAttachments (one per

@@ -15,6 +15,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	cdiv1 "kubevirt.io/containerized-data-importer-api/pkg/apis/core/v1beta1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
@@ -124,11 +125,12 @@ func startDiskIdentityEnv(t *testing.T) (client.Client, context.Context) {
 		t.Skip("KUBEBUILDER_ASSETS unset; run inside `nix develop` for the envtest apiserver assets")
 	}
 	scheme := runtime.NewScheme()
-	if err := compiledv1.AddToScheme(scheme); err != nil {
-		t.Fatal(err)
-	}
-	if err := corev1.AddToScheme(scheme); err != nil {
-		t.Fatal(err)
+	for _, add := range []func(*runtime.Scheme) error{
+		compiledv1.AddToScheme, corev1.AddToScheme, cdiv1.AddToScheme,
+	} {
+		if err := add(scheme); err != nil {
+			t.Fatal(err)
+		}
 	}
 	metav1.AddToGroupVersion(scheme, schema.GroupVersion{Version: "v1"})
 
@@ -136,6 +138,7 @@ func startDiskIdentityEnv(t *testing.T) (client.Client, context.Context) {
 		CRDDirectoryPaths: []string{
 			filepath.Join("..", "..", "charts", "ectobase-pool", "crd-bases"),
 			filepath.Join("..", "..", "test", "crds"),
+			kubeVirtCRDPath(),
 		},
 		ErrorIfCRDPathMissing: true,
 	}
@@ -269,5 +272,52 @@ func TestDiskIdentity_WaitsForTheDiskToBeBound(t *testing.T) {
 	if pv.Spec.PersistentVolumeReclaimPolicy != corev1.PersistentVolumeReclaimDelete {
 		t.Errorf("reclaimPolicy = %q on an unbound disk, want it left alone",
 			pv.Spec.PersistentVolumeReclaimPolicy)
+	}
+}
+
+// TestDiskIdentity_ReleasesTheDisksObjectsWhenTheAttachmentGoes is the detach half of a move.
+//
+// When a clusterName change prunes the attachment, this cluster must let go of the disk: drop the
+// claim and the PersistentVolume object, so nothing here still holds an ReadWriteOnce claim on an
+// image the target cluster is about to adopt. The IMAGE must survive all of it — that is what
+// Retain bought, and deleting a Retain PV object never touches the volume behind it.
+func TestDiskIdentity_ReleasesTheDisksObjectsWhenTheAttachmentGoes(t *testing.T) {
+	c, ctx := startDiskIdentityEnv(t)
+	newAttachment(t, ctx, c, "vm4-disk")
+	bindDisk(t, ctx, c, "vm4-disk", "pvc-4", corev1.ClaimBound, corev1.PersistentVolumeReclaimDelete)
+
+	r := &DiskIdentityReconciler{Client: c}
+	key := client.ObjectKey{Namespace: "default", Name: "vm4-disk"}
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key}); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	// The finalizer is what buys the chance to detach at all: without it the attachment is gone
+	// before anything can look at the disk.
+	var cva compiledv1.CompiledVolumeAttachment
+	if err := c.Get(ctx, key, &cva); err != nil {
+		t.Fatalf("get cva: %v", err)
+	}
+	if len(cva.Finalizers) == 0 {
+		t.Fatal("no finalizer on the attachment; a prune would take the disk's objects with it unseen")
+	}
+
+	if err := c.Delete(ctx, &cva); err != nil {
+		t.Fatalf("delete cva: %v", err)
+	}
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key}); err != nil {
+		t.Fatalf("reconcile after delete: %v", err)
+	}
+
+	var pvc corev1.PersistentVolumeClaim
+	if err := c.Get(ctx, key, &pvc); err == nil && pvc.DeletionTimestamp.IsZero() {
+		t.Error("the claim outlived the attachment; this cluster still holds the disk")
+	}
+	var pv corev1.PersistentVolume
+	if err := c.Get(ctx, client.ObjectKey{Name: "pvc-4"}, &pv); err == nil && pv.DeletionTimestamp.IsZero() {
+		t.Error("the PersistentVolume object was left behind; every move would leak one")
+	}
+	// And the attachment itself is released.
+	if err := c.Get(ctx, key, &cva); err == nil && len(cva.Finalizers) > 0 {
+		t.Errorf("finalizer not released: %v", cva.Finalizers)
 	}
 }
