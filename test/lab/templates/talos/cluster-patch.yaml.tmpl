@@ -13,6 +13,36 @@ apiVersion: v1alpha1
 kind: KubePrismConfig
 port: 7445
 ---
+# Let a NON-ROOT container open a raw block device it was given.
+#
+# Without this, CDI cannot populate an RBD-backed VM disk at all. Its importer runs as uid
+# 107 with every capability dropped, the device it is handed is /dev/rbd0 (root:disk 0660),
+# and it dies before transferring a byte:
+#
+#   blockdev: cannot open /dev/cdi-block-volume: Permission denied
+#     kubevirt.io/containerized-data-importer/pkg/util.GetAvailableSpaceBlock
+#
+# fsGroup does NOT fix it: Kubernetes applies fsGroup to filesystem volumes, not to raw
+# block devices (verified here — a probe pod with fsGroup:107 still saw root:disk and was
+# still denied), and ceph-csi does not chown the device either. The runtime is what has to
+# do it, and this is the opt-in for that:
+# https://kubernetes.io/blog/2021/11/09/non-root-containers-and-devices/
+#
+# It is OFF by default in containerd and ON by default in CRI-O, which is why this is not a
+# well-known problem: CDI's own CI runs CRI-O, so block imports work there and silently
+# cannot work on any containerd cluster. The CDI maintainers' answer to exactly this
+# failure is this setting — kubevirt/containerized-data-importer#2378.
+#
+# The plugin key is the containerd 2.x one (we run containerd 2.3.x); 1.x called it
+# 'io.containerd.grpc.v1.cri'. Talos restarts CRI by itself when this document changes.
+apiVersion: v1alpha1
+kind: CRICustomizationConfig
+name: device-ownership-from-security-context
+content: |
+  [plugins]
+  [plugins.'io.containerd.cri.v1.runtime']
+  device_ownership_from_security_context = true
+---
 apiVersion: v1alpha1
 kind: KubeNetworkConfig
 podSubnets:
