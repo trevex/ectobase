@@ -167,6 +167,10 @@ func requestForPVCOfAttachment(_ context.Context, obj client.Object) []reconcile
 
 func (r *DiskIdentityReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
+		// Distinct name: VolumeMaterializerReconciler runs in this same manager and also roots on
+		// this kind, and controller-runtime derives the default name from the watched kind — so
+		// without this the second registration fails and the whole vm-materializer never starts.
+		Named("diskidentity").
 		For(&compiledv1.CompiledVolumeAttachment{}).
 		Watches(&corev1.PersistentVolumeClaim{}, handler.EnqueueRequestsFromMapFunc(requestForPVCOfAttachment)).
 		Complete(r)
