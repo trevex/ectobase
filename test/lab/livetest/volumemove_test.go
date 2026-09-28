@@ -203,6 +203,31 @@ func TestVolumeSurvivesClusterRebind(t *testing.T) {
 			"wrong, so fix that before reading any verdict from this test", srcImage, src, pool)
 	t.Logf("disk established on %s: handle=%s image=%s", src, srcHandle, srcImage)
 
+	// GATE 2: the disk's identity must be RECORDED on the Volume before the move.
+	//
+	// This is a real precondition, not a convenience. A disk becomes protected when the pool that
+	// provisioned it observes the bound claim: only then is the PersistentVolume flipped to Retain and
+	// its CSI identity captured and carried up. Nothing can protect a disk that has not been observed
+	// yet, so there is a window — seconds, between the claim binding and that first reconcile — in
+	// which a rebind still destroys the image. Moving inside it is not a move this design claims to
+	// survive, and asserting otherwise would be asserting something false.
+	//
+	// The Volume is the right thing to wait on rather than the attachment's status: it is the end of
+	// the chain (pool -> attachment status -> broker -> dispatch -> mirror -> Volume) and it is what
+	// the compiler reads when it stamps the next attachment. If it is set, every hop has happened.
+	eventually(t, 3*time.Minute, 3*time.Second, func() error {
+		out, err := kubectl(ctx, cfg, "dispatch", "get", "volume.storage.ectobase.dev", volMoveVolume,
+			"-n", volMoveNS, "-o", "jsonpath={.status.diskIdentity.csi.volumeHandle}")
+		if err != nil {
+			return fmt.Errorf("read the Volume's recorded identity: %w", err)
+		}
+		if got := strings.TrimSpace(out); got != srcHandle {
+			return fmt.Errorf("Volume records identity %q, want the provisioned disk %q", got, srcHandle)
+		}
+		return nil
+	})
+	t.Logf("identity recorded on the Volume; the disk is now protected and the move is meaningful")
+
 	// THE MOVE. This is exactly what Tier-2 failover does (failover.go:137) and what a planned
 	// drain would do.
 	_, err = kubectl(ctx, cfg, "dispatch", "patch", "virtualmachine.compute.ectobase.dev", volMoveVM,
