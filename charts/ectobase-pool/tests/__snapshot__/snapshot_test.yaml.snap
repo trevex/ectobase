@@ -15692,7 +15692,6 @@ renders with vm-materializer enabled:
           - compiled.ectobase.dev
         resources:
           - compiledvms
-          - compiledvolumeattachments
         verbs:
           - get
           - list
@@ -15706,6 +15705,16 @@ renders with vm-materializer enabled:
           - get
           - patch
           - update
+      - apiGroups:
+          - compiled.ectobase.dev
+        resources:
+          - compiledvolumeattachments
+        verbs:
+          - get
+          - list
+          - patch
+          - update
+          - watch
       - apiGroups:
           - kubevirt.io
         resources:

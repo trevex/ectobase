@@ -18,6 +18,7 @@ import (
 	kubevirtv1 "kubevirt.io/api/core/v1"
 	cdiv1 "kubevirt.io/containerized-data-importer-api/pkg/apis/core/v1beta1"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	// blank import registers the --kubeconfig flag on flag.CommandLine via init().
 	_ "sigs.k8s.io/controller-runtime/pkg/client/config"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
@@ -25,6 +26,11 @@ import (
 
 func main() {
 	flag.Parse()
+
+	// Without this, controller-runtime discards every log line -- including reconcile errors --
+	// and the binary fails silently. A disk-identity bug was invisible here until this was added:
+	// the only symptom was a disk that never got its reclaimPolicy flipped, with no error anywhere.
+	ctrl.SetLogger(zap.New(zap.UseDevMode(true)))
 
 	scheme := runtime.NewScheme()
 	if err := compiledv1.AddToScheme(scheme); err != nil {

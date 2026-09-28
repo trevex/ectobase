@@ -19,6 +19,7 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	// registers --kubeconfig flag to flag.CommandLine via init().
 	_ "sigs.k8s.io/controller-runtime/pkg/client/config"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
@@ -49,6 +50,11 @@ func main() {
 	// (test/lab/internal/deploy/kubevirt.go registers binding.flowplane -> ectobase-system/flowplane).
 	flag.StringVar(&vmNetworkName, "vm-network-name", "ectobase-system/flowplane", "Multus NAD (ns/name) for the KubeVirt VM flowplane binding, stamped onto CompiledVMs.")
 	flag.Parse()
+
+	// Without this, controller-runtime discards every log line -- including reconcile errors --
+	// and the binary fails silently. A disk-identity bug was invisible here until this was added:
+	// the only symptom was a disk that never got its reclaimPolicy flipped, with no error anywhere.
+	ctrl.SetLogger(zap.New(zap.UseDevMode(true)))
 
 	scheme := runtime.NewScheme()
 	if err := netv1.AddToScheme(scheme); err != nil {

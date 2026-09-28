@@ -33,7 +33,6 @@ rules:
   - compiled.ectobase.dev
   resources:
   - compiledvms
-  - compiledvolumeattachments
   verbs:
   - get
   - list
@@ -47,6 +46,16 @@ rules:
   - get
   - patch
   - update
+- apiGroups:
+  - compiled.ectobase.dev
+  resources:
+  - compiledvolumeattachments
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
 - apiGroups:
   - kubevirt.io
   resources:
