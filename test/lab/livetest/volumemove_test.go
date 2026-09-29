@@ -38,7 +38,10 @@ const (
 
 // attName is the CompiledVolumeAttachment — and therefore DataVolume and PVC — the compiler derives
 // for a (vm, volume) pair: <vmNamespace>-<vmName>-<volumeRef> (compiledvolumeattachment.go:45).
-func attName(vm, volume string) string { return volMoveNS + "-" + vm + "-" + volume }
+//
+// The namespace is a parameter rather than volMoveNS because TestTier2Failover needs the same
+// derivation for its own fixture, and two copies of this rule is how they would drift apart.
+func attName(ns, vm, volume string) string { return ns + "-" + vm + "-" + volume }
 
 // volMoveFixture is a VM bound to clusterName with one RBD disk, and deliberately nothing else.
 //
@@ -211,7 +214,7 @@ func TestVolumeSurvivesClusterRebind(t *testing.T) {
 	require.NoError(t, err)
 
 	applyDispatch(t, ctx, cfg, volMoveFixture(volMoveVM, volMoveVolume, src))
-	att := attName(volMoveVM, volMoveVolume)
+	att := attName(volMoveNS, volMoveVM, volMoveVolume)
 
 	// GATE. Every precondition is required, never skipped past: an earlier hand-run of this
 	// scenario flipped clusterName while the VM was unschedulable and its PVC had never bound, and
@@ -329,7 +332,7 @@ func TestVolumeDeleteReclaimsTheImage(t *testing.T) {
 	require.NoError(t, err)
 
 	applyDispatch(t, ctx, cfg, volMoveFixture(volReclaimVM, volReclaimVolume, src))
-	att := attName(volReclaimVM, volReclaimVolume)
+	att := attName(volMoveNS, volReclaimVM, volReclaimVolume)
 
 	// Establish the disk and wait until it is PROTECTED, i.e. Retain applied and the identity
 	// recorded. Reclaim only has something to do once the image has stopped being reclaimed by
@@ -450,7 +453,7 @@ func TestVolumeSurvivesAnImmediateRebind(t *testing.T) {
 	require.NoError(t, err)
 
 	applyDispatch(t, ctx, cfg, volMoveFixture(volRaceVM, volRaceVolume, src))
-	att := attName(volRaceVM, volRaceVolume)
+	att := attName(volMoveNS, volRaceVM, volRaceVolume)
 
 	// The ONLY gate is that the disk exists. Deliberately NOT waiting for the identity: racing that
 	// reconcile is the entire point.

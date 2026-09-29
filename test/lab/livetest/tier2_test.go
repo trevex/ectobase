@@ -50,16 +50,25 @@ func readFixture(t *testing.T, name string) string {
 	return string(b)
 }
 
-// TestTier2Failover is the Tier-2 fenced cross-cluster VM-reschedule gate. It boots a
-// stateful RBD-backed VirtualMachine on pool k02, hard-kills the k02 node container,
-// and asserts dispatch FENCES k02 (Ceph NetworkFence result==Succeeded + OSD blocklist)
-// then RE-BINDS the VM to k03, where the VMI restarts. Recovery restarts k02 and asserts
-// the fence releases. Best-effort on VMI Running (guest boot under software emulation +
-// CDI import over the fabric is slow); the fence + reschedule core is the gate.
+// TestTier2Failover is the Tier-2 fenced cross-cluster VM-reschedule gate. It boots a stateful
+// RBD-backed VirtualMachine on pool k02, stops k02's broker heartbeat so the pool goes Unknown, and
+// asserts dispatch FENCES k02 (Ceph NetworkFence result==Succeeded + OSD blocklist) then RE-BINDS the
+// VM to k03, where the VMI restarts. Recovery restores the heartbeat and asserts the fence releases.
+// Best-effort on VMI Running (guest boot under software emulation is slow); the fence + reschedule
+// core is the gate.
 //
-// It asserts NOTHING about the disk, and must not be read as covering one: this comment used to say
-// "the same RBD reattaches", which is false (see testdata/tier2-vm.yaml). Disk survival across a
-// rebind is TestVolumeSurvivesClusterRebind's job.
+// It now also asserts THE DISK, which it could not before Phase 0 of
+// docs/superpowers/specs/2026-09-23-vm-mobility-across-clusters.md: k03 binds the SAME RBD image, by
+// CSI handle, and that image is still intact at the end of the failover.
+//
+// What it does NOT assert is the source releasing the disk, because the source never does. The first
+// version of this test asserted exactly that, on the assumption that restoring the heartbeat in Phase
+// 12 lets the set-reconcile prune the twins the pool kept while it was down. It does not — see Phase
+// 13, which records what was measured instead.
+//
+// testdata/tier2-vm.yaml asserted the reattachment in prose from the day it was written, years before
+// anything implemented it, and got away with it because this test created a Volume and then checked
+// nothing about it. Hence the handle comparisons below rather than another claim.
 func TestTier2Failover(t *testing.T) {
 	cfg := loadConfig(t)
 	requireFabricUp(t, cfg)
@@ -104,16 +113,59 @@ func TestTier2Failover(t *testing.T) {
 		return expectVMCluster(ctx, cfg, "k02")
 	})
 
-	// --- Phase 4: VMI + RBD Bound on k02 --------------------------------------------
-	eventually(t, 5*time.Minute, 10*time.Second, func() error {
-		return expectVMIAndRBD(ctx, cfg, "k02")
+	// --- Phase 4: VMI + the VM's OWN disk Bound on k02 ------------------------------
+	//
+	// Ten minutes, not five: this fixture has a bootImage, so its claim binds only once CDI has
+	// finished importing fedora:41 over the fabric's NAT64. The old five was enough because the old
+	// assertion accepted any Bound ceph-rbd PVC — including CDI's prime, which binds first.
+	att := attName(tier2VMNS, tier2VMName, tier2Volume)
+	eventually(t, 10*time.Minute, 10*time.Second, func() error {
+		return expectVMIAndRBD(ctx, cfg, "k02", att)
 	})
 	if phase, err := kubectl(ctx, cfg, "k02", "-n", tier2VMNS,
 		"get", "vmi", tier2VMIName, "-o", "jsonpath={.status.phase}"); err == nil {
 		t.Logf("k02 VMI %s phase=%q (not hard-required Running)", tier2VMIName, strings.TrimSpace(phase))
 	}
 
-	// --- Phase 5: k02 fence coordinate ----------------------------------------------
+	// --- Phase 5: the disk exists and is PROTECTED -----------------------------------
+	//
+	// Identify the disk from Ceph's side and wait until its identity has been recorded on the Volume,
+	// which is what makes the rest of this test meaningful: only a recorded identity can be stamped
+	// into the k03 twin, so only then can k03 adopt the image instead of provisioning a blank one.
+	// Before that point a rebind still costs the VM its disk (TestVolumeSurvivesAnImmediateRebind
+	// covers exactly that window), and asserting adoption here without waiting would be asserting
+	// something this design does not claim.
+	pool, err := rbdPool(ctx, cfg, "k02")
+	require.NoError(t, err)
+
+	var srcHandle, srcImage string
+	eventually(t, 2*time.Minute, 5*time.Second, func() error {
+		_, h, img, err := diskPV(ctx, cfg, "k02", att)
+		if err != nil {
+			return err
+		}
+		srcHandle, srcImage = h, img
+		return nil
+	})
+	eventually(t, 5*time.Minute, 5*time.Second, func() error {
+		out, err := kubectl(ctx, cfg, "dispatch", "get", "volume.storage.ectobase.dev", tier2Volume,
+			"-n", tier2VMNS, "-o", "jsonpath={.status.diskIdentity.csi.volumeHandle}")
+		if err != nil {
+			return fmt.Errorf("read the Volume's recorded identity: %w", err)
+		}
+		if got := strings.TrimSpace(out); got != srcHandle {
+			return fmt.Errorf("Volume records identity %q, want the provisioned disk %q", got, srcHandle)
+		}
+		return nil
+	})
+	imgs, err := rbdImages(ctx, cfg, pool)
+	require.NoError(t, err)
+	require.Contains(t, imgs, srcImage,
+		"precondition: the image %s that k02's PV names is not in pool %s, so no verdict about the "+
+			"disk can be read from this run", srcImage, pool)
+	t.Logf("protected disk on k02: image=%s handle=%s pool=%s", srcImage, srcHandle, pool)
+
+	// --- Phase 6: k02 fence coordinate ----------------------------------------------
 	k02Prefix, err := poolField(ctx, cfg, "k02", "{.status.nodePrefixes[0]}")
 	require.NoError(t, err, "read k02 nodePrefixes[0]")
 	require.NotEmpty(t, k02Prefix, "k02 fence coordinate (nodePrefixes[0]) empty")
@@ -125,7 +177,7 @@ func TestTier2Failover(t *testing.T) {
 	cephCtr := "clab-" + cfg.Name + "-ceph"
 	t.Logf("k02 prefix=%s fenceCR=%s hextets=%s ceph=%s", k02Prefix, fenceCR, k02Hextets, cephCtr)
 
-	// --- Phase 6: drain k02 (stop its broker heartbeat) -----------------------------
+	// --- Phase 7: drain k02 (stop its broker heartbeat) -----------------------------
 	// Instead of `docker kill`ing the node (which destroys its clab fabric veths so the
 	// node can never rejoin — flowplane crash-loops and the rest of the live suite
 	// fails), stop the broker so k02's ClusterPool lease goes stale → central marks the
@@ -140,7 +192,7 @@ func TestTier2Failover(t *testing.T) {
 	require.NoError(t, scaleBrokerReplicas(ctx, cfg, "k02", 0), "scale down k02 broker (drain)")
 	t.Logf("drained k02: scaled its broker to 0 (heartbeat stops → pool goes Unknown)")
 
-	// --- Phase 7: fence asserted (dispatch) ------------------------------------------
+	// --- Phase 8: fence asserted (dispatch) ------------------------------------------
 	eventually(t, 6*time.Minute, 10*time.Second, func() error {
 		res, err := kubectl(ctx, cfg, "dispatch",
 			"get", "networkfence", fenceCR, "-o", "jsonpath={.status.result}")
@@ -153,7 +205,7 @@ func TestTier2Failover(t *testing.T) {
 		return nil
 	})
 
-	// --- Phase 8: ceph blocklist contains a k02 client ------------------------------
+	// --- Phase 9: ceph blocklist contains a k02 client ------------------------------
 	eventually(t, 5*time.Minute, 10*time.Second, func() error {
 		bl, err := exec.SudoOutput(ctx, "docker", "exec", cephCtr, "ceph", "osd", "blocklist", "ls")
 		if err != nil {
@@ -165,21 +217,44 @@ func TestTier2Failover(t *testing.T) {
 		return nil
 	})
 
-	// --- Phase 9: VM rebinds to k03 -------------------------------------------------
+	// --- Phase 10: VM rebinds to k03 -------------------------------------------------
 	eventually(t, 6*time.Minute, 10*time.Second, func() error {
 		return expectVMCluster(ctx, cfg, "k03")
 	})
 
-	// --- Phase 10: VMI + RBD Bound on k03 -------------------------------------------
+	// --- Phase 11: VMI + the ORIGINAL disk on k03 -----------------------------------
 	eventually(t, 6*time.Minute, 10*time.Second, func() error {
-		return expectVMIAndRBD(ctx, cfg, "k03")
+		return expectVMIAndRBD(ctx, cfg, "k03", att)
 	})
+	// The same image, not merely an image. A blank disk of the right size binds just as well and is
+	// indistinguishable in `kubectl get pvc`; only the CSI handle says whether the guest got its data
+	// back. This is the assertion the fixture's header used to make in prose.
+	eventually(t, 3*time.Minute, 5*time.Second, func() error {
+		pv, h, img, err := diskPV(ctx, cfg, "k03", att)
+		if err != nil {
+			return err
+		}
+		if h != srcHandle {
+			return fmt.Errorf("k03 bound PV %s with image %s (handle %s), want the original %s (handle %s)",
+				pv, img, h, srcImage, srcHandle)
+		}
+		return nil
+	})
+	t.Logf("k03 adopted the ORIGINAL disk %s across the fence", srcImage)
 	if phase, err := kubectl(ctx, cfg, "k03", "-n", tier2VMNS,
 		"get", "vmi", tier2VMIName, "-o", "jsonpath={.status.phase}"); err == nil {
 		t.Logf("k03 VMI %s phase=%q (not hard-required Running)", tier2VMIName, strings.TrimSpace(phase))
 	}
 
-	// --- Phase 11: recovery — restore the broker heartbeat, assert fence released ----
+	// --- Phase 12: recovery — restore the broker heartbeat, assert fence released ----
+	//
+	// If this phase times out with "blocklist still contains k02 client", suspect a STALE entry from
+	// an earlier run that was interrupted while the pool was fenced, rather than this run's fence.
+	// Ceph drops a blocklist entry only on the Fenced -> Unfenced transition, so a run killed inside
+	// the fenced window leaves one behind with a multi-year expiry, and the release of every later
+	// fence for that same /64 then looks unfinished. Check `ceph osd blocklist ls` on the ceph node;
+	// clearing it means patching the NetworkFence to Unfenced (not deleting it) and letting csi-addons
+	// run the removal.
 	require.NoError(t, scaleBrokerReplicas(ctx, cfg, "k02", 1), "scale up k02 broker (recover)")
 	t.Logf("recovered k02: scaled its broker back to 1 (lease renews → pool Ready → fence released)")
 
@@ -198,6 +273,33 @@ func TestTier2Failover(t *testing.T) {
 		}
 		return nil
 	})
+
+	// --- Phase 13: the disk is intact at the end, and still the target's --------------
+	//
+	// An end-state check, and deliberately NOT a test of the source's detach — because the source
+	// does not detach. A broker prunes a local twin only when it WITNESSES the upstream twin being
+	// deleted; one that was down at that moment never reconciles the difference afterwards, and
+	// restarting it does not help either. Measured on the live fabric 2026-09-29: k02 held its
+	// CompiledVM, CompiledVolumeAttachment, CompiledNIC, a Bound claim and a Retain PV for 17 minutes
+	// across a broker restart, while the dispatch held no VM at all. k03, whose broker stayed up
+	// throughout, pruned every twin it should have.
+	//
+	// That is a defect in its own right, and a sharper one than a leaked object: the source also keeps
+	// its KubeVirt VirtualMachine (observed "Starting") and its claim on the disk, and Phase 12 has
+	// just RELEASED the fence. The only thing left between a recovered pool and two clusters writing
+	// one ReadWriteOnce image is that the source's VMI had not reached Running. Tracked separately —
+	// asserting the prune here would encode the bug, and asserting its absence would entrench it.
+	//
+	// So what is checked is the thing that must hold either way: the bytes are still there, and the
+	// cluster now running the VM still resolves to them.
+	imgs, err = rbdImages(ctx, cfg, pool)
+	require.NoError(t, err)
+	require.Contains(t, imgs, srcImage,
+		"DATA LOSS: image %s is gone from pool %s by the end of the failover", srcImage, pool)
+	_, h, _, err := diskPV(ctx, cfg, "k03", att)
+	require.NoError(t, err, "k03 no longer has a claim on the disk at the end of the failover")
+	require.Equal(t, srcHandle, h, "k03's disk is no longer the original at the end of the failover")
+	t.Logf("failover disk PASS: %s intact and still bound on k03 after the fence was released", srcImage)
 }
 
 // scaleBrokerReplicas scales a compute cluster's dispatch-broker deployment. Scaling
@@ -225,26 +327,29 @@ func expectVMCluster(ctx context.Context, cfg *config.Config, want string) error
 	return nil
 }
 
-// expectVMIAndRBD asserts the KubeVirt VMI exists on the given cluster AND at least
-// one PVC bound to the ceph-rbd StorageClass is Bound in tier2VMNS (the RBD reattach
-// signal). It does NOT require the VMI phase to be Running.
-func expectVMIAndRBD(ctx context.Context, cfg *config.Config, cluster string) error {
+// expectVMIAndRBD asserts the KubeVirt VMI exists on the given cluster AND that the VM's own disk
+// claim — the PVC named after the attachment — is Bound there on the ceph-rbd StorageClass. It does
+// NOT require the VMI phase to be Running.
+//
+// It used to accept ANY Bound ceph-rbd PVC in the namespace, which two things other than the disk under
+// test could satisfy: CDI populates a block import through a "prime" PVC that binds first while the
+// named claim stays Pending, and the volume-move tests bind claims of their own in this same namespace
+// on these same clusters. Naming the claim makes Bound mean "this VM's disk is attached here" — and on
+// the source it additionally means the import has finished, which is when the disk becomes protected.
+func expectVMIAndRBD(ctx context.Context, cfg *config.Config, cluster, att string) error {
 	if _, err := kubectl(ctx, cfg, cluster, "-n", tier2VMNS, "get", "vmi", tier2VMIName); err != nil {
 		return fmt.Errorf("VMI %s not present on %s/%s: %w", tier2VMIName, cluster, tier2VMNS, err)
 	}
-	// Any ceph-rbd PVC Bound in the ns (the DataVolume/PVC name is derived by CDI).
-	out, err := kubectl(ctx, cfg, cluster, "-n", tier2VMNS, "get", "pvc",
-		"-o", "jsonpath={range .items[*]}{.spec.storageClassName}{\" \"}{.status.phase}{\"\\n\"}{end}")
+	out, err := kubectl(ctx, cfg, cluster, "-n", tier2VMNS, "get", "pvc", att,
+		"-o", "jsonpath={.spec.storageClassName}|{.status.phase}")
 	if err != nil {
-		return fmt.Errorf("list PVCs on %s/%s: %w", cluster, tier2VMNS, err)
+		return fmt.Errorf("get PVC %s on %s/%s: %w", att, cluster, tier2VMNS, err)
 	}
-	for _, line := range strings.Split(out, "\n") {
-		f := strings.Fields(line)
-		if len(f) == 2 && f[0] == "ceph-rbd" && f[1] == "Bound" {
-			return nil
-		}
+	f := strings.SplitN(strings.TrimSpace(out), "|", 2)
+	if len(f) != 2 || f[0] != "ceph-rbd" || f[1] != "Bound" {
+		return fmt.Errorf("PVC %s on %s/%s is %q, want a Bound ceph-rbd claim", att, cluster, tier2VMNS, out)
 	}
-	return fmt.Errorf("no Bound ceph-rbd PVC on %s/%s:\n%s", cluster, tier2VMNS, out)
+	return nil
 }
 
 // clusterNode returns the first derived node of a named cluster.
