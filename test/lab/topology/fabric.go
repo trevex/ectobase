@@ -589,6 +589,10 @@ func deployEctobase(ctx context.Context, cfg *config.Config) error {
 		})
 	}
 
+	// Ceph may not be deployed (ceph.env absent), in which case the fence stays disarmed; a missing
+	// file is not an error here, unlike in `lab tier2` where ceph is a prerequisite.
+	cephFSID, _ := readCephFSID(filepath.Join(p.build, "ceph.env"))
+
 	spec := deploy.EctobaseSpec{
 		RepoRoot:           root,
 		WorkDir:            filepath.Join(p.build, "deploy"),
@@ -596,6 +600,7 @@ func deployEctobase(ctx context.Context, cfg *config.Config) error {
 		DispatchIdentity:   dc.Nodes[0].IdentityAddr,
 		DispatchChartPath:  filepath.Join(root, "charts/ectobase-dispatch"),
 		PoolChartPath:      filepath.Join(root, "charts/ectobase-pool"),
+		CephClusterID:      cephFSID,
 		NADCRDPath:         filepath.Join(root, "test/lab/deploy/nad-crd.yaml"),
 		UnderlayWithin:     fabric.NodeAggr,
 		Compute:            compute,

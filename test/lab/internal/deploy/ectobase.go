@@ -34,15 +34,23 @@ const (
 // topology layer can import without a cycle. All addresses are derived by the
 // caller (never hardcoded here).
 type EctobaseSpec struct {
-	RepoRoot           string           // repo root (dir containing go.work)
-	WorkDir            string           // build/<name>/deploy scratch dir (created if missing)
-	DispatchKubeconfig string           // path to dispatch's kubeconfig
-	DispatchIdentity   string           // bare v6, e.g. fd00:cafe:<h>::1 (dispatch's fabric address: the broker's dispatch server host AND the reflector host)
-	DispatchChartPath  string           // <repoRoot>/charts/ectobase-dispatch
-	PoolChartPath      string           // <repoRoot>/charts/ectobase-pool
-	NADCRDPath         string           // NetworkAttachmentDefinition CRD manifest (abs or repo-relative)
-	UnderlayWithin     string           // node-underlay aggregate CIDR (fd00:cafe::/32) for flowplane's underlay filter
-	Compute            []ComputeCluster // compute clusters running the broker (k02, k03, …)
+	RepoRoot           string // repo root (dir containing go.work)
+	WorkDir            string // build/<name>/deploy scratch dir (created if missing)
+	DispatchKubeconfig string // path to dispatch's kubeconfig
+	DispatchIdentity   string // bare v6, e.g. fd00:cafe:<h>::1 (dispatch's fabric address: the broker's dispatch server host AND the reflector host)
+	DispatchChartPath  string // <repoRoot>/charts/ectobase-dispatch
+	PoolChartPath      string // <repoRoot>/charts/ectobase-pool
+	NADCRDPath         string // NetworkAttachmentDefinition CRD manifest (abs or repo-relative)
+	UnderlayWithin     string // node-underlay aggregate CIDR (fd00:cafe::/32) for flowplane's underlay filter
+
+	// CephClusterID is the external Ceph cluster's fsid, for the dispatch controller's ceph-csi
+	// NetworkFence actuator. Empty when ceph has not been deployed, which leaves the fence disarmed
+	// (the driver rejects a NetworkFence with no clusterID).
+	//
+	// The deploy passes it so a RE-deploy does not silently disarm a fence that `lab ceph`/`lab tier2`
+	// had already armed: the value is chart-level, so an upgrade that omitted it would reset it to "".
+	CephClusterID string
+	Compute       []ComputeCluster // compute clusters running the broker (k02, k03, …)
 
 	// ImageRegistry, when non-empty, is the bracketed [host]:port of the in-fabric
 	// registry the lab's locally-built :dev app images are pulled from (e.g.
@@ -123,7 +131,7 @@ func Ectobase(ctx context.Context, s EctobaseSpec) error {
 	}
 
 	slog.Info("installing ectobase-dispatch chart", "chart", s.DispatchChartPath)
-	if err := helmInstallDispatch(ctx, s.DispatchKubeconfig, s.DispatchChartPath, s.DispatchIdentity, s.RouteBusMTLS, s.ReflectorIP, s.ImageRegistry); err != nil {
+	if err := helmInstallDispatch(ctx, s.DispatchKubeconfig, s.DispatchChartPath, s.DispatchIdentity, s.RouteBusMTLS, s.ReflectorIP, s.ImageRegistry, s.CephClusterID); err != nil {
 		return fmt.Errorf("helm install ectobase-dispatch: %w", err)
 	}
 	if err := waitAggregatedAPI(ctx, s.DispatchKubeconfig); err != nil {
@@ -381,13 +389,18 @@ func imageSetArgs(registry string, images map[string]string) []string {
 // on the dispatch's fabric identity, so the dispatch-controller's -reflector-admin (a chart value) points
 // there. --create-namespace makes the baseline-safe `system` release namespace; the chart creates
 // the PSA-privileged ectobase-system namespace itself.
-func helmInstallDispatch(ctx context.Context, kubeconfig, chartPath, dispatchIdentity string, mtls bool, reflectorIP, imageRegistry string) error {
+func helmInstallDispatch(ctx context.Context, kubeconfig, chartPath, dispatchIdentity string, mtls bool, reflectorIP, imageRegistry, cephClusterID string) error {
 	args := []string{"upgrade", "--install", "ectobase-dispatch", chartPath,
 		"--kubeconfig", kubeconfig,
 		"--namespace", "system", "--create-namespace",
 		"--set", "reflectorAdmin=[" + dispatchIdentity + "]:" + reflectorAdminPort,
 	}
 	args = append(args, imageSetArgs(imageRegistry, dispatchImages)...)
+	// Carried through every deploy so a redeploy re-arms rather than silently disarms the storage
+	// fence; empty simply leaves the chart default.
+	if cephClusterID != "" {
+		args = append(args, "--set-string", "ceph.clusterID="+cephClusterID)
+	}
 	if mtls {
 		// reflectorIP MUST equal the host part of reflectorAdmin/reflectorAddress (dispatchIdentity)
 		// or client cert verification of the reflector server fails. dispatchApiserver.serviceIP is
