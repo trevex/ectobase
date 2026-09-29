@@ -47,6 +47,11 @@ type CompiledVMStatus struct {
 	// here rather than directly on the source VirtualMachine because the broker's writes are
 	// scoped to its own pool namespace; a mesh controller mirrors it onto the VirtualMachine.
 	Placement *VMPlacement
+	// Released is set once the pool this twin was compiled for has let go of the VM — no KubeVirt
+	// VM, VMI or virt-launcher left, and no claim on its disks — or, for a lost pool, once failover
+	// has fenced it. A retired twin is held on the dispatch until this is true, and nothing is
+	// compiled into another pool for the same VM until the retired twin is gone.
+	Released bool
 }
 
 // VMPlacement is a VM's actual running location, as observed by the pool that runs it.

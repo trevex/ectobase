@@ -66,6 +66,12 @@ type CompiledVMStatus struct {
 	// scoped to its own pool namespace; a mesh controller mirrors it onto the VirtualMachine.
 	// +optional
 	Placement *VMPlacement `json:"placement,omitempty" protobuf:"bytes,2,opt,name=placement"`
+	// Released is set once the pool this twin was compiled for has let go of the VM — no KubeVirt
+	// VM, VMI or virt-launcher left, and no claim on its disks — or, for a lost pool, once failover
+	// has fenced it. A retired twin is held on the dispatch until this is true, and nothing is
+	// compiled into another pool for the same VM until the retired twin is gone.
+	// +optional
+	Released bool `json:"released,omitempty" protobuf:"varint,3,opt,name=released"`
 }
 
 // VMPlacement is a VM's actual running location, as observed by the pool that runs it.

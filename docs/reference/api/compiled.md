@@ -443,6 +443,7 @@ _Appears in:_
 | --- | --- | --- | --- |
 | `state` _string_ | State is the materialization state (e.g. Applied, Pending). |  | Optional: \{\} <br /> |
 | `placement` _[VMPlacement](#vmplacement)_ | Placement is where this VM actually runs, reported upward by the pool's broker. It lands<br />here rather than directly on the source VirtualMachine because the broker's writes are<br />scoped to its own pool namespace; a mesh controller mirrors it onto the VirtualMachine. |  | Optional: \{\} <br /> |
+| `released` _boolean_ | Released is set once the pool this twin was compiled for has let go of the VM — no KubeVirt<br />VM, VMI or virt-launcher left, and no claim on its disks — or, for a lost pool, once failover<br />has fenced it. A retired twin is held on the dispatch until this is true, and nothing is<br />compiled into another pool for the same VM until the retired twin is gone. |  | Optional: \{\} <br /> |
 
 
 #### CompiledVolumeAttachment

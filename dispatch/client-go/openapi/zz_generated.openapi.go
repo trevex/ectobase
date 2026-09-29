@@ -1440,6 +1440,13 @@ func schema_ectobase_api_compiled_v1alpha1_CompiledVMStatus(ref common.Reference
 							Ref:         ref(v1alpha1.VMPlacement{}.OpenAPIModelName()),
 						},
 					},
+					"released": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Released is set once the pool this twin was compiled for has let go of the VM — no KubeVirt VM, VMI or virt-launcher left, and no claim on its disks — or, for a lost pool, once failover has fenced it. A retired twin is held on the dispatch until this is true, and nothing is compiled into another pool for the same VM until the retired twin is gone.",
+							Type:        []string{"boolean"},
+							Format:      "",
+						},
+					},
 				},
 			},
 		},

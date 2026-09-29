@@ -879,6 +879,7 @@ func Convert_compiled_CompiledVMSpec_To_v1alpha1_CompiledVMSpec(in *compiled.Com
 func autoConvert_v1alpha1_CompiledVMStatus_To_compiled_CompiledVMStatus(in *CompiledVMStatus, out *compiled.CompiledVMStatus, s conversion.Scope) error {
 	out.State = in.State
 	out.Placement = (*compiled.VMPlacement)(unsafe.Pointer(in.Placement))
+	out.Released = in.Released
 	return nil
 }
 
@@ -890,6 +891,7 @@ func Convert_v1alpha1_CompiledVMStatus_To_compiled_CompiledVMStatus(in *Compiled
 func autoConvert_compiled_CompiledVMStatus_To_v1alpha1_CompiledVMStatus(in *compiled.CompiledVMStatus, out *CompiledVMStatus, s conversion.Scope) error {
 	out.State = in.State
 	out.Placement = (*VMPlacement)(unsafe.Pointer(in.Placement))
+	out.Released = in.Released
 	return nil
 }
 
