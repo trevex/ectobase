@@ -61,10 +61,9 @@ func readFixture(t *testing.T, name string) string {
 // docs/superpowers/specs/2026-09-23-vm-mobility-across-clusters.md: k03 binds the SAME RBD image, by
 // CSI handle, and that image is still intact at the end of the failover.
 //
-// What it does NOT assert is the source releasing the disk, because the source never does. The first
-// version of this test asserted exactly that, on the assumption that restoring the heartbeat in Phase
-// 12 lets the set-reconcile prune the twins the pool kept while it was down. It does not — see Phase
-// 13, which records what was measured instead.
+// And it asserts the source lets go: once k02's broker is back, it prunes every twin the dispatch
+// deleted while it was down, which releases k02's claim on the image k03 now runs — without taking
+// the image with it.
 //
 // testdata/tier2-vm.yaml asserted the reattachment in prose from the day it was written, years before
 // anything implemented it, and got away with it because this test created a Volume and then checked
@@ -274,32 +273,49 @@ func TestTier2Failover(t *testing.T) {
 		return nil
 	})
 
-	// --- Phase 13: the disk is intact at the end, and still the target's --------------
+	// --- Phase 13: the source lets go of the disk, and the disk survives it ---------
 	//
-	// An end-state check, and deliberately NOT a test of the source's detach — because the source
-	// does not detach. A broker prunes a local twin only when it WITNESSES the upstream twin being
-	// deleted; one that was down at that moment never reconciles the difference afterwards, and
-	// restarting it does not help either. Measured on the live fabric 2026-09-29: k02 held its
-	// CompiledVM, CompiledVolumeAttachment, CompiledNIC, a Bound claim and a Retain PV for 17 minutes
-	// across a broker restart, while the dispatch held no VM at all. k03, whose broker stayed up
-	// throughout, pruned every twin it should have.
+	// The one ordering no other test covers: the source detaches MINUTES after the target adopted the
+	// same image. k02's broker was down when the dispatch deleted k02's twins, so it never saw a
+	// delete event; only the pass it runs on coming back up can find them. Until that pass, k02 holds
+	// a VM and a claim on the RWO image k03 is running — with the fence already released in Phase 12.
 	//
-	// That is a defect in its own right, and a sharper one than a leaked object: the source also keeps
-	// its KubeVirt VirtualMachine (observed "Starting") and its claim on the disk, and Phase 12 has
-	// just RELEASED the fence. The only thing left between a recovered pool and two clusters writing
-	// one ReadWriteOnce image is that the source's VMI had not reached Running. Tracked separately —
-	// asserting the prune here would encode the bug, and asserting its absence would entrench it.
-	//
-	// So what is checked is the thing that must hold either way: the bytes are still there, and the
-	// cluster now running the VM still resolves to them.
+	// Every source-side object is waited out by name. The claim is the one that matters: it goes with
+	// the VolumeAttachment twin, and the Retain PV behind it must leave the image in place.
+	sourceLeftovers := []struct{ kind, name string }{
+		{"compiledvms.compiled.ectobase.dev", tier2VMIName},
+		{"compiledvolumeattachments.compiled.ectobase.dev", att},
+		{"compilednics.compiled.ectobase.dev", tier2VMNS + "-tier2-nic"},
+		{"virtualmachines.kubevirt.io", tier2VMIName},
+		{"persistentvolumeclaims", att},
+	}
+	eventually(t, 5*time.Minute, 10*time.Second, func() error {
+		var left []string
+		for _, o := range sourceLeftovers {
+			out, err := kubectl(ctx, cfg, "k02", "-n", tier2VMNS,
+				"get", o.kind, o.name, "--ignore-not-found", "-o", "name")
+			if err != nil {
+				return fmt.Errorf("get %s/%s on k02: %w", o.kind, o.name, err)
+			}
+			if strings.TrimSpace(out) != "" {
+				left = append(left, o.kind+"/"+o.name)
+			}
+		}
+		if len(left) > 0 {
+			return fmt.Errorf("k02 still holds what failed over to k03: %v", left)
+		}
+		return nil
+	})
+	t.Logf("k02 released the VM and its claim after recovery")
+
 	imgs, err = rbdImages(ctx, cfg, pool)
 	require.NoError(t, err)
 	require.Contains(t, imgs, srcImage,
-		"DATA LOSS: image %s is gone from pool %s by the end of the failover", srcImage, pool)
+		"DATA LOSS: image %s is gone from pool %s once the source released its claim", srcImage, pool)
 	_, h, _, err := diskPV(ctx, cfg, "k03", att)
-	require.NoError(t, err, "k03 no longer has a claim on the disk at the end of the failover")
-	require.Equal(t, srcHandle, h, "k03's disk is no longer the original at the end of the failover")
-	t.Logf("failover disk PASS: %s intact and still bound on k03 after the fence was released", srcImage)
+	require.NoError(t, err, "k03 lost its claim on the disk when k02 released its own")
+	require.Equal(t, srcHandle, h, "k03's disk is no longer the original after k02 released its own")
+	t.Logf("failover disk PASS: %s intact and still bound on k03 after k02 released it", srcImage)
 }
 
 // scaleBrokerReplicas scales a compute cluster's dispatch-broker deployment. Scaling
