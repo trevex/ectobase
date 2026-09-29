@@ -367,6 +367,15 @@ func Up(ctx context.Context, cfg *config.Config) error {
 		if err := deploy.WaitNodesReady(ctx, kubeconfig, len(dc.Nodes)); err != nil {
 			return fmt.Errorf("cluster %s nodes ready: %w", cl.Name, err)
 		}
+		// Talos's host DNS listener loses a boot race in container mode and never retries, which
+		// leaves every pod in the cluster unable to resolve an external name. Re-applying the
+		// resolvers now that the node is up is what gets it bound — see talos.RebindHostDNS for
+		// the failure and why there is no config knob. Same addresses the ResolverConfig render
+		// uses, deliberately: the call repoints the node's resolvers if they disagree.
+		if err := talos.RebindHostDNS(ctx, cfg, cl.Name, talosconfig,
+			[]string{fabric.EdgeLoopback + "::e1", fabric.EdgeLoopback + "::e2"}); err != nil {
+			return fmt.Errorf("cluster %s host dns rebind: %w", cl.Name, err)
+		}
 	}
 
 	// App images were pushed to the in-fabric registry above; each node's containerd

@@ -4,9 +4,11 @@
     A VM's persistent disks are ceph-csi-rbd RBD volumes provisioned as CDI
     `DataVolume`s from a `CompiledVolumeAttachment`. Fenced-node recovery uses the
     csi-addons `NetworkFence` mechanism to blocklist a lost node's RBD access at
-    Ceph before rescheduling. The provisioning path and the fence actuators are
-    implemented; the full failover experience continues to be exercised and
-    hardened, so this integration is marked Partial.
+    Ceph before rescheduling. The provisioning path, the fence actuators and the
+    disk-identity path that carries a disk with its VM are implemented and
+    asserted on the live fabric. It stays Partial because a move is *cold*: the
+    guest stops on one pool and starts on the other. Warm and live moves are
+    designed but unbuilt.
 
 ## Persistent disks for VMs
 
@@ -17,7 +19,9 @@ imported into the disk to make it bootable. The compiler lowers each
 which the per-cluster broker delivers to the target pool.
 
 On the pool cluster the volume-materializer reconciles each
-`CompiledVolumeAttachment` into a CDI `DataVolume`:
+`CompiledVolumeAttachment` into a CDI `DataVolume` — unless the disk already
+exists elsewhere in the fleet, in which case it is bound rather than provisioned
+(see [Disk lifetime across clusters](#disk-lifetime-across-clusters)):
 
 - Backing. The DataVolume is an RBD PVC via the ceph-csi RBD `StorageClass`
   (empty = cluster default), requested `ReadWriteOnce` in block `volumeMode` —
@@ -33,6 +37,48 @@ On the pool cluster the volume-materializer reconciles each
 The [vm-materializer](kubevirt-integration.md) then references these DataVolumes as
 the VM's disks (boot attachment first), so the KubeVirt VM boots from persistent
 RBD storage.
+
+## Disk lifetime across clusters
+
+A VM's `spec.clusterName` can change — a planned move, or a Tier-2 failover
+rescheduling it off a pool that stopped reporting. Compiled twins are per-pool, so
+the old pool's `CompiledVolumeAttachment` is pruned and a new one appears in the
+target. None of that may destroy the disk, which takes three mechanisms:
+
+- **Capture.** When the pool that provisioned a disk first observes its claim
+  bound, it flips the `PersistentVolume` to `reclaimPolicy: Retain` and records the
+  driver's own CSI source. The whole `CSIPersistentVolumeSource` is recorded, not a
+  hand-picked subset: it carries five distinct secret references, and omitting one
+  yields a PV that binds and then fails at `NodeStage` — in another cluster, after
+  a move. The identity travels up through the attachment's status and the broker
+  onto the `Volume`, which is what the compiler reads when it stamps the next
+  attachment.
+- **Adopt.** A pool holding an attachment whose identity is recorded but which has
+  no `DataVolume` of its own is a pool the disk has moved *to*. It replays the
+  recorded identity as a static `Retain` PV, pre-bound to the claim it exists for,
+  rather than asking CDI to provision a second, blank image. The disk is named by
+  the same claim whether it was provisioned or adopted, so the VM references it
+  identically either way.
+- **Release.** Detaching flips every `PersistentVolume` in the attachment's claim
+  tree to `Retain` before releasing it — the attachment's own claim and any claim
+  it owns, because CDI populates a block import through a "prime" claim that holds
+  the image while the named one is still `Pending`. A finalizer on the attachment
+  is what makes this ordering possible: the claims still exist at the point the
+  attachment is being removed.
+
+`Retain` everywhere means nothing reclaims a disk by cascade any more, so deleting
+a `Volume` has to reclaim the image explicitly: the dispatch replays the recorded
+identity as a `Delete`-policy PV, binds a throwaway claim and drops it. That is
+dispatch-local by design — one Ceph cluster backs every pool under the same
+`clusterID`, and ceph-csi's handle-to-image journal lives in RADOS rather than in
+any Kubernetes cluster — so a `Volume` can still be reclaimed after the pool that
+provisioned it is gone. A finalizer holds the `Volume` open until the image is.
+
+One window remains, and it is narrow rather than silent. A disk is adoptable only
+once its identity has been recorded, so a move in the seconds between the claim
+binding and that first reconcile leaves the target to provision a blank disk. The
+original is *orphaned* in Ceph rather than destroyed, and the compiler logs the VM,
+the volume and both pools when it sees a move that early.
 
 ## Node fencing for safe reschedule
 
@@ -79,6 +125,10 @@ sequenceDiagram
     CDI->>Ceph: provision RBD image (import bootImage or blank)
     Ceph-->>CDI: PVC bound → VM disk ready
 
+    Note over Broker,Ceph: Move (planned, or a fenced failover)
+    Broker->>VolM: CompiledVolumeAttachment, recorded identity stamped in
+    VolM->>Ceph: static Retain PV + claim → the SAME RBD image, no DataVolume
+
     Note over Broker,Ceph: Fence on node loss
     participant Dispatch as dispatch (failover)
     Dispatch->>Ceph: NetworkFence Fenced (/64) → osd blocklist add
@@ -94,6 +144,11 @@ sequenceDiagram
 | `Volume` API type | `api/storage/v1alpha1/volume_types.go` |
 | `CompiledVolumeAttachment` type | `api/compiled/v1alpha1/compiledvolumeattachment_types.go` |
 | `CompiledVolumeAttachment` → CDI `DataVolume` | `mesh/controllers/volumematerializer.go` |
+| Disk-identity capture + `Retain` (pool) | `mesh/controllers/diskidentity.go` |
+| Adopt a disk that already exists (pool) | `mesh/controllers/volumeadopt.go` |
+| Identity report, pool → dispatch | `dispatch/pkg/broker/reportdiskidentity.go` |
+| Identity mirror onto the `Volume` | `mesh/controllers/diskidentitymirror.go` |
+| `Volume` delete → RBD image reclaim | `mesh/controllers/volumereclaim.go` |
 | `NetworkFence` storage fencer | `dispatch/pkg/fence/storage.go` |
 | Overlay-route network fencer | `dispatch/pkg/fence/network.go` |
 | Fence-gated failover | `dispatch/pkg/failover/failover.go` |

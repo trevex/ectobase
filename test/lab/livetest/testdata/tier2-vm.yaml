@@ -7,14 +7,15 @@
 # test/e2e/fixtures/multicluster-tier2/vm.yaml but is the canonical fixture the live
 # TestTier2Failover gate applies.
 #
-# This header used to claim "The same RBD (volumeRefs) reattaches on k03." It does NOT, and that
-# sentence was wrong for as long as it existed: there is no volumeHandle on CompiledVolumeAttachment
-# and no adopt-existing path anywhere, so a rebind provisions a blank image. On a PLANNED move of a
-# healthy pool the original is destroyed outright — reproduced live on 2026-09-24, the image vanished
-# from the shared Ceph pool within ten seconds. TestTier2Failover creates a Volume but never asserts
-# anything about the disk, which is how the claim survived unchallenged.
-# Red test: TestVolumeSurvivesClusterRebind (livetest/volumemove_test.go).
-# Fix:      docs/superpowers/plans/2026-09-24-phase0-non-destructive-move.md.
+# The same RBD (volumeRefs) does reattach on k03, and TestTier2Failover now asserts it by CSI handle
+# instead of this file claiming it. The distinction matters, because this header made that claim from
+# the day it was written while nothing implemented it: there was no disk identity on
+# CompiledVolumeAttachment and no adopt path, so a rebind provisioned a blank image and a planned move
+# destroyed the original outright — reproduced live on 2026-09-24, the image gone from the shared Ceph
+# pool within ten seconds. The claim went unchallenged because the test created a Volume and then
+# asserted nothing about it.
+# Built + proven by: docs/superpowers/plans/2026-09-24-phase0-non-destructive-move.md,
+#                    TestVolumeSurvivesClusterRebind (livetest/volumemove_test.go).
 ---
 apiVersion: net.ectobase.dev/v1alpha1
 kind: VPC
@@ -56,10 +57,16 @@ metadata:
   name: tier2-disk
   namespace: default
 spec:
-  # Small RBD boot disk. bootImage makes it bootable (imported into the RBD via CDI); the
-  # materializer only falls back to a containerDisk when NO volumes are present, so an RBD-backed
-  # bootable VM needs a bootImage Volume.
-  size: 1Gi
+  # RBD boot disk. bootImage makes it bootable (imported into the RBD via CDI); the materializer
+  # only falls back to a containerDisk when NO volumes are present, so an RBD-backed bootable VM
+  # needs a bootImage Volume.
+  #
+  # 6Gi, not the 1Gi this asked for until 2026-09-29, because the size has to cover the image's
+  # VIRTUAL size rather than its download: the fedora containerdisk is a ~490MB layer holding a
+  # 5Gi sparse disk.img, and CDI refuses the import outright — "virtual image size 5368709120 is
+  # larger than the reported available storage 1073741824. A larger PVC is required". RBD is thin
+  # provisioned, so the unwritten remainder costs the pool nothing.
+  size: 6Gi
   storageClass: ceph-rbd
   bootImage: "quay.io/containerdisks/fedora:41"
 ---
