@@ -31,6 +31,9 @@ const (
 
 	volReclaimVM     = "vreclaim-vm"
 	volReclaimVolume = "vreclaim-disk"
+
+	volRaceVM     = "vrace-vm"
+	volRaceVolume = "vrace-disk"
 )
 
 // attName is the CompiledVolumeAttachment — and therefore DataVolume and PVC — the compiler derives
@@ -100,6 +103,19 @@ func rbdImages(ctx context.Context, cfg *config.Config, pool string) ([]string, 
 		}
 	}
 	return imgs, nil
+}
+
+// rbdRemove deletes an image from the pool on the fabric's ceph node. Only for a test that
+// knowingly ORPHANS one: reclaim is driven by the recorded identity, so a disk moved before it was
+// ever recorded has nothing left to reclaim it and would otherwise accumulate in the shared pool on
+// every run.
+func rbdRemove(ctx context.Context, cfg *config.Config, pool, image string) error {
+	ctr := "clab-" + cfg.Name + "-ceph"
+	out, err := exec.SudoOutput(ctx, "docker", "exec", ctr, "rbd", "rm", "-p", pool, image)
+	if err != nil {
+		return fmt.Errorf("rbd rm -p %s %s: %w\n%s", pool, image, err, out)
+	}
+	return nil
 }
 
 // diskPV resolves the PV actually backing the attachment's disk in cluster, and returns its
@@ -393,4 +409,90 @@ func TestVolumeDeleteReclaimsTheImage(t *testing.T) {
 		return nil
 	})
 	t.Logf("reclaim PASS: deleting the Volume deleted image %s and then released the Volume", image)
+}
+
+// TestVolumeSurvivesAnImmediateRebind covers the capture window — the last way this design could
+// still lose data, and the one case the move test deliberately excludes.
+//
+// TestVolumeSurvivesClusterRebind waits for the disk's identity to reach the Volume before moving,
+// because only then can the target ADOPT it. This test does the opposite: it moves the instant the
+// claim binds, before anything has protected or recorded the disk. That used to destroy the image
+// outright — the PV still carried the StorageClass's Delete, so pruning the attachment took the claim
+// and the volume with it.
+//
+// What is asserted here is narrower than the move test on purpose, and the difference matters:
+//
+//	the IMAGE SURVIVES                   — no data is destroyed (this test)
+//	the TARGET ATTACHES THE SAME IMAGE   — the move works (TestVolumeSurvivesClusterRebind)
+//
+// Moving inside the window still costs the VM its disk on the far side, because adoption needs an
+// identity that was never recorded; the target provisions a blank one and the original is left
+// orphaned in Ceph. That is recoverable by an operator. Destroying it was not. Turning
+// unrecoverable into recoverable is the whole claim, and overstating it would be worse than leaving
+// the window documented.
+func TestVolumeSurvivesAnImmediateRebind(t *testing.T) {
+	cfg := loadConfig(t)
+	requireFabricUp(t, cfg)
+	ctx := context.Background()
+
+	if !cfg.Fabric.Ceph.Enabled {
+		t.Skip("ceph disabled in lab config (fabric.ceph.enabled=false)")
+	}
+	compute := computeClusters(cfg)
+	if len(compute) < 2 {
+		t.Skip("need >=2 compute clusters to move a disk between them")
+	}
+	src, dst := compute[0].Name, compute[1].Name
+	if _, err := kubectl(ctx, cfg, src, "get", "storageclass", "ceph-rbd"); err != nil {
+		t.Skipf("ceph not deployed (run `lab ceph`): %v", err)
+	}
+	pool, err := rbdPool(ctx, cfg, src)
+	require.NoError(t, err)
+
+	applyDispatch(t, ctx, cfg, volMoveFixture(volRaceVM, volRaceVolume, src))
+	att := attName(volRaceVM, volRaceVolume)
+
+	// The ONLY gate is that the disk exists. Deliberately NOT waiting for the identity: racing that
+	// reconcile is the entire point.
+	var image string
+	eventually(t, 5*time.Minute, 2*time.Second, func() error {
+		_, _, img, err := diskPV(ctx, cfg, src, att)
+		if err != nil {
+			return err
+		}
+		image = img
+		return nil
+	})
+	imgs, err := rbdImages(ctx, cfg, pool)
+	require.NoError(t, err)
+	require.Contains(t, imgs, image, "precondition: the disk must exist before we race its protection")
+	t.Logf("disk exists on %s as %s; moving immediately, without waiting for it to be protected", src, image)
+
+	// This test deliberately produces an orphan: surviving the move is the point, and with no
+	// identity ever recorded there is nothing to reclaim it afterwards. That is the intended trade
+	// (recoverable beats destroyed), but it is still garbage in a shared pool, so remove it here
+	// rather than leave one behind on every run.
+	t.Cleanup(func() {
+		if err := rbdRemove(context.Background(), cfg, pool, image); err != nil {
+			t.Logf("could not remove the orphan %s (it may already be gone): %v", image, err)
+		}
+	})
+
+	_, err = kubectl(ctx, cfg, "dispatch", "patch", "virtualmachine.compute.ectobase.dev", volRaceVM,
+		"-n", volMoveNS, "--type=merge", "-p", fmt.Sprintf(`{"spec":{"clusterName":%q}}`, dst))
+	require.NoError(t, err, "patch spec.clusterName %s -> %s", src, dst)
+
+	// THE POINT: whatever the move costs, it must not destroy the bytes. Sampled across the window in
+	// which the prune and its cascade run, so a destroyed image cannot be missed between polls.
+	deadline := time.Now().Add(90 * time.Second)
+	for time.Now().Before(deadline) {
+		imgs, err := rbdImages(ctx, cfg, pool)
+		require.NoError(t, err)
+		require.Contains(t, imgs, image,
+			"DATA LOSS: image %s was destroyed by a move that raced its protection. The detach must "+
+				"flip the PersistentVolume to Retain before releasing the claim, whatever happened earlier.",
+			image)
+		time.Sleep(3 * time.Second)
+	}
+	t.Logf("survival PASS: %s outlived a move taken before anything protected it", image)
 }

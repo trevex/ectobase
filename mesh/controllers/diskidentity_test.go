@@ -7,6 +7,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
@@ -18,6 +19,8 @@ import (
 	cdiv1 "kubevirt.io/containerized-data-importer-api/pkg/apis/core/v1beta1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 )
 
@@ -319,5 +322,169 @@ func TestDiskIdentity_ReleasesTheDisksObjectsWhenTheAttachmentGoes(t *testing.T)
 	// And the attachment itself is released.
 	if err := c.Get(ctx, key, &cva); err == nil && len(cva.Finalizers) > 0 {
 		t.Errorf("finalizer not released: %v", cva.Finalizers)
+	}
+}
+
+// TestDiskIdentity_RetainsAnUnprotectedDiskBeforeLettingItGo closes the capture window, which is the
+// last way this design could still lose data.
+//
+// A disk is normally protected by the reconcile that follows its claim binding: the PV is flipped to
+// Retain and the identity captured. Between the image existing and that reconcile, the PV still
+// carries the StorageClass's Delete — so a clusterName change landing in that gap prunes the
+// attachment, the cascade takes the claim, and the image is destroyed. That gap cannot be closed by
+// reacting sooner, because the PV is only nameable once the claim binds.
+//
+// It can be closed here instead. The attachment carries a finalizer, and Kubernetes collects
+// dependents only after their owner is actually gone — which a finalizer prevents — so this runs
+// BEFORE the DataVolume and claim are collected. Flipping the PV to Retain at that point makes the
+// detach non-destructive whether or not anything protected the disk earlier.
+//
+// The assertion is about ORDER, not end state: the PV object is deleted too, so "is it Retain now"
+// is unobservable afterwards. What matters is that the Retain patch reaches the API before the claim
+// is released, because after that the driver may already be deleting the image.
+func TestDiskIdentity_RetainsAnUnprotectedDiskBeforeLettingItGo(t *testing.T) {
+	scheme := runtime.NewScheme()
+	for _, add := range []func(*runtime.Scheme) error{compiledv1.AddToScheme, corev1.AddToScheme} {
+		if err := add(scheme); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	now := metav1.Now()
+	cva := &compiledv1.CompiledVolumeAttachment{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "default", Name: "vm1-disk",
+			DeletionTimestamp: &now, Finalizers: []string{finalizerDisk},
+		},
+		Spec: compiledv1.CompiledVolumeAttachmentSpec{VolumeRef: "disk", Size: resource.MustParse("1Gi")},
+	}
+	// The unprotected state: bound claim, PV still carrying the StorageClass's Delete.
+	pv := cephPV("pvc-1", corev1.PersistentVolumeReclaimDelete)
+	block := corev1.PersistentVolumeBlock
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "vm1-disk"},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+			VolumeMode:  &block, VolumeName: "pvc-1",
+		},
+		Status: corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimBound},
+	}
+
+	var ops []string
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cva, pv, pvc).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Patch: func(ctx context.Context, cl client.WithWatch, obj client.Object, p client.Patch, opts ...client.PatchOption) error {
+				if v, ok := obj.(*corev1.PersistentVolume); ok {
+					ops = append(ops, "retain:"+v.Name+":"+string(v.Spec.PersistentVolumeReclaimPolicy))
+				}
+				return cl.Patch(ctx, obj, p, opts...)
+			},
+			Delete: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+				switch obj.(type) {
+				case *corev1.PersistentVolumeClaim:
+					ops = append(ops, "delete:pvc")
+				case *corev1.PersistentVolume:
+					ops = append(ops, "delete:pv")
+				}
+				return cl.Delete(ctx, obj, opts...)
+			},
+		}).Build()
+
+	r := &DiskIdentityReconciler{Client: c}
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: client.ObjectKey{Namespace: "default", Name: "vm1-disk"},
+	}); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	if len(ops) == 0 {
+		t.Fatal("detach touched nothing")
+	}
+	if ops[0] != "retain:pvc-1:Retain" {
+		t.Fatalf("first operation was %q, want the PV flipped to Retain — anything else means the "+
+			"image can still be destroyed by the cascade that follows. full order: %v", ops[0], ops)
+	}
+	// And the claim must go only after that.
+	var retainAt, pvcAt = -1, -1
+	for i, o := range ops {
+		if strings.HasPrefix(o, "retain:") && retainAt < 0 {
+			retainAt = i
+		}
+		if o == "delete:pvc" {
+			pvcAt = i
+		}
+	}
+	if retainAt < 0 || pvcAt < 0 || retainAt > pvcAt {
+		t.Fatalf("Retain must precede releasing the claim; got %v", ops)
+	}
+}
+
+// TestDiskIdentity_RetainsTheDiskHeldByCDIsPrimeClaim pins the case that made the first version of
+// the detach guarantee useless, and which only the live fabric caught.
+//
+// CDI populates a block DataVolume through a "prime" claim it owns-references to the named one.
+// Until the import finishes it is the PRIME claim that is bound to the image, while the attachment's
+// own claim sits Pending with no volumeName. A detach that looks only at the attachment's claim
+// therefore finds nothing to protect during precisely the window where protection matters, and the
+// image is destroyed with the prime claim's volume. Verified on the live lab before this was fixed.
+func TestDiskIdentity_RetainsTheDiskHeldByCDIsPrimeClaim(t *testing.T) {
+	scheme := runtime.NewScheme()
+	for _, add := range []func(*runtime.Scheme) error{compiledv1.AddToScheme, corev1.AddToScheme} {
+		if err := add(scheme); err != nil {
+			t.Fatal(err)
+		}
+	}
+	now := metav1.Now()
+	cva := &compiledv1.CompiledVolumeAttachment{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "default", Name: "vm1-disk",
+			DeletionTimestamp: &now, Finalizers: []string{finalizerDisk},
+		},
+		Spec: compiledv1.CompiledVolumeAttachmentSpec{VolumeRef: "disk", Size: resource.MustParse("1Gi")},
+	}
+	// The attachment's own claim: Pending, bound to nothing — mid-import.
+	target := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "vm1-disk"},
+		Status:     corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimPending},
+	}
+	// CDI's prime claim, owned by it, holding the actual image on a Delete-policy PV.
+	prime := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "default", Name: "prime-abc",
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: "v1", Kind: "PersistentVolumeClaim", Name: "vm1-disk", UID: "u1",
+			}},
+		},
+		Spec:   corev1.PersistentVolumeClaimSpec{VolumeName: "pvc-1"},
+		Status: corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimBound},
+	}
+	pv := cephPV("pvc-1", corev1.PersistentVolumeReclaimDelete)
+
+	var ops []string
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cva, target, prime, pv).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Patch: func(ctx context.Context, cl client.WithWatch, obj client.Object, p client.Patch, opts ...client.PatchOption) error {
+				if v, ok := obj.(*corev1.PersistentVolume); ok {
+					ops = append(ops, "retain:"+v.Name)
+				}
+				return cl.Patch(ctx, obj, p, opts...)
+			},
+			Delete: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+				if v, ok := obj.(*corev1.PersistentVolumeClaim); ok {
+					ops = append(ops, "delete:pvc/"+v.Name)
+				}
+				return cl.Delete(ctx, obj, opts...)
+			},
+		}).Build()
+
+	r := &DiskIdentityReconciler{Client: c}
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: client.ObjectKey{Namespace: "default", Name: "vm1-disk"},
+	}); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	if len(ops) == 0 || ops[0] != "retain:pvc-1" {
+		t.Fatalf("the image held by CDI's prime claim was not retained first; order was %v", ops)
 	}
 }
