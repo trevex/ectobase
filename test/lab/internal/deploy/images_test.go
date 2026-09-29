@@ -99,3 +99,17 @@ func keysOf(m map[string]string) []string {
 	}
 	return ks
 }
+
+// The lab rebuilds and repushes the same :dev tags, so a node that keeps its cached copy runs
+// yesterday's binary after a redeploy — silently, since the rollout itself succeeds. Whenever
+// the images are retargeted at the in-fabric registry, the pull policy has to come with them.
+// The chart default stays IfNotPresent: a real install pins immutable tags and should not re-pull.
+func TestImageSetArgsAlwaysPullsTheMutableDevTags(t *testing.T) {
+	args := strings.Join(imageSetArgs("[fd00:29::5]:5000", poolImages), " ")
+	if !strings.Contains(args, "--set-string imagePullPolicy=Always") {
+		t.Fatalf("retargeted at the lab registry without imagePullPolicy=Always: %s", args)
+	}
+	if got := imageSetArgs("", poolImages); got != nil {
+		t.Fatalf("no registry must leave the chart's images AND pull policy alone, got %v", got)
+	}
+}
