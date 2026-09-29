@@ -105,6 +105,19 @@ func rbdImages(ctx context.Context, cfg *config.Config, pool string) ([]string, 
 	return imgs, nil
 }
 
+// rbdRemove deletes an image from the pool on the fabric's ceph node. Only for a test that
+// knowingly ORPHANS one: reclaim is driven by the recorded identity, so a disk moved before it was
+// ever recorded has nothing left to reclaim it and would otherwise accumulate in the shared pool on
+// every run.
+func rbdRemove(ctx context.Context, cfg *config.Config, pool, image string) error {
+	ctr := "clab-" + cfg.Name + "-ceph"
+	out, err := exec.SudoOutput(ctx, "docker", "exec", ctr, "rbd", "rm", "-p", pool, image)
+	if err != nil {
+		return fmt.Errorf("rbd rm -p %s %s: %w\n%s", pool, image, err, out)
+	}
+	return nil
+}
+
 // diskPV resolves the PV actually backing the attachment's disk in cluster, and returns its
 // volumeHandle and RBD image name.
 //
@@ -454,6 +467,16 @@ func TestVolumeSurvivesAnImmediateRebind(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, imgs, image, "precondition: the disk must exist before we race its protection")
 	t.Logf("disk exists on %s as %s; moving immediately, without waiting for it to be protected", src, image)
+
+	// This test deliberately produces an orphan: surviving the move is the point, and with no
+	// identity ever recorded there is nothing to reclaim it afterwards. That is the intended trade
+	// (recoverable beats destroyed), but it is still garbage in a shared pool, so remove it here
+	// rather than leave one behind on every run.
+	t.Cleanup(func() {
+		if err := rbdRemove(context.Background(), cfg, pool, image); err != nil {
+			t.Logf("could not remove the orphan %s (it may already be gone): %v", image, err)
+		}
+	})
 
 	_, err = kubectl(ctx, cfg, "dispatch", "patch", "virtualmachine.compute.ectobase.dev", volRaceVM,
 		"-n", volMoveNS, "--type=merge", "-p", fmt.Sprintf(`{"spec":{"clusterName":%q}}`, dst))
