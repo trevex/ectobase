@@ -172,6 +172,15 @@ func (r *CompiledVolumeAttachmentReconciler) Reconcile(ctx context.Context, req 
 	}
 	placement := Placement{ClusterName: vm.Spec.ClusterName, WorkloadID: vm.Name}
 	desired := CompileVolumeAttachments(&vm, volList.Items, placement)
+	// The same gate as the CompiledVM compiler (movegate.go): while any other CompiledVM twin of
+	// this VM exists, its pool may still be running the VM, so no disk is compiled into this pool.
+	// Stale attachments elsewhere are still removed below — a disk leaves at once; only arriving
+	// waits.
+	vmTwins, err := twinsOfSource(ctx, r.Client, &compiledv1.CompiledVMList{}, vm.Namespace, vm.Name)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("list compiledvms: %w", err)
+	}
+	gateOpen := len(awaitingRelease(validate.PoolNamespace(vm.Spec.ClusterName), vmTwins)) == 0
 	want := map[types.NamespacedName]compiledv1.CompiledVolumeAttachment{}
 	keep := map[types.NamespacedName]bool{}
 	for _, a := range desired {
@@ -219,7 +228,7 @@ func (r *CompiledVolumeAttachmentReconciler) Reconcile(ctx context.Context, req 
 		// literals would churn Updates. Also refresh the workload label defensively
 		// (immutable in practice — it's vm.Name, the list key — but keeps parity with
 		// the 1:1 CompiledNIC/CompiledVM compilers).
-		if !equality.Semantic.DeepEqual(cur.Spec, w.Spec) || cur.Labels["workload"] != w.Labels["workload"] {
+		if gateOpen && (!equality.Semantic.DeepEqual(cur.Spec, w.Spec) || cur.Labels["workload"] != w.Labels["workload"]) {
 			cur.Spec = w.Spec
 			if cur.Labels == nil {
 				cur.Labels = map[string]string{}
@@ -231,6 +240,9 @@ func (r *CompiledVolumeAttachmentReconciler) Reconcile(ctx context.Context, req 
 		}
 	}
 	for key, w := range want {
+		if !gateOpen {
+			break
+		}
 		if haveKeys[key] {
 			continue
 		}
@@ -254,6 +266,9 @@ func (r *CompiledVolumeAttachmentReconciler) SetupWithManager(mgr ctrl.Manager) 
 		// Not Owns(): the twin lives in the pool namespace, and EnqueueRequestForOwner derives the
 		// request from the DEPENDENT's namespace, which would enqueue a VM key that does not exist.
 		Watches(&compiledv1.CompiledVolumeAttachment{}, handler.EnqueueRequestsFromMapFunc(requestForSource)).
+		// The gate opens when a retired CompiledVM twin disappears, which is not an attachment
+		// event — so watch the VM twins too, or the target's disks wait for an unrelated resync.
+		Watches(&compiledv1.CompiledVM{}, handler.EnqueueRequestsFromMapFunc(requestForSource)).
 		// Only Volume spec changes (Size/StorageClass/BootImage) affect the compiled
 		// attachment; GenerationChangedPredicate skips re-compiling on Volume status writes.
 		Watches(&storagev1.Volume{}, handler.EnqueueRequestsFromMapFunc(r.vmsForVolume),
