@@ -33,6 +33,11 @@ pki:
   reflectorIP: "fd00:db8:0:1::1"
 
 # imagePullPolicy applies to all containers in the chart.
+# External Ceph the dispatch controller fences against. clusterID is the cluster's fsid,
+# which only the deploy knows, so `lab tier2 up` sets it with `helm upgrade --reuse-values`.
+ceph:
+  clusterID: ""
+
 imagePullPolicy: IfNotPresent
 
 # dispatchApiserver tunes the aggregated apiserver.

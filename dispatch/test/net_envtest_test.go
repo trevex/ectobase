@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -48,6 +49,11 @@ func TestVPC_CRUD(t *testing.T) {
 	storageinstall.Install(scheme)
 	if err := apiregistrationv1.AddToScheme(scheme); err != nil {
 		t.Fatalf("register apiregistration scheme: %v", err)
+	}
+	// corev1: the dispatch apiserver enforces NamespaceLifecycle, so a test that compiles a twin
+	// into a per-pool namespace has to be able to create that Namespace first.
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("register corev1 scheme: %v", err)
 	}
 
 	env, err := kitenvtest.NewEnvironment(
@@ -152,6 +158,11 @@ func startNetEnv(t *testing.T) (client.Client, context.Context) {
 	storageinstall.Install(scheme)
 	if err := apiregistrationv1.AddToScheme(scheme); err != nil {
 		t.Fatalf("register apiregistration scheme: %v", err)
+	}
+	// corev1: the dispatch apiserver enforces NamespaceLifecycle, so a test that compiles a twin
+	// into a per-pool namespace has to be able to create that Namespace first.
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("register corev1 scheme: %v", err)
 	}
 
 	env, err := kitenvtest.NewEnvironment(

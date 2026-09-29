@@ -66,6 +66,16 @@ func (r *VolumeMaterializerReconciler) Reconcile(ctx context.Context, req ctrl.R
 	if err := r.Client.Get(ctx, req.NamespacedName, &cva); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
+	// A disk that already exists elsewhere in the fleet is bound, not provisioned: a DataVolume
+	// here would create a SECOND, blank image and the data would be silently gone.
+	adopt, err := r.shouldAdopt(ctx, &cva)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if adopt {
+		return ctrl.Result{}, r.adoptDisk(ctx, &cva)
+	}
+
 	desired := buildDataVolume(&cva)
 	if err := ctrl.SetControllerReference(&cva, desired, r.Client.Scheme()); err != nil {
 		return ctrl.Result{}, err

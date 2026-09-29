@@ -501,6 +501,7 @@ func Tier2(ctx context.Context, cfg *config.Config) error {
 		return fmt.Errorf("locate repo root: %w", err)
 	}
 	poolChart := filepath.Join(root, "charts/ectobase-pool")
+	dispatchChart := filepath.Join(root, "charts/ectobase-dispatch")
 
 	// KubeVirt + CDI on every compute cluster, then enable the vm-materializer (the dispatch runs no
 	// VMs — it is the fence executor / provisioner only). Each compute cluster is independent (own
@@ -527,7 +528,7 @@ func Tier2(ctx context.Context, cfg *config.Config) error {
 	}
 
 	// Wire the ceph fsid into the dispatch controller's ceph-csi fence actuator.
-	if err := deploy.PatchDispatchCSIClusterID(ctx, nil, p.clusterKubeconfig(dispatchCluster), fsid); err != nil {
+	if err := deploy.SetDispatchCSIClusterID(ctx, nil, p.clusterKubeconfig(dispatchCluster), dispatchChart, fsid); err != nil {
 		return fmt.Errorf("wire dispatch csi-cluster-id: %w", err)
 	}
 
@@ -588,6 +589,10 @@ func deployEctobase(ctx context.Context, cfg *config.Config) error {
 		})
 	}
 
+	// Ceph may not be deployed (ceph.env absent), in which case the fence stays disarmed; a missing
+	// file is not an error here, unlike in `lab tier2` where ceph is a prerequisite.
+	cephFSID, _ := readCephFSID(filepath.Join(p.build, "ceph.env"))
+
 	spec := deploy.EctobaseSpec{
 		RepoRoot:           root,
 		WorkDir:            filepath.Join(p.build, "deploy"),
@@ -595,6 +600,7 @@ func deployEctobase(ctx context.Context, cfg *config.Config) error {
 		DispatchIdentity:   dc.Nodes[0].IdentityAddr,
 		DispatchChartPath:  filepath.Join(root, "charts/ectobase-dispatch"),
 		PoolChartPath:      filepath.Join(root, "charts/ectobase-pool"),
+		CephClusterID:      cephFSID,
 		NADCRDPath:         filepath.Join(root, "test/lab/deploy/nad-crd.yaml"),
 		UnderlayWithin:     fabric.NodeAggr,
 		Compute:            compute,

@@ -9,6 +9,7 @@ import (
 	"sort"
 
 	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	kubevirtv1 "kubevirt.io/api/core/v1"
@@ -61,7 +62,17 @@ func buildVM(cvm *compiledv1.CompiledVM, attachments []compiledv1.CompiledVolume
 		})
 		for _, a := range ordered {
 			disks = append(disks, kubevirtv1.Disk{Name: a.Name, DiskDevice: kubevirtv1.DiskDevice{Disk: &kubevirtv1.DiskTarget{Bus: kubevirtv1.DiskBusVirtio}}})
-			volumes = append(volumes, kubevirtv1.Volume{Name: a.Name, VolumeSource: kubevirtv1.VolumeSource{DataVolume: &kubevirtv1.DataVolumeSource{Name: a.Name}}})
+			// An ADOPTED disk has no DataVolume — it was provisioned in another cluster and is bound
+			// here by a static PV — so it is referenced by its claim. A DataVolume source would wait
+			// forever for an object nothing is going to create. The volume NAME is the attachment's
+			// either way, so guest-visible disk order does not shift when a VM moves.
+			src := kubevirtv1.VolumeSource{DataVolume: &kubevirtv1.DataVolumeSource{Name: a.Name}}
+			if a.Spec.DiskIdentity != nil && a.Spec.DiskIdentity.CSI != nil {
+				src = kubevirtv1.VolumeSource{PersistentVolumeClaim: &kubevirtv1.PersistentVolumeClaimVolumeSource{
+					PersistentVolumeClaimVolumeSource: corev1.PersistentVolumeClaimVolumeSource{ClaimName: a.Name},
+				}}
+			}
+			volumes = append(volumes, kubevirtv1.Volume{Name: a.Name, VolumeSource: src})
 		}
 	} else {
 		// Ephemeral fallback: containerDisk from Image (Phase-4 behavior).

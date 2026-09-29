@@ -68,6 +68,8 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &compiledv1alpha1.CompiledVolumeAttachmentSpecApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("CompiledVolumeAttachmentStatus"):
 		return &compiledv1alpha1.CompiledVolumeAttachmentStatusApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("DiskIdentity"):
+		return &compiledv1alpha1.DiskIdentityApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("PortStatus"):
 		return &compiledv1alpha1.PortStatusApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("VMPlacement"):
@@ -188,6 +190,8 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &applyconfigurationsplatformv1alpha1.RouteBusIdentityStatusApplyConfiguration{}
 
 		// Group=storage.ectobase.dev, Version=v1alpha1
+	case storagev1alpha1.SchemeGroupVersion.WithKind("DiskIdentity"):
+		return &applyconfigurationsstoragev1alpha1.DiskIdentityApplyConfiguration{}
 	case storagev1alpha1.SchemeGroupVersion.WithKind("Volume"):
 		return &applyconfigurationsstoragev1alpha1.VolumeApplyConfiguration{}
 	case storagev1alpha1.SchemeGroupVersion.WithKind("VolumeSpec"):

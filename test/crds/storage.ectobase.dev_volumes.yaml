@@ -61,6 +61,154 @@ spec:
           status:
             description: VolumeStatus is the observed state of a Volume.
             properties:
+              diskIdentity:
+                description: |-
+                  DiskIdentity, once set, is the disk backing this Volume. It is mirrored here from the
+                  CompiledVolumeAttachment a pool reported it on, and is what a later attachment in ANOTHER
+                  cluster is stamped with so it adopts this disk instead of provisioning a blank one.
+                properties:
+                  capacity:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    description: Capacity is the PV's actual capacity, which a driver
+                      may round up from the requested Size.
+                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                    x-kubernetes-int-or-string: true
+                  csi:
+                    description: CSI is the provisioned PersistentVolume's CSI source,
+                      copied as-is.
+                    properties:
+                      controllerExpandSecretRef:
+                        description: |-
+                          controllerExpandSecretRef is a reference to the secret object containing
+                          sensitive information to pass to the CSI driver to complete the CSI
+                          ControllerExpandVolume call.
+                          This field is optional, and may be empty if no secret is required. If the
+                          secret object contains more than one secret, all secrets are passed.
+                        properties:
+                          name:
+                            description: name is unique within a namespace to reference
+                              a secret resource.
+                            type: string
+                          namespace:
+                            description: namespace defines the space within which
+                              the secret name must be unique.
+                            type: string
+                        type: object
+                        x-kubernetes-map-type: atomic
+                      controllerPublishSecretRef:
+                        description: |-
+                          controllerPublishSecretRef is a reference to the secret object containing
+                          sensitive information to pass to the CSI driver to complete the CSI
+                          ControllerPublishVolume and ControllerUnpublishVolume calls.
+                          This field is optional, and may be empty if no secret is required. If the
+                          secret object contains more than one secret, all secrets are passed.
+                        properties:
+                          name:
+                            description: name is unique within a namespace to reference
+                              a secret resource.
+                            type: string
+                          namespace:
+                            description: namespace defines the space within which
+                              the secret name must be unique.
+                            type: string
+                        type: object
+                        x-kubernetes-map-type: atomic
+                      driver:
+                        description: |-
+                          driver is the name of the driver to use for this volume.
+                          Required.
+                        type: string
+                      fsType:
+                        description: |-
+                          fsType to mount. Must be a filesystem type supported by the host operating system.
+                          Ex. "ext4", "xfs", "ntfs".
+                        type: string
+                      nodeExpandSecretRef:
+                        description: |-
+                          nodeExpandSecretRef is a reference to the secret object containing
+                          sensitive information to pass to the CSI driver to complete the CSI
+                          NodeExpandVolume call.
+                          This field is optional, may be omitted if no secret is required. If the
+                          secret object contains more than one secret, all secrets are passed.
+                        properties:
+                          name:
+                            description: name is unique within a namespace to reference
+                              a secret resource.
+                            type: string
+                          namespace:
+                            description: namespace defines the space within which
+                              the secret name must be unique.
+                            type: string
+                        type: object
+                        x-kubernetes-map-type: atomic
+                      nodePublishSecretRef:
+                        description: |-
+                          nodePublishSecretRef is a reference to the secret object containing
+                          sensitive information to pass to the CSI driver to complete the CSI
+                          NodePublishVolume and NodeUnpublishVolume calls.
+                          This field is optional, and may be empty if no secret is required. If the
+                          secret object contains more than one secret, all secrets are passed.
+                        properties:
+                          name:
+                            description: name is unique within a namespace to reference
+                              a secret resource.
+                            type: string
+                          namespace:
+                            description: namespace defines the space within which
+                              the secret name must be unique.
+                            type: string
+                        type: object
+                        x-kubernetes-map-type: atomic
+                      nodeStageSecretRef:
+                        description: |-
+                          nodeStageSecretRef is a reference to the secret object containing sensitive
+                          information to pass to the CSI driver to complete the CSI NodeStageVolume
+                          and NodeStageVolume and NodeUnstageVolume calls.
+                          This field is optional, and may be empty if no secret is required. If the
+                          secret object contains more than one secret, all secrets are passed.
+                        properties:
+                          name:
+                            description: name is unique within a namespace to reference
+                              a secret resource.
+                            type: string
+                          namespace:
+                            description: namespace defines the space within which
+                              the secret name must be unique.
+                            type: string
+                        type: object
+                        x-kubernetes-map-type: atomic
+                      readOnly:
+                        description: |-
+                          readOnly value to pass to ControllerPublishVolumeRequest.
+                          Defaults to false (read/write).
+                        type: boolean
+                      volumeAttributes:
+                        additionalProperties:
+                          type: string
+                        description: volumeAttributes of the volume to publish.
+                        type: object
+                      volumeHandle:
+                        description: |-
+                          volumeHandle is the unique volume name returned by the CSI volume
+                          plugin’s CreateVolume to refer to the volume on all subsequent calls.
+                          Required.
+                        type: string
+                    required:
+                    - driver
+                    - volumeHandle
+                    type: object
+                type: object
+              diskReclaimStarted:
+                description: |-
+                  DiskReclaimStarted records that the objects handing this Volume's image back to its CSI
+                  driver for deletion have been created.
+
+                  It exists to tell two states apart that look identical from outside: "the reclaim has not
+                  begun" and "the driver finished and removed the PersistentVolume". Both present as an absent
+                  PV, and only the second means the image is actually gone.
+                type: boolean
               phase:
                 description: Phase is the current lifecycle phase of the Volume.
                 type: string

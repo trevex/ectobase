@@ -136,6 +136,11 @@ func (in CompiledVolumeAttachmentStatus) OpenAPIModelName() string {
 }
 
 // OpenAPIModelName returns the OpenAPI model name for this type.
+func (in DiskIdentity) OpenAPIModelName() string {
+	return "dev.ectobase.compiled.v1alpha1.DiskIdentity"
+}
+
+// OpenAPIModelName returns the OpenAPI model name for this type.
 func (in LocalObjectReference) OpenAPIModelName() string {
 	return "dev.ectobase.compiled.v1alpha1.LocalObjectReference"
 }

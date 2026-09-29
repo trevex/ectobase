@@ -503,6 +503,8 @@ _Appears in:_
 | `storageClass` _string_ | StorageClass is the ceph-csi RBD StorageClass (empty = cluster default). |  | Optional: \{\} <br /> |
 | `bootImage` _string_ | BootImage, if set, is imported into the disk (bootable); empty = blank disk. |  | Optional: \{\} <br /> |
 | `boot` _boolean_ | Boot marks this attachment as the VM's boot disk. |  | Optional: \{\} <br /> |
+| `volumeRef` _string_ | VolumeRef is the name of the source Volume, in the VM's namespace.<br />Carried explicitly because consumers need to get back to the Volume and neither alternative<br />works: this object's name is <vmNamespace>-<vmName>-<volumeRef>, which is ambiguous to split<br />as soon as any component contains a '-', and the stamped source annotations name the<br />VirtualMachine, since attachments are 1:N per VM. |  | Optional: \{\} <br /> |
+| `diskIdentity` _[DiskIdentity](#diskidentity)_ | DiskIdentity, if set, is an existing disk this attachment must ADOPT rather than provision.<br />The compiler stamps it from the Volume's observed identity, so a twin landing in a new cluster<br />binds the image that already holds the data.<br />It travels downward in spec, while the same information travels upward in status: the target<br />cluster must be handed the identity, never have to go and read an observation. |  | Optional: \{\} <br /> |
 
 
 #### CompiledVolumeAttachmentStatus
@@ -519,6 +521,39 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `state` _string_ | State is the materialization state. |  | Optional: \{\} <br /> |
+| `diskIdentity` _[DiskIdentity](#diskidentity)_ | DiskIdentity is the identity of the disk actually provisioned for this attachment, reported<br />upward by the pool that provisioned it. It lands here rather than directly on the source<br />Volume because the broker's writes are scoped to its own pool namespace; a mesh controller<br />mirrors it onto the Volume. |  | Optional: \{\} <br /> |
+
+
+#### DiskIdentity
+
+
+
+DiskIdentity is the CSI identity of an already-provisioned disk, captured from the
+PersistentVolume the driver produced for it. It is what lets an attachment compiled into a
+DIFFERENT cluster bind the SAME underlying image instead of provisioning a blank one: without it
+a cluster rebind destroys the disk (see
+docs/superpowers/plans/2026-09-24-phase0-non-destructive-move.md).
+
+The entire CSI source is kept verbatim rather than a handle plus reconstructed parameters.
+Rebuilding a ceph-csi PV from StorageClass parameters means re-deriving clusterID, pool,
+imageName, journalPool and up to five distinct secret references by hand, and dropping any one of
+them yields a PV that binds and then fails to mount at NodeStage. Replaying what the driver itself
+emitted cannot drift from the driver's own conventions.
+
+Deliberately redeclared here rather than reusing storage.DiskIdentity, for the same reason
+VMPlacement is (compiledvm_types.go): the compiled group is self-contained, and a pool consumes
+only compiled.ectobase.dev and never needs the source API.
+
+
+
+_Appears in:_
+- [CompiledVolumeAttachmentSpec](#compiledvolumeattachmentspec)
+- [CompiledVolumeAttachmentStatus](#compiledvolumeattachmentstatus)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `csi` _[CSIPersistentVolumeSource](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30/#csipersistentvolumesource-v1-core)_ | CSI is the provisioned PersistentVolume's CSI source, copied as-is. |  | Optional: \{\} <br /> |
+| `capacity` _[Quantity](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30/#quantity-resource-api)_ | Capacity is the PV's actual capacity, which a driver may round up from the requested Size;<br />a replayed PV must declare what exists, not what was asked for. |  | Optional: \{\} <br /> |
 
 
 

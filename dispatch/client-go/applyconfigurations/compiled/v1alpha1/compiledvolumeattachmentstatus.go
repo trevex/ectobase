@@ -9,6 +9,11 @@ package v1alpha1
 type CompiledVolumeAttachmentStatusApplyConfiguration struct {
 	// State is the materialization state.
 	State *string `json:"state,omitempty"`
+	// DiskIdentity is the identity of the disk actually provisioned for this attachment, reported
+	// upward by the pool that provisioned it. It lands here rather than directly on the source
+	// Volume because the broker's writes are scoped to its own pool namespace; a mesh controller
+	// mirrors it onto the Volume.
+	DiskIdentity *DiskIdentityApplyConfiguration `json:"diskIdentity,omitempty"`
 }
 
 // CompiledVolumeAttachmentStatusApplyConfiguration constructs a declarative configuration of the CompiledVolumeAttachmentStatus type for use with
@@ -22,5 +27,13 @@ func CompiledVolumeAttachmentStatus() *CompiledVolumeAttachmentStatusApplyConfig
 // If called multiple times, the State field is set to the value of the last call.
 func (b *CompiledVolumeAttachmentStatusApplyConfiguration) WithState(value string) *CompiledVolumeAttachmentStatusApplyConfiguration {
 	b.State = &value
+	return b
+}
+
+// WithDiskIdentity sets the DiskIdentity field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the DiskIdentity field is set to the value of the last call.
+func (b *CompiledVolumeAttachmentStatusApplyConfiguration) WithDiskIdentity(value *DiskIdentityApplyConfiguration) *CompiledVolumeAttachmentStatusApplyConfiguration {
+	b.DiskIdentity = value
 	return b
 }

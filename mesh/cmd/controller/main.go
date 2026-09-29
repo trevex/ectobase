@@ -14,10 +14,12 @@ import (
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
 	storagev1 "github.com/trevex/ectobase/api/storage/v1alpha1"
 	"github.com/trevex/ectobase/mesh/controllers"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	// registers --kubeconfig flag to flag.CommandLine via init().
 	_ "sigs.k8s.io/controller-runtime/pkg/client/config"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
@@ -49,6 +51,11 @@ func main() {
 	flag.StringVar(&vmNetworkName, "vm-network-name", "ectobase-system/flowplane", "Multus NAD (ns/name) for the KubeVirt VM flowplane binding, stamped onto CompiledVMs.")
 	flag.Parse()
 
+	// Without this, controller-runtime discards every log line -- including reconcile errors --
+	// and the binary fails silently. A disk-identity bug was invisible here until this was added:
+	// the only symptom was a disk that never got its reclaimPolicy flipped, with no error anywhere.
+	ctrl.SetLogger(zap.New(zap.UseDevMode(true)))
+
 	scheme := runtime.NewScheme()
 	if err := netv1.AddToScheme(scheme); err != nil {
 		log.Fatalf("add scheme: %v", err)
@@ -61,6 +68,12 @@ func main() {
 	}
 	if err := storagev1.AddToScheme(scheme); err != nil {
 		log.Fatalf("add storage scheme: %v", err)
+	}
+	// Core types: reclaiming a Volume's image drives a PersistentVolume/Claim pair. Reachable on the
+	// same endpoint as everything else — the controller uses the in-cluster config, and the dispatch
+	// cluster's apiserver serves core v1 alongside the aggregated ectobase groups.
+	if err := corev1.AddToScheme(scheme); err != nil {
+		log.Fatalf("add core scheme: %v", err)
 	}
 
 	// Build the rest.Config from --dispatch-kubeconfig if given, else fall back to the
@@ -124,6 +137,21 @@ func main() {
 	// VirtualMachine — the cross-namespace half of that write, which a pool's broker must not have.
 	if err := (&controllers.VMPlacementMirrorReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
 		log.Fatalf("setup vmplacementmirror controller: %v", err)
+	}
+
+	// The same cross-namespace hop for a provisioned disk's identity: from the attachment a pool
+	// reported it on, onto the Volume, which has no cluster and so survives a rebind of the VM.
+	if err := (&controllers.DiskIdentityMirrorReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
+		log.Fatalf("setup diskidentitymirror controller: %v", err)
+	}
+
+	// Deletes the RBD image behind a Volume when the Volume is deleted. Necessary because Phase 0
+	// took the disk out of the ownership cascade that used to reclaim it: a provisioned PV is
+	// flipped to Retain so a clusterName change detaches the disk rather than destroying it, which
+	// means nothing reclaims the image by cascade any more. Runs here because the dispatch already
+	// has ceph-csi (as the Tier-2 fence executor) and one Ceph cluster backs every pool.
+	if err := (&controllers.VolumeReclaimReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
+		log.Fatalf("setup volumereclaim controller: %v", err)
 	}
 
 	// Backstop for the compiled-twin finalizers: reclaims twins whose source is gone (a

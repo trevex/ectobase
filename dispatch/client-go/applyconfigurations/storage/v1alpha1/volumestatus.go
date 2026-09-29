@@ -9,6 +9,17 @@ package v1alpha1
 type VolumeStatusApplyConfiguration struct {
 	// Phase is the current lifecycle phase of the Volume.
 	Phase *string `json:"phase,omitempty"`
+	// DiskIdentity, once set, is the disk backing this Volume. It is mirrored here from the
+	// CompiledVolumeAttachment a pool reported it on, and is what a later attachment in ANOTHER
+	// cluster is stamped with so it adopts this disk instead of provisioning a blank one.
+	DiskIdentity *DiskIdentityApplyConfiguration `json:"diskIdentity,omitempty"`
+	// DiskReclaimStarted records that the objects handing this Volume's image back to its CSI
+	// driver for deletion have been created.
+	//
+	// It exists to tell two states apart that look identical from outside: "the reclaim has not
+	// begun" and "the driver finished and removed the PersistentVolume". Both present as an absent
+	// PV, and only the second means the image is actually gone.
+	DiskReclaimStarted *bool `json:"diskReclaimStarted,omitempty"`
 }
 
 // VolumeStatusApplyConfiguration constructs a declarative configuration of the VolumeStatus type for use with
@@ -22,5 +33,21 @@ func VolumeStatus() *VolumeStatusApplyConfiguration {
 // If called multiple times, the Phase field is set to the value of the last call.
 func (b *VolumeStatusApplyConfiguration) WithPhase(value string) *VolumeStatusApplyConfiguration {
 	b.Phase = &value
+	return b
+}
+
+// WithDiskIdentity sets the DiskIdentity field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the DiskIdentity field is set to the value of the last call.
+func (b *VolumeStatusApplyConfiguration) WithDiskIdentity(value *DiskIdentityApplyConfiguration) *VolumeStatusApplyConfiguration {
+	b.DiskIdentity = value
+	return b
+}
+
+// WithDiskReclaimStarted sets the DiskReclaimStarted field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the DiskReclaimStarted field is set to the value of the last call.
+func (b *VolumeStatusApplyConfiguration) WithDiskReclaimStarted(value bool) *VolumeStatusApplyConfiguration {
+	b.DiskReclaimStarted = &value
 	return b
 }

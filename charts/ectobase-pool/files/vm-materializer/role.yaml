@@ -5,6 +5,19 @@ metadata:
   name: vm-materializer
 rules:
 - apiGroups:
+  - ""
+  resources:
+  - persistentvolumeclaims
+  - persistentvolumes
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
   - cdi.kubevirt.io
   resources:
   - datavolumes
@@ -20,7 +33,6 @@ rules:
   - compiled.ectobase.dev
   resources:
   - compiledvms
-  - compiledvolumeattachments
   verbs:
   - get
   - list
@@ -34,6 +46,16 @@ rules:
   - get
   - patch
   - update
+- apiGroups:
+  - compiled.ectobase.dev
+  resources:
+  - compiledvolumeattachments
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
 - apiGroups:
   - kubevirt.io
   resources:

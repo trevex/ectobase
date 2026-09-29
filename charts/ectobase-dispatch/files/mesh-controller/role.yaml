@@ -12,6 +12,17 @@ rules:
   - create
   - patch
 - apiGroups:
+  - ""
+  resources:
+  - persistentvolumeclaims
+  - persistentvolumes
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - watch
+- apiGroups:
   - compiled.ectobase.dev
   resources:
   - compiledcontainers
@@ -128,4 +139,13 @@ rules:
   verbs:
   - get
   - list
+  - update
   - watch
+- apiGroups:
+  - storage.ectobase.dev
+  resources:
+  - volumes/status
+  verbs:
+  - get
+  - patch
+  - update
