@@ -10,10 +10,13 @@ import (
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
+	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	computev1 "github.com/trevex/ectobase/api/compute/v1alpha1"
 	platformv1 "github.com/trevex/ectobase/api/platform/v1alpha1"
+	"github.com/trevex/ectobase/api/validate"
 	"github.com/trevex/ectobase/dispatch/pkg/clusterpool"
 )
 
@@ -255,5 +258,55 @@ func TestFailover_SingleNodePrefixRepeatedPerNode_StillRebinds(t *testing.T) {
 	}
 	if len(rec.fenced) != 1 {
 		t.Fatalf("the one distinct /64 should be fenced once, not once per reporting node: %v", rec.fenced)
+	}
+}
+
+// retiredTwinOn is a CompiledVM twin on pool, retired by a rebind (Terminating, held by the
+// release finalizer).
+func retiredTwinOn(pool string) *compiledv1.CompiledVM {
+	now := metav1.Now()
+	return &compiledv1.CompiledVM{ObjectMeta: metav1.ObjectMeta{
+		Namespace: validate.PoolNamespace(pool), Name: "default-vm1",
+		DeletionTimestamp: &now, Finalizers: []string{"compiled.ectobase.dev/source-released"},
+	}, Spec: compiledv1.CompiledVMSpec{ClusterName: pool}}
+}
+
+// A lost pool's broker cannot report release; the fence is the proof instead.
+func TestFailover_FencedPool_ReleasesRetiredTwins(t *testing.T) {
+	scheme := testScheme(t)
+	lost := lostPoolObj("A", "2001:db8:0:1::/64")
+	twin := retiredTwinOn("A")
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(lost, readyPoolObj("B"), twin).
+		WithStatusSubresource(lost, twin).Build()
+	r := &Reconciler{Client: c, StorageFencer: okFencer{}, NetworkFencer: okFencer{}, FailoverThreshold: time.Minute}
+
+	if _, err := r.Reconcile(context.Background(), req("A")); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	var got compiledv1.CompiledVM
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(twin), &got); err != nil {
+		t.Fatal(err)
+	}
+	if !got.Status.Released {
+		t.Fatal("a fenced pool's retired twin was not released")
+	}
+}
+
+// Without complete fence coverage nothing is proven, so nothing is released.
+func TestFailover_PartialFence_ReleasesNothing(t *testing.T) {
+	scheme := testScheme(t)
+	lost := lostPoolObj("A", "2001:db8:0:1::/64")
+	twin := retiredTwinOn("A")
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(lost, readyPoolObj("B"), twin).
+		WithStatusSubresource(lost, twin).Build()
+	r := &Reconciler{Client: c, StorageFencer: okFencer{}, NetworkFencer: denyFencer{err: errors.New("no")}, FailoverThreshold: time.Minute}
+
+	_, _ = r.Reconcile(context.Background(), req("A"))
+	var got compiledv1.CompiledVM
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(twin), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Status.Released {
+		t.Fatal("released a twin on a pool whose fence did not confirm")
 	}
 }
