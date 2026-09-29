@@ -108,12 +108,8 @@ func (r *DiskIdentityReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	if pv.Spec.PersistentVolumeReclaimPolicy != corev1.PersistentVolumeReclaimRetain {
-		orig := pv.DeepCopy()
-		pv.Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimRetain
-		if err := r.Client.Patch(ctx, &pv, client.MergeFrom(orig)); err != nil {
-			return ctrl.Result{}, fmt.Errorf("retain pv %s: %w", pv.Name, err)
-		}
+	if err := r.ensureRetain(ctx, &pv); err != nil {
+		return ctrl.Result{}, err
 	}
 
 	id := diskIdentityFromPV(&pv)
@@ -128,25 +124,99 @@ func (r *DiskIdentityReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	return ctrl.Result{}, nil
 }
 
-// releaseDisk lets this cluster go of an attachment's disk, without destroying it.
+// ensureRetain makes a PersistentVolume outlive its claim, so deleting the claim detaches the disk
+// instead of destroying it. A no-op when the PV already says Retain, so it is safe to call on every
+// pass.
+func (r *DiskIdentityReconciler) ensureRetain(ctx context.Context, pv *corev1.PersistentVolume) error {
+	if pv.Spec.PersistentVolumeReclaimPolicy == corev1.PersistentVolumeReclaimRetain {
+		return nil
+	}
+	orig := pv.DeepCopy()
+	pv.Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimRetain
+	if err := r.Client.Patch(ctx, pv, client.MergeFrom(orig)); err != nil {
+		return fmt.Errorf("retain pv %s: %w", pv.Name, err)
+	}
+	return nil
+}
+
+// pvClaiming finds the PersistentVolume that names claim, for the case where the claim itself is
+// already gone. A PV keeps its claimRef after release, so this still identifies the disk when the
+// usual route — the claim's spec.volumeName — is no longer available.
+func (r *DiskIdentityReconciler) pvClaiming(ctx context.Context, claim client.ObjectKey) (string, error) {
+	var pvs corev1.PersistentVolumeList
+	if err := r.Client.List(ctx, &pvs); err != nil {
+		return "", fmt.Errorf("list persistentvolumes to find the one claimed by %s: %w", claim, err)
+	}
+	for i := range pvs.Items {
+		ref := pvs.Items[i].Spec.ClaimRef
+		if ref != nil && ref.Namespace == claim.Namespace && ref.Name == claim.Name {
+			return pvs.Items[i].Name, nil
+		}
+	}
+	return "", nil
+}
+
+// releaseDisk lets this cluster go of an attachment's disk WITHOUT destroying it, and is where the
+// last data-loss window in this design is closed.
 //
-// The claim goes first and the PersistentVolume object after, because deleting a PV that is still
-// bound only marks it and waits. The IMAGE is untouched by both: the PV is Retain by the time
-// anything here can delete it, and deleting a Retain PV object never touches the volume behind it.
-// Reclaiming the image itself belongs to the Volume, which is the thing that actually owns it.
+// A disk is normally protected by the reconcile that follows its claim binding. Between the image
+// existing and that reconcile the PV still carries the StorageClass's reclaimPolicy — Delete, in the
+// lab — so a clusterName change landing in that gap would prune the attachment, the cascade would
+// take the claim, and the image would be gone. The gap cannot be closed by reacting sooner: the PV is
+// only nameable once the claim binds, which is the same moment.
+//
+// It is closed HERE instead. This runs under the attachment's finalizer, and Kubernetes collects
+// dependents only once their owner is actually gone — which the finalizer prevents — so the
+// DataVolume and claim still exist at this point. Flipping the PV to Retain before dropping the claim
+// therefore makes every detach non-destructive, whether or not anything protected the disk earlier.
+// Order matters and is asserted by a test: after the claim is released the driver may already be
+// deleting the volume.
+//
+// Retaining here never leaks, because reclaiming the image is the Volume's job: VolumeReclaim
+// replays the identity as a Delete-policy PV when the Volume itself is deleted.
 func (r *DiskIdentityReconciler) releaseDisk(ctx context.Context, cva *compiledv1.CompiledVolumeAttachment) error {
 	key := client.ObjectKey{Namespace: cva.Namespace, Name: cva.Name}
+
 	var pvc corev1.PersistentVolumeClaim
-	err := r.Client.Get(ctx, key, &pvc)
-	if apierrors.IsNotFound(err) {
-		return nil // already gone (a provisioned disk's claim follows its DataVolume)
+	pvcErr := r.Client.Get(ctx, key, &pvc)
+	if pvcErr != nil && !apierrors.IsNotFound(pvcErr) {
+		return fmt.Errorf("get claim %s: %w", key, pvcErr)
 	}
-	if err != nil {
-		return fmt.Errorf("get claim %s: %w", key, err)
+	havePVC := pvcErr == nil
+
+	pvName := ""
+	if havePVC {
+		pvName = pvc.Spec.VolumeName
 	}
-	pvName := pvc.Spec.VolumeName
-	if err := r.Client.Delete(ctx, &pvc); err != nil && !apierrors.IsNotFound(err) {
-		return fmt.Errorf("release claim %s: %w", key, err)
+	if pvName == "" {
+		// The claim is gone, or bound to nothing yet. A released PV still names it, so look there
+		// rather than give up on protecting the disk.
+		found, err := r.pvClaiming(ctx, key)
+		if err != nil {
+			return err
+		}
+		pvName = found
+	}
+
+	if pvName != "" {
+		var pv corev1.PersistentVolume
+		switch err := r.Client.Get(ctx, client.ObjectKey{Name: pvName}, &pv); {
+		case apierrors.IsNotFound(err):
+			pvName = "" // already gone; nothing to retain and nothing to delete
+		case err != nil:
+			return fmt.Errorf("get persistentvolume %s: %w", pvName, err)
+		default:
+			// THE GUARANTEE. Before anything releases the claim.
+			if err := r.ensureRetain(ctx, &pv); err != nil {
+				return err
+			}
+		}
+	}
+
+	if havePVC {
+		if err := r.Client.Delete(ctx, &pvc); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("release claim %s: %w", key, err)
+		}
 	}
 	if pvName == "" {
 		return nil
