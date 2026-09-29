@@ -8,7 +8,7 @@ import (
 
 var tier2Cmd = &cobra.Command{
 	Use:   "tier2",
-	Short: "deploy the Tier-2 (VM live-migration + fencing) prerequisites",
+	Short: "deploy the Tier-2 (fenced cross-cluster VM reschedule) prerequisites",
 	Long: "KubeVirt + CDI + the flowplane network binding on every compute cluster, plus the\n" +
 		"ceph fsid wired into the dispatch controller's ceph-csi fence actuator. Requires\n" +
 		"fabric.ceph.enabled, an already-up fabric, and that `lab ceph` has already run\n" +

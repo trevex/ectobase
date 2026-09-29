@@ -183,8 +183,11 @@ from the compiled objects.
 Because policy is keyed by `(VNI, overlay IP)` rather than a `nodeName`, policy
 follows the interface: wherever the CNI attaches a NIC, that node's agent
 programs its firewall/NAT/LB/QoS, and no other node's does. This is what lets
-auto-placed workloads, rescheduling, and live migration "just work" with no
-control-plane node write-back — the `CompiledNIC` has no node field at all. See
+auto-placed workloads and rescheduling "just work" with no control-plane node
+write-back — the `CompiledNIC` has no node field at all. It would serve live
+migration the same way, though there is no live migration to serve: see
+[rescheduling & failover](./rescheduling-and-failover.md) for what Tier-2 actually
+does. See
 [CNI integration → Self-locating agent](./cni-integration.md#self-locating-agent).
 
 ## The full pipeline

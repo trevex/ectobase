@@ -149,8 +149,9 @@ node's VTEP — the one underlay address every interface on the node shares
 (node-local dataplane state, not central config).
 
 The consequence is that policy follows the interface. Wherever the CNI lands a
-NIC — on an auto-scheduled node, or after a reschedule / live migration — the
-agent on that node programs its policy, and no other node's agent does. Nothing
+NIC — on an auto-scheduled node, or after a reschedule — the agent on that node
+programs its policy, and no other node's agent does. The same would hold under
+live migration, which the system does not implement. Nothing
 has to write a chosen node back into the control plane for the datapath to be
 programmed correctly. This is the property that makes
 [rescheduling & failover](./rescheduling-and-failover.md) and dispatch pool-scheduling
