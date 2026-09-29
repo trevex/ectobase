@@ -115,12 +115,24 @@ object's source namespace.
 
 The broker (`dispatch/pkg/broker/broker.go`) runs a declarative set-reconcile per
 compiled type — `CompiledNIC`, `CompiledVM`, `CompiledVolumeAttachment`,
-`CompiledContainer`. On any event it recomputes the desired set (the dispatch objects in
+`CompiledContainer`. Each pass recomputes the desired set (the dispatch objects in
 this pool's `pool-<clusterName>` namespace) and the current set (the pool's local
 objects) and makes them match: create missing, update drifted (spec and labels — the
 `workload` label is load-bearing downstream), and garbage-collect any local
 object no longer in the desired set. The sync is idempotent and restart-safe: it
 derives both sets live each tick and keeps no in-memory diff state.
+
+A pass runs on any event in the pool namespace, once when the broker starts, and every
+minute after that (`dispatch/cmd/broker/sync.go`). All three enqueue the same work item, so
+passes coalesce and never overlap. Events alone are not enough: a pool whose last workload
+failed over elsewhere while its broker was down has an empty pool namespace, and an empty
+namespace produces no events. Without the pass at startup, that pool keeps the VM and its
+claim on a disk that another pool is now running.
+
+Pruning everything on an empty desired set is deliberate. Dispatch reads go through the
+broker's cache, which serves nothing until it has synced, and a failed list aborts the pass
+before it deletes anything. So "nothing is wanted here" and "the dispatch could not be read"
+never look the same to the sync.
 
 The broker's dispatch cache is scoped to the `pool-<clusterName>` namespace rather than
 filtered by a `spec.clusterName` field selector (`dispatch/cmd/broker/main.go`). Both bound

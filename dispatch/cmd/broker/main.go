@@ -177,37 +177,13 @@ func main() {
 		log.Fatalf("new manager: %v", err)
 	}
 
-	// Reconciler: on any CompiledNIC OR CompiledVM event, trigger a full set-reconcile
-	// of BOTH types. A full resync per event is correct here: the syncs are declarative +
-	// idempotent (derive both desired and current sets live; no in-memory diff state).
 	// The dispatch client comes from the manager so it reads through the cache.
-	r := &brokerReconciler{
+	if err := setupSync(mgr, &brokerReconciler{
 		dispatch:    mgr.GetClient(),
 		downstream:  downstreamClient,
 		clusterName: clusterName,
-	}
-	if err := ctrl.NewControllerManagedBy(mgr).
-		For(&compiledv1.CompiledNIC{}).
-		Complete(r); err != nil {
-		log.Fatalf("setup broker controller: %v", err)
-	}
-	if err := ctrl.NewControllerManagedBy(mgr).
-		Named("compiledvm").
-		For(&compiledv1.CompiledVM{}).
-		Complete(r); err != nil {
-		log.Fatalf("setup compiledvm broker controller: %v", err)
-	}
-	if err := ctrl.NewControllerManagedBy(mgr).
-		Named("compiledvolumeattachment").
-		For(&compiledv1.CompiledVolumeAttachment{}).
-		Complete(r); err != nil {
-		log.Fatalf("setup compiledvolumeattachment broker controller: %v", err)
-	}
-	if err := ctrl.NewControllerManagedBy(mgr).
-		Named("compiledcontainer").
-		For(&compiledv1.CompiledContainer{}).
-		Complete(r); err != nil {
-		log.Fatalf("setup compiledcontainer broker controller: %v", err)
+	}); err != nil {
+		log.Fatalf("setup broker sync: %v", err)
 	}
 
 	// One UNCACHED dispatch client for the cluster-scoped resources (ClusterPool,
@@ -408,36 +384,4 @@ func nodeIsReady(node *corev1.Node) bool {
 		}
 	}
 	return false
-}
-
-// brokerReconciler wraps the broker engine so it satisfies reconcile.Reconciler.
-// It holds no per-object state: every CompiledNIC, CompiledVM,
-// CompiledVolumeAttachment, or CompiledContainer event triggers a full SyncOnce +
-// SyncCompiledVMs + SyncCompiledVolumeAttachments + SyncCompiledContainers
-// (declarative set-reconcile; idempotent and restart-safe).
-type brokerReconciler struct {
-	dispatch    client.Client
-	downstream  client.Client
-	clusterName string
-}
-
-func (r *brokerReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ctrl.Result, error) {
-	b := &broker.Broker{
-		Dispatch:    r.dispatch,
-		Downstream:  r.downstream,
-		ClusterName: r.clusterName,
-	}
-	if err := b.SyncOnce(ctx); err != nil {
-		return ctrl.Result{}, err
-	}
-	if err := b.SyncCompiledVMs(ctx); err != nil {
-		return ctrl.Result{}, err
-	}
-	if err := b.SyncCompiledVolumeAttachments(ctx); err != nil {
-		return ctrl.Result{}, err
-	}
-	if err := b.SyncCompiledContainers(ctx); err != nil {
-		return ctrl.Result{}, err
-	}
-	return ctrl.Result{}, nil
 }
