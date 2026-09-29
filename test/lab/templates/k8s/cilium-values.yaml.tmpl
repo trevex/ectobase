@@ -47,6 +47,30 @@ bpf:
   masquerade: true
 enableIPv6Masquerade: true
 
+# Name the devices explicitly instead of letting Cilium auto-detect them, because
+# auto-detection races the fabric coming up and silently produces a DIFFERENT answer per
+# cluster. Observed: the pools ended up masquerading on [dummy0, apiaddr0, eth1, eth2]
+# while the dispatch — bootstrapped first, so its agent started before eth1/eth2 were
+# addressed — got only [dummy0, apiaddr0].
+#
+# The consequence is not a cosmetic difference. With the uplinks missing, pod egress to
+# the fabric leaves eth1 UNMASQUERADED, carrying a pod source address the fabric does not
+# route back: the ceph node answered such a SYN out its own default route instead of the
+# fabric and the connection just hung. That is why the dispatch's ceph-csi could reach no
+# mon (`rados: ret=-110, Connection timed out`), which breaks BOTH Volume-image reclaim
+# and the Tier-2 storage fence — the csi-addons fence RPC is served from that same pod.
+# It went unnoticed because TestTier2Failover is skipped.
+#
+# The pools masked it twice over: their own flowplane datapath also masquerades pod
+# egress, so they would have worked either way.
+#
+# Wildcards rather than exact names on purpose: apiaddr0 exists only while this node is
+# serving the anycast API address, and naming a device that is absent at agent start is
+# not worth the risk. `eth+` matches the fabric uplinks (there is no eth0 —
+# network-mode: none), and keeping the dummies in the set preserves the
+# KubeProxyReplacement/Direct-Routing behaviour the anycast API address relies on.
+devices: "eth+,dummy+,apiaddr+"
+
 # Talos runs Cilium in a container-mode node: mount the host cgroup rather than
 # letting the agent auto-mount, and grant the capability sets Talos documents.
 cgroup:

@@ -5,6 +5,7 @@ package livetest
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -17,12 +18,24 @@ import (
 
 // The names the fixture uses. The compiler derives the CompiledVolumeAttachment — and therefore the
 // DataVolume and PVC — as <vmNamespace>-<vmName>-<volumeRef> (compiledvolumeattachment.go:45).
+const volMoveNS = "default"
+
+// Each test in this file owns its OWN object names. They used to share one fixture, and that
+// produced a quietly wrong result: the reclaim test inherited the move test's disk (same image name
+// in both logs) because the first test's Volume was still finalizing when the second applied the
+// same manifest, so the second never provisioned anything of its own. Its assertion still held, but
+// it was no longer testing what it claimed to.
 const (
-	volMoveNS     = "default"
 	volMoveVM     = "vmove-vm"
 	volMoveVolume = "vmove-disk"
-	volMoveAtt    = volMoveNS + "-" + volMoveVM + "-" + volMoveVolume
+
+	volReclaimVM     = "vreclaim-vm"
+	volReclaimVolume = "vreclaim-disk"
 )
+
+// attName is the CompiledVolumeAttachment — and therefore DataVolume and PVC — the compiler derives
+// for a (vm, volume) pair: <vmNamespace>-<vmName>-<volumeRef> (compiledvolumeattachment.go:45).
+func attName(vm, volume string) string { return volMoveNS + "-" + vm + "-" + volume }
 
 // volMoveFixture is a VM bound to clusterName with one RBD disk, and deliberately nothing else.
 //
@@ -36,7 +49,7 @@ const (
 // (volumematerializer.go:47), so nothing is pulled from a registry over the fabric's NAT64. The
 // ceph-rbd StorageClass is volumeBindingMode: Immediate, so an image is still provisioned with no
 // consumer pod. What is under test is the disk's lifetime, not a guest.
-func volMoveFixture(clusterName string) string {
+func volMoveFixture(vm, volume, clusterName string) string {
 	return fmt.Sprintf(`apiVersion: storage.ectobase.dev/v1alpha1
 kind: Volume
 metadata: {name: %[2]s, namespace: %[3]s}
@@ -51,7 +64,7 @@ spec:
   runStrategy: Halted
   resources:
     requests: {cpu: "1", memory: 1Gi}
-`, volMoveVM, volMoveVolume, volMoveNS, clusterName)
+`, vm, volume, volMoveNS, clusterName)
 }
 
 // rbdPool reads the RBD pool the ceph-rbd StorageClass provisions into, rather than hardcoding
@@ -102,7 +115,7 @@ func rbdImages(ctx context.Context, cfg *config.Config, pool string) ([]string, 
 // named target PVC stays Pending until the import finishes. So while an import is incomplete the
 // image is reachable only via the prime child. Preferring the target PVC means this keeps reporting
 // the same disk once imports complete, rather than encoding CDI's intermediate shape.
-func diskPV(ctx context.Context, cfg *config.Config, cluster string) (pvName, handle, image string, err error) {
+func diskPV(ctx context.Context, cfg *config.Config, cluster, att string) (pvName, handle, image string, err error) {
 	out, err := kubectl(ctx, cfg, cluster, "get", "pvc", "-A",
 		"-o", "jsonpath={range .items[*]}{.metadata.namespace}|{.metadata.name}|{.status.phase}|{.spec.volumeName}|{.metadata.ownerReferences[*].name}{\"\\n\"}{end}")
 	if err != nil {
@@ -120,9 +133,9 @@ func diskPV(ctx context.Context, cfg *config.Config, cluster string) (pvName, ha
 			continue
 		}
 		switch {
-		case name == volMoveAtt:
+		case name == att:
 			target = pv
-		case len(f) > 4 && strings.Contains(f[4], volMoveAtt):
+		case len(f) > 4 && strings.Contains(f[4], att):
 			viaPrime = pv
 		}
 	}
@@ -131,7 +144,7 @@ func diskPV(ctx context.Context, cfg *config.Config, cluster string) (pvName, ha
 		pvName = viaPrime
 	}
 	if pvName == "" {
-		return "", "", "", fmt.Errorf("no Bound PVC for attachment %s on %s", volMoveAtt, cluster)
+		return "", "", "", fmt.Errorf("no Bound PVC for attachment %s on %s", att, cluster)
 	}
 
 	csi, err := kubectl(ctx, cfg, cluster, "get", "pv", pvName,
@@ -151,11 +164,12 @@ func diskPV(ctx context.Context, cfg *config.Config, cluster string) (pvName, ha
 // docs/superpowers/specs/2026-09-23-vm-mobility-across-clusters.md: changing a VM's
 // spec.clusterName must MOVE its disk, not destroy it.
 //
-// Today it fails, and the failure is total: within ten seconds of the patch the source pool's
-// CompiledVolumeAttachment is deleted, that cascades through the DataVolume it owns to the PVC, and
-// the StorageClass's reclaimPolicy: Delete removes the RBD image from Ceph. The target then
-// provisions a fresh blank one. Reproduced by hand on 2026-09-24 before this test existed; the
-// image went from present to absent in the shared pool.
+// Before Phase 0 the failure was total: within ten seconds of the patch the source pool's
+// CompiledVolumeAttachment was deleted, that cascaded through the DataVolume it owns to the PVC, and
+// the StorageClass's reclaimPolicy: Delete removed the RBD image from Ceph, leaving the target to
+// provision a fresh blank one. Reproduced by hand on 2026-09-24 before this test existed; the image
+// went from present to absent in the shared pool. It now passes: the image survives and the target
+// attaches the original disk.
 //
 // testdata/tier2-vm.yaml asserted the opposite ("The same RBD (volumeRefs) reattaches on k03") and
 // TestTier2Failover repeats it, but that test creates no Volume at all, so the claim was never
@@ -180,7 +194,8 @@ func TestVolumeSurvivesClusterRebind(t *testing.T) {
 	pool, err := rbdPool(ctx, cfg, src)
 	require.NoError(t, err)
 
-	applyDispatch(t, ctx, cfg, volMoveFixture(src))
+	applyDispatch(t, ctx, cfg, volMoveFixture(volMoveVM, volMoveVolume, src))
+	att := attName(volMoveVM, volMoveVolume)
 
 	// GATE. Every precondition is required, never skipped past: an earlier hand-run of this
 	// scenario flipped clusterName while the VM was unschedulable and its PVC had never bound, and
@@ -188,7 +203,7 @@ func TestVolumeSurvivesClusterRebind(t *testing.T) {
 	// the source, there is nothing to move and the run says so instead of producing a verdict.
 	var srcHandle, srcImage string
 	eventually(t, 5*time.Minute, 5*time.Second, func() error {
-		_, h, img, err := diskPV(ctx, cfg, src)
+		_, h, img, err := diskPV(ctx, cfg, src, att)
 		if err != nil {
 			return err
 		}
@@ -253,7 +268,7 @@ func TestVolumeSurvivesClusterRebind(t *testing.T) {
 	// 2. And the moved VM must actually be given that disk back — a surviving-but-orphaned image
 	//    with a blank disk attached in the target is still data loss from the guest's view.
 	eventually(t, 5*time.Minute, 5*time.Second, func() error {
-		pv, h, img, err := diskPV(ctx, cfg, dst)
+		pv, h, img, err := diskPV(ctx, cfg, dst, att)
 		if err != nil {
 			return err
 		}
@@ -264,4 +279,118 @@ func TestVolumeSurvivesClusterRebind(t *testing.T) {
 		return nil
 	})
 	t.Logf("rebind PASS: %s attached the original disk %s", dst, srcImage)
+}
+
+// TestVolumeDeleteReclaimsTheImage is the counterweight to the move, and the reason Phase 0 needs
+// one at all.
+//
+// Making a disk survive a cluster rebind means flipping its PersistentVolume to Retain, so the RBD
+// image deliberately outlives every claim that ever referenced it and nothing reclaims it by cascade
+// any more. Without an explicit reclaim, deleting a Volume would leak its image forever — trading a
+// data-loss bug for an unbounded capacity leak, in a system with no way to tell which images are
+// still owned. So this asserts the other half: when the intent goes, the bytes go.
+//
+// Ground truth is again the image list on the shared Ceph node. A Volume object disappearing proves
+// nothing; the finalizer exists precisely so the object can outlive the delete request until the
+// image is actually gone.
+func TestVolumeDeleteReclaimsTheImage(t *testing.T) {
+	cfg := loadConfig(t)
+	requireFabricUp(t, cfg)
+	ctx := context.Background()
+
+	if !cfg.Fabric.Ceph.Enabled {
+		t.Skip("ceph disabled in lab config (fabric.ceph.enabled=false)")
+	}
+	compute := computeClusters(cfg)
+	if len(compute) == 0 {
+		t.Skip("no compute clusters")
+	}
+	src := compute[0].Name
+	if _, err := kubectl(ctx, cfg, src, "get", "storageclass", "ceph-rbd"); err != nil {
+		t.Skipf("ceph not deployed (run `lab ceph`): %v", err)
+	}
+	pool, err := rbdPool(ctx, cfg, src)
+	require.NoError(t, err)
+
+	applyDispatch(t, ctx, cfg, volMoveFixture(volReclaimVM, volReclaimVolume, src))
+	att := attName(volReclaimVM, volReclaimVolume)
+
+	// Establish the disk and wait until it is PROTECTED, i.e. Retain applied and the identity
+	// recorded. Reclaim only has something to do once the image has stopped being reclaimed by
+	// cascade, so a Volume deleted before that would be a test of nothing.
+	var image string
+	eventually(t, 5*time.Minute, 5*time.Second, func() error {
+		_, _, img, err := diskPV(ctx, cfg, src, att)
+		if err != nil {
+			return err
+		}
+		image = img
+		return nil
+	})
+	eventually(t, 3*time.Minute, 3*time.Second, func() error {
+		out, err := kubectl(ctx, cfg, "dispatch", "get", "volume.storage.ectobase.dev", volReclaimVolume,
+			"-n", volMoveNS, "-o", "jsonpath={.status.diskIdentity.csi.volumeAttributes.imageName}")
+		if err != nil {
+			return fmt.Errorf("read the Volume's recorded identity: %w", err)
+		}
+		if got := strings.TrimSpace(out); got != image {
+			return fmt.Errorf("Volume records image %q, want %q", got, image)
+		}
+		return nil
+	})
+	imgs, err := rbdImages(ctx, cfg, pool)
+	require.NoError(t, err)
+	require.Contains(t, imgs, image, "precondition: the disk's image must exist before deleting it")
+	t.Logf("protected disk established: %s", image)
+
+	// Delete the whole VM first, so the disk is detached and Retain is what is keeping the image
+	// alive — exactly the state in which a leak would otherwise be permanent.
+	_, err = kubectl(ctx, cfg, "dispatch", "delete", "virtualmachine.compute.ectobase.dev", volReclaimVM,
+		"-n", volMoveNS, "--wait=true")
+	require.NoError(t, err, "delete the VM")
+
+	eventually(t, 2*time.Minute, 3*time.Second, func() error {
+		imgs, err := rbdImages(ctx, cfg, pool)
+		if err != nil {
+			return err
+		}
+		if !slices.Contains(imgs, image) {
+			return fmt.Errorf("image %s was destroyed by deleting the VM; only deleting the VOLUME may "+
+				"reclaim it, or a rebind would lose data", image)
+		}
+		return nil
+	})
+	t.Logf("image survived the VM's deletion, as Retain intends")
+
+	// THE POINT: deleting the Volume — the intent that owns the disk — must delete the image.
+	_, err = kubectl(ctx, cfg, "dispatch", "delete", "volume.storage.ectobase.dev", volReclaimVolume,
+		"-n", volMoveNS, "--wait=false")
+	require.NoError(t, err, "delete the Volume")
+
+	eventually(t, 5*time.Minute, 5*time.Second, func() error {
+		imgs, err := rbdImages(ctx, cfg, pool)
+		if err != nil {
+			return err
+		}
+		if slices.Contains(imgs, image) {
+			return fmt.Errorf("image %s still in pool %s after its Volume was deleted — every deleted "+
+				"volume leaks its image", image, pool)
+		}
+		return nil
+	})
+
+	// And the Volume itself is released only once the image is gone: that ordering is the whole point
+	// of the finalizer, and a Volume that vanished first would mean the reclaim was never observed.
+	eventually(t, 2*time.Minute, 3*time.Second, func() error {
+		out, err := kubectl(ctx, cfg, "dispatch", "get", "volumes.storage.ectobase.dev", "-n", volMoveNS,
+			"-o", "jsonpath={range .items[*]}{.metadata.name} {end}")
+		if err != nil {
+			return fmt.Errorf("list Volumes: %w", err)
+		}
+		if strings.Contains(out, volReclaimVolume) {
+			return fmt.Errorf("%s still held after its image was reclaimed; remaining: %q", volReclaimVolume, out)
+		}
+		return nil
+	})
+	t.Logf("reclaim PASS: deleting the Volume deleted image %s and then released the Volume", image)
 }
