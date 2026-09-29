@@ -368,6 +368,11 @@ var (
 // flags retargeting each chart image value at the in-fabric registry. registry is a
 // bracketed [host]:port (e.g. "[fd00:29::5]:5000"); empty returns nil (leave the chart's
 // real ghcr.io defaults). Keys are emitted in sorted order for a stable argv.
+//
+// It also sets imagePullPolicy=Always. The :dev tags are mutable — every rebuild repushes the same
+// tag — so under the chart's IfNotPresent default a node keeps running its cached copy after a
+// redeploy, and the rollout reports success regardless. The override lives here rather than in the
+// charts because a real install pins immutable tags, where IfNotPresent is right.
 func imageSetArgs(registry string, images map[string]string) []string {
 	if registry == "" {
 		return nil
@@ -377,7 +382,8 @@ func imageSetArgs(registry string, images map[string]string) []string {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-	args := make([]string, 0, len(keys)*2)
+	args := make([]string, 0, len(keys)*2+2)
+	args = append(args, "--set-string", "imagePullPolicy=Always")
 	for _, k := range keys {
 		args = append(args, "--set-string",
 			fmt.Sprintf("images.%s=%s/%s/%s:dev", k, registry, appImageRepo, images[k]))
