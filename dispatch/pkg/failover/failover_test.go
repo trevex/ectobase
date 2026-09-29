@@ -12,6 +12,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 
 	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	computev1 "github.com/trevex/ectobase/api/compute/v1alpha1"
@@ -308,5 +309,52 @@ func TestFailover_PartialFence_ReleasesNothing(t *testing.T) {
 	}
 	if got.Status.Released {
 		t.Fatal("released a twin on a pool whose fence did not confirm")
+	}
+}
+
+// A live twin on a fenced pool is the VM still bound there, not one being moved away: the fence
+// must not mark it released, or its next retirement would pass the move gate with no proof.
+func TestFailover_FencedPool_LeavesLiveTwinAlone(t *testing.T) {
+	scheme := testScheme(t)
+	lost := lostPoolObj("A", "2001:db8:0:1::/64")
+	live := retiredTwinOn("A")
+	live.DeletionTimestamp, live.Finalizers = nil, nil
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(lost, readyPoolObj("B"), live).
+		WithStatusSubresource(lost, live).Build()
+	r := &Reconciler{Client: c, StorageFencer: okFencer{}, NetworkFencer: okFencer{}, FailoverThreshold: time.Minute}
+
+	if _, err := r.Reconcile(context.Background(), req("A")); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	var got compiledv1.CompiledVM
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(live), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Status.Released {
+		t.Fatal("a live twin on a fenced pool was marked released")
+	}
+}
+
+func TestPoolOfTwin(t *testing.T) {
+	got := poolOfTwin(context.Background(), retiredTwinOn("A"))
+	if len(got) != 1 || got[0].Name != "A" || got[0].Namespace != "" {
+		t.Fatalf("want one request for ClusterPool A, got %v", got)
+	}
+	unbound := retiredTwinOn("A")
+	unbound.Spec.ClusterName = ""
+	if got := poolOfTwin(context.Background(), unbound); got != nil {
+		t.Fatalf("a twin with no clusterName must enqueue nothing, got %v", got)
+	}
+}
+
+// Only a retired twin can need a release, so only a retired twin wakes failover.
+func TestRetiredTwinPredicate(t *testing.T) {
+	live := retiredTwinOn("A")
+	live.DeletionTimestamp = nil
+	if retiredTwin.Create(event.CreateEvent{Object: live}) || retiredTwin.Update(event.UpdateEvent{ObjectOld: live, ObjectNew: live}) {
+		t.Fatal("a live twin enqueued failover")
+	}
+	if !retiredTwin.Update(event.UpdateEvent{ObjectOld: live, ObjectNew: retiredTwinOn("A")}) {
+		t.Fatal("a twin becoming retired did not enqueue failover")
 	}
 }

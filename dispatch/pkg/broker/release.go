@@ -5,6 +5,7 @@ package broker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
@@ -17,21 +18,25 @@ import (
 	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 )
 
-// launcherLabel is the label KubeVirt puts on a VMI's virt-launcher pod, valued with the VMI name —
-// which is the CompiledVM twin's name, since the vm-materializer names the KubeVirt VM after it.
-const launcherLabel = "vm.kubevirt.io/name"
+// launcherSelector matches every virt-launcher pod: KubeVirt labels them all with this fixed value.
+// Which VMI a launcher runs is read from its owner reference, not from a per-VMI label, because a
+// label VALUE is capped at 63 characters and a twin's name (<namespace>-<vm>) is not.
+var launcherSelector = client.MatchingLabels{"kubevirt.io": "virt-launcher"}
 
 // ReportReleases reports, onto each RETIRED CompiledVM twin in this pool's namespace, that the pool
 // has let go of the VM it names. A move is break-before-make, and this is the "break": nothing is
 // compiled into the VM's new pool until this pool says so (see mesh/controllers/movegate.go).
 //
 // pending is true while any retired twin is still held, so the caller can look again sooner than
-// its periodic resync — each check is cheap, and a move waits on it.
+// its periodic resync — each check is cheap, and a move waits on it. A twin that cannot be checked
+// or patched stays pending and its error is returned, but only after every other twin has had its
+// turn: one bad twin must not stall the release of the rest.
 func (b *Broker) ReportReleases(ctx context.Context) (pending bool, err error) {
 	var twins compiledv1.CompiledVMList
 	if err := b.Dispatch.List(ctx, &twins, client.InNamespace(b.poolNamespace())); err != nil {
 		return false, fmt.Errorf("list dispatch vms: %w", err)
 	}
+	var errs []error
 	for i := range twins.Items {
 		twin := &twins.Items[i]
 		if twin.DeletionTimestamp.IsZero() || twin.Status.Released {
@@ -39,19 +44,32 @@ func (b *Broker) ReportReleases(ctx context.Context) (pending bool, err error) {
 		}
 		free, err := b.letGo(ctx, twin)
 		if err != nil {
-			return true, fmt.Errorf("check release of %s: %w", twin.Name, err)
+			pending = true
+			errs = append(errs, fmt.Errorf("check release of %s: %w", twin.Name, err))
+			continue
 		}
 		if !free {
 			pending = true
 			continue
 		}
+		// Optimistic-locked, because the read above is cached and a twin's name is not unique over
+		// time: a reversed move recreates a LIVE twin under the same name in this namespace. Were the
+		// cache still showing the old, retired one, a plain patch would land released=true on the new
+		// twin — nothing ever resets it, so its own retirement would later pass with no proof. A
+		// conflict means the twin changed under us; look again on the next pass.
 		orig := twin.DeepCopy()
 		twin.Status.Released = true
-		if err := b.Dispatch.Status().Patch(ctx, twin, client.MergeFrom(orig)); err != nil && !apierrors.IsNotFound(err) {
-			return true, fmt.Errorf("report release of %s: %w", twin.Name, err)
+		switch err := b.Dispatch.Status().Patch(ctx, twin,
+			client.MergeFromWithOptions(orig, client.MergeFromWithOptimisticLock{})); {
+		case err == nil, apierrors.IsNotFound(err):
+		case apierrors.IsConflict(err):
+			pending = true
+		default:
+			pending = true
+			errs = append(errs, fmt.Errorf("report release of %s: %w", twin.Name, err))
 		}
 	}
-	return pending, nil
+	return pending, errors.Join(errs...)
 }
 
 // letGo reports whether nothing on this pool can still run the VM a twin names or write its disks.
@@ -75,15 +93,22 @@ func (b *Broker) letGo(ctx context.Context, twin *compiledv1.CompiledVM) (bool, 
 			return false, err
 		}
 	}
+	// The launcher runs the VMI, which the vm-materializer names after the twin.
 	var pods corev1.PodList
-	if err := b.Downstream.List(ctx, &pods, client.InNamespace(key.Namespace),
-		client.MatchingLabels{launcherLabel: key.Name}); err != nil {
+	if err := b.Downstream.List(ctx, &pods, client.InNamespace(key.Namespace), launcherSelector); err != nil {
 		return false, err
 	}
-	if len(pods.Items) > 0 {
-		return false, nil
+	for i := range pods.Items {
+		for _, ref := range pods.Items[i].OwnerReferences {
+			if ref.Kind == "VirtualMachineInstance" && ref.Name == key.Name {
+				return false, nil
+			}
+		}
 	}
-	// CDI copies the DataVolume's workload label onto the claim it provisions.
+	// CDI copies the DataVolume's workload label onto the claim it provisions. The prime claim of
+	// an import still in progress may not carry it, and so does not hold the release; that is safe,
+	// because a disk's identity is captured only once its own claim is Bound, so a half-imported
+	// image is never adopted by the target.
 	if w := twin.Labels["workload"]; w != "" {
 		var claims corev1.PersistentVolumeClaimList
 		if err := b.Downstream.List(ctx, &claims, client.InNamespace(key.Namespace),

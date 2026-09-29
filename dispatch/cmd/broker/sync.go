@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"k8s.io/apimachinery/pkg/types"
@@ -83,21 +84,19 @@ func (r *brokerReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ctrl.
 		Downstream:  r.downstream,
 		ClusterName: r.clusterName,
 	}
-	if err := b.SyncOnce(ctx); err != nil {
-		return ctrl.Result{}, err
+	// Every sync runs even when an earlier one fails, and so does ReportReleases: a failing NIC or
+	// container sync must not starve VM releases, which a move is stalled on. The errors are
+	// returned together, so a failed pass still requeues with backoff.
+	errs := []error{
+		b.SyncOnce(ctx),
+		// Before ReportReleases: SyncCompiledVMs is what stops a retired twin's VM, ReportReleases
+		// reports when it has.
+		b.SyncCompiledVMs(ctx),
+		b.SyncCompiledVolumeAttachments(ctx),
+		b.SyncCompiledContainers(ctx),
 	}
-	if err := b.SyncCompiledVMs(ctx); err != nil {
-		return ctrl.Result{}, err
-	}
-	if err := b.SyncCompiledVolumeAttachments(ctx); err != nil {
-		return ctrl.Result{}, err
-	}
-	if err := b.SyncCompiledContainers(ctx); err != nil {
-		return ctrl.Result{}, err
-	}
-	// After the syncs: SyncCompiledVMs is what stops a retired twin's VM, this reports when it has.
 	pending, err := b.ReportReleases(ctx)
-	if err != nil {
+	if err := errors.Join(append(errs, err)...); err != nil {
 		return ctrl.Result{}, err
 	}
 	if pending {
