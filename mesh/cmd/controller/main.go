@@ -124,6 +124,9 @@ func main() {
 	if err := (&controllers.CompiledVMReconciler{Client: mgr.GetClient(), NetworkName: vmNetworkName}).SetupWithManager(mgr); err != nil {
 		log.Fatalf("setup compiledvm controller: %v", err)
 	}
+	if err := (&controllers.CompiledVMReleaseReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
+		log.Fatalf("setup compiledvm release controller: %v", err)
+	}
 
 	if err := (&controllers.CompiledContainerReconciler{Client: mgr.GetClient(), NetworkName: networkName}).SetupWithManager(mgr); err != nil {
 		log.Fatalf("setup compiledcontainer controller: %v", err)

@@ -13,11 +13,13 @@ import (
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
 	"github.com/trevex/ectobase/api/validate"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -82,8 +84,18 @@ func (r *CompiledVMReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	if !vm.DeletionTimestamp.IsZero() {
-		if err := deleteTwinsOfSource(ctx, r.Client, &compiledv1.CompiledVMList{}, vm.Namespace, vm.Name); err != nil {
+		// Retired, not deleted outright: the twin stays until its pool has stopped the VM, so a
+		// delete cannot race its own running VMI. The VM itself need not wait for that.
+		twins, err := twinsOfSource(ctx, r.Client, &compiledv1.CompiledVMList{}, vm.Namespace, vm.Name)
+		if err != nil {
 			return ctrl.Result{}, fmt.Errorf("teardown compiledvm: %w", err)
+		}
+		for _, o := range twins {
+			if twin, ok := o.(*compiledv1.CompiledVM); ok {
+				if err := retireTwin(ctx, r.Client, twin); err != nil {
+					return ctrl.Result{}, fmt.Errorf("teardown compiledvm %s/%s: %w", twin.Namespace, twin.Name, err)
+				}
+			}
 		}
 		return ctrl.Result{}, releaseFinalizer(ctx, r.Client, &vm, finalizerCompiledVM)
 	}
@@ -94,6 +106,25 @@ func (r *CompiledVMReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	if vm.Spec.ClusterName == "" {
 		return ctrl.Result{}, nil
 	}
+	// Break before make: retire every twin outside this pool, and compile nothing here until each
+	// of them is gone.
+	poolNS := validate.PoolNamespace(vm.Spec.ClusterName)
+	twins, err := twinsOfSource(ctx, r.Client, &compiledv1.CompiledVMList{}, vm.Namespace, vm.Name)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("list compiledvms: %w", err)
+	}
+	if held := awaitingRelease(poolNS, twins); len(held) > 0 {
+		for _, twin := range held {
+			if twin.Namespace == poolNS {
+				continue // a reversed move: this pool's own twin is already on its way out
+			}
+			if err := retireTwin(ctx, r.Client, twin); err != nil {
+				return ctrl.Result{}, fmt.Errorf("retire compiledvm %s/%s: %w", twin.Namespace, twin.Name, err)
+			}
+		}
+		return ctrl.Result{}, r.setMoving(ctx, &vm, metav1.ConditionTrue, "WaitingForSourceRelease",
+			"waiting for pool "+held[0].Spec.ClusterName+" to release the VM before it starts on "+vm.Spec.ClusterName)
+	}
 	var nicList netv1.NetworkInterfaceList
 	if err := r.Client.List(ctx, &nicList, client.InNamespace(vm.Namespace)); err != nil {
 		return ctrl.Result{}, fmt.Errorf("list nics: %w", err)
@@ -102,19 +133,24 @@ func (r *CompiledVMReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	compiled := CompileVM(&vm, nicList.Items, placement, r.NetworkName)
 	key := types.NamespacedName{Namespace: compiled.Namespace, Name: compiled.Name}
 	var existing compiledv1.CompiledVM
-	err := r.Client.Get(ctx, key, &existing)
+	err = r.Client.Get(ctx, key, &existing)
 	switch {
 	case apierrors.IsNotFound(err):
 		stampSource(&compiled, vm.Namespace, vm.Name)
+		controllerutil.AddFinalizer(&compiled, finalizerSourceReleased)
 		if err := r.Client.Create(ctx, &compiled); err != nil {
 			return ctrl.Result{}, fmt.Errorf("create compiledvm: %w", err)
 		}
 	case err != nil:
 		return ctrl.Result{}, err
 	default:
-		if reflect.DeepEqual(existing.Spec, compiled.Spec) && existing.Labels["workload"] == compiled.Labels["workload"] {
-			return ctrl.Result{}, nil
+		if reflect.DeepEqual(existing.Spec, compiled.Spec) && existing.Labels["workload"] == compiled.Labels["workload"] &&
+			controllerutil.ContainsFinalizer(&existing, finalizerSourceReleased) {
+			return ctrl.Result{}, r.setMoving(ctx, &vm, metav1.ConditionFalse, "Moved", "running on pool "+vm.Spec.ClusterName)
 		}
+		// A twin compiled before the release finalizer existed gets it here, so a later move of it
+		// is gated like any other.
+		controllerutil.AddFinalizer(&existing, finalizerSourceReleased)
 		existing.Spec = compiled.Spec
 		if existing.Labels == nil {
 			existing.Labels = map[string]string{}
@@ -124,13 +160,30 @@ func (r *CompiledVMReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			return ctrl.Result{}, fmt.Errorf("update compiledvm: %w", err)
 		}
 	}
-	// Drop any other twin still stamped with this source — one left in a namespace the compiler no
-	// longer writes to (a re-bound pool, or an earlier layout).
-	if err := pruneTwinsOfSource(ctx, r.Client, &compiledv1.CompiledVMList{}, vm.Namespace, vm.Name,
-		map[types.NamespacedName]bool{key: true}); err != nil {
-		return ctrl.Result{}, fmt.Errorf("prune stale compiledvms: %w", err)
+	// No prune here: the gate above already retired every twin outside this pool, and nothing
+	// reaches this point while one remains.
+	return ctrl.Result{}, r.setMoving(ctx, &vm, metav1.ConditionFalse, "Moved", "running on pool "+vm.Spec.ClusterName)
+}
+
+// condMoving reports a move's progress on the VirtualMachine.
+const condMoving = "Moving"
+
+// setMoving records a move's progress. A VM that never moved carries no Moving condition at all:
+// the False side is written only to close one that was opened.
+func (r *CompiledVMReconciler) setMoving(ctx context.Context, vm *computev1.VirtualMachine, status metav1.ConditionStatus, reason, msg string) error {
+	cur := meta.FindStatusCondition(vm.Status.Conditions, condMoving)
+	if status == metav1.ConditionFalse && (cur == nil || cur.Status == metav1.ConditionFalse) {
+		return nil
 	}
-	return ctrl.Result{}, nil
+	orig := vm.DeepCopy()
+	if !meta.SetStatusCondition(&vm.Status.Conditions, metav1.Condition{
+		Type: condMoving, Status: status, Reason: reason, Message: msg, ObservedGeneration: vm.Generation,
+	}) {
+		return nil
+	}
+	// Optimistic lock: failover and the placement mirror write this status too, and a merge patch
+	// replaces the whole conditions list — a conflict is retried rather than clobbering theirs.
+	return r.Client.Status().Patch(ctx, vm, client.MergeFromWithOptions(orig, client.MergeFromWithOptimisticLock{}))
 }
 
 // SetupWithManager watches VirtualMachines (Owns their CompiledVMs) and re-enqueues
