@@ -24,7 +24,17 @@ import (
 // test/scenario-qos-guest2guest.sh, but wired DIRECTLY over the dataplane gRPC
 // (AddRoute + AddFwRule) for determinism — no CRD/agent/reflector timing.
 const (
-	qosVNI      = 100 // same VPC as the overlay test; distinct interface ids/IPs
+	// Same VPC as the overlay test, with distinct interface ids/IPs. That sharing is
+	// deliberate and is NOT the cause of this test's occasional failure in a full-suite run,
+	// which is worth writing down because it looks like an obvious culprit and is not one:
+	// this test hand-wires its dataplane state over gRPC, so a reconciling agent clobbering
+	// entries in a VNI it also owns is a plausible-sounding theory. It does not survive the
+	// evidence. Step 3 below gates on an actual overlay ping before anything is measured, and
+	// in the one observed failure that ping PASSED and every subsequent measurement — including
+	// the uncapped baseline — read exactly 0.0, which is the signature of iperf3 never
+	// producing parseable output rather than of missing routes. Moving to a private VNI would
+	// change nothing and would only make the next occurrence harder to read.
+	qosVNI      = 100
 	qosIDA      = "qos-a"
 	qosIDB      = "qos-b"
 	qosIPA      = "10.0.0.5"
@@ -95,8 +105,12 @@ func TestQoSGuestToGuest(t *testing.T) {
 	iperf3Path := buildIperf3Static(t)
 	jsonHost := filepath.Join(t.TempDir(), "g2g.json")
 
+	// A measurement that cannot be taken fails the test HERE, naming the step that broke,
+	// rather than flowing on as a 0.0 that later gets attributed to the shaper.
 	udpRun := func() (recvMbps, lossPct float64) {
-		return qosUDPRun(ctx, containerA, containerB, qosIDA, qosIDB, qosIPB, iperf3Path, jsonHost)
+		recv, loss, err := qosUDPRun(ctx, containerA, containerB, qosIDA, qosIDB, qosIPB, iperf3Path, jsonHost)
+		require.NoError(t, err, "iperf3 measurement did not run")
+		return recv, loss
 	}
 	// bestOf3 runs the measurement up to 3 times and returns the run whose pass
 	// predicate holds; else the last run. Absorbs UDP-on-SKB scheduling noise
@@ -122,6 +136,13 @@ func TestQoSGuestToGuest(t *testing.T) {
 	configureQoS(t, ctx, containerB, qosIDB, 0, 0, 0)
 	e0Recv, e0Loss := udpRun()
 	t.Logf("[E0 baseline] recv=%.1f Mbps loss=%.1f%% (offered %dM, no caps)", e0Recv, e0Loss, qosOfferedM)
+	// Assert the baseline rather than only logging it. With no caps configured the path must
+	// carry well above the cap, so a low baseline means the experiment is invalid and every
+	// later number is meaningless — better to say that than to let E1/E2 fail as if the
+	// shaper or policer misbehaved.
+	require.Greaterf(t, e0Recv, float64(qosCapMbps), "[E0] uncapped baseline recv=%.1f Mbps is not above the "+
+		"cap %d — the path is not carrying traffic, so the E1/E2 shaping numbers below mean nothing",
+		e0Recv, qosCapMbps)
 
 	// E1 EDT shaping: A egress cap. fq paces → recv near cap, LOW loss.
 	configureQoS(t, ctx, containerA, qosIDA, qosCapMbps, 0, 0)
@@ -178,21 +199,28 @@ func configureQoS(t *testing.T, ctx context.Context, container, id string, egres
 // netns (backgrounded, JSON to /g2g.json on nodeB), fires the A→B client, then
 // reads + parses B's JSON. Mirrors the bash udp_run (scenario lines 58-73):
 // the authoritative UDP server stats are end.sum_received (end.sum is malformed,
-// bytes=0). Returns (0,0) on any failure.
-func qosUDPRun(ctx context.Context, containerA, containerB, idA, idB, dstIP, iperf3Host, jsonHost string) (float64, float64) {
+// bytes=0).
+//
+// It returns an ERROR rather than (0,0) when the measurement cannot be taken, because
+// those are not the same thing and conflating them cost real debugging time: this used
+// to report 0.0 Mbps for a server that never started or JSON that never appeared, the
+// caller asserted on that number, and the test failed with "[E1] EDT recv=0.0 Mbps not
+// within [0.5,1.6]x cap 20" — blaming the shaper for a run that never happened. Every
+// failure below now says which step failed.
+func qosUDPRun(ctx context.Context, containerA, containerB, idA, idB, dstIP, iperf3Host, jsonHost string) (float64, float64, error) {
 	// nsenter into B's guest netns from the HOST (the Talos node is shell-less) and start
 	// the one-off server backgrounded. nsenter --net keeps the host mount ns, so the host
 	// `sh` redirect writes the JSON to the HOST path jsonHost; the server self-exits after
 	// the single client run.
 	pidB, err := dockerPID(ctx, containerB)
 	if err != nil {
-		return 0, 0
+		return 0, 0, fmt.Errorf("resolve %s pid for nsenter: %w", containerB, err)
 	}
 	nsB := fmt.Sprintf("/proc/%s/root/run/netns/%s", pidB, idB)
 	srvSh := fmt.Sprintf("%s -s --one-off -J >%s 2>/dev/null", iperf3Host, jsonHost)
 	srvCmd := labexec.SudoCmd(ctx, "nsenter", "--net="+nsB, "sh", "-c", srvSh)
 	if err := srvCmd.Start(); err != nil {
-		return 0, 0
+		return 0, 0, fmt.Errorf("start the one-off iperf3 server in %s netns %s: %w", containerB, idB, err)
 	}
 	// Wait for the one-off iperf3 server to bind its control socket (:5201) in B's netns
 	// before firing the client, instead of a blind sleep. Best-effort: falls through after
@@ -212,14 +240,20 @@ func qosUDPRun(ctx context.Context, containerA, containerB, idA, idB, dstIP, ipe
 
 	raw, err := os.ReadFile(jsonHost)
 	if err != nil {
-		return 0, 0
+		return 0, 0, fmt.Errorf("read the iperf3 server JSON at %s (the server wrote nothing — did it bind :5201?): %w", jsonHost, err)
 	}
-	return parseIperf3Recv(string(raw))
+	recv, loss, err := parseIperf3Recv(string(raw))
+	if err != nil {
+		return 0, 0, fmt.Errorf("parse the iperf3 server JSON at %s: %w", jsonHost, err)
+	}
+	return recv, loss, nil
 }
 
 // parseIperf3Recv extracts end.sum_received.{bits_per_second,lost_percent} from an
-// iperf3 -J JSON blob, returning (Mbps, lossPct). Returns (0,0) if unparseable.
-func parseIperf3Recv(raw string) (float64, float64) {
+// iperf3 -J JSON blob, returning (Mbps, lossPct). It errors rather than returning a
+// zero for unparseable or truncated output: a blob with no end.sum_received means the
+// run did not complete, which is not the same measurement as "zero throughput".
+func parseIperf3Recv(raw string) (float64, float64, error) {
 	var doc struct {
 		End struct {
 			SumReceived struct {
@@ -233,9 +267,12 @@ func parseIperf3Recv(raw string) (float64, float64) {
 		raw = raw[i:]
 	}
 	if err := json.Unmarshal([]byte(raw), &doc); err != nil {
-		return 0, 0
+		return 0, 0, fmt.Errorf("iperf3 JSON is not valid (%d bytes): %w", len(raw), err)
 	}
-	return doc.End.SumReceived.BitsPerSecond / 1e6, doc.End.SumReceived.LostPercent
+	if doc.End.SumReceived.BitsPerSecond == 0 && doc.End.SumReceived.LostPercent == 0 {
+		return 0, 0, fmt.Errorf("iperf3 JSON carries no end.sum_received stats (%d bytes); the run did not complete", len(raw))
+	}
+	return doc.End.SumReceived.BitsPerSecond / 1e6, doc.End.SumReceived.LostPercent, nil
 }
 
 // buildIperf3Static builds the fully-static iperf3 (`nix build .#iperf3-static`)
