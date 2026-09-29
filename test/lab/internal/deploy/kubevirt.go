@@ -2,10 +2,8 @@ package deploy
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
-	"strings"
 	"time"
 
 	"github.com/trevex/ectobase/test/lab/internal/wait"
@@ -135,35 +133,26 @@ func labelNamespacePrivileged(ctx context.Context, r Runner, kubeconfig, ns stri
 		"pod-security.kubernetes.io/enforce=privileged", "--overwrite")
 }
 
-// PatchDispatchCSIClusterID sets the ceph cluster fsid on the dispatch controller so
-// its ceph-csi NetworkFence actuator targets the right external cluster. The dispatch
-// controller is Deployment dispatch-controller in namespace system; its container
-// args include an empty `-csi-cluster-id=` element that we replace with
-// `-csi-cluster-id=<fsid>`.
+// SetDispatchCSIClusterID sets the ceph cluster fsid on the dispatch controller so its ceph-csi
+// NetworkFence actuator targets the right external cluster. Without it the driver rejects every
+// fence ("missing or empty clusterID"), so the Tier-2 storage fence cannot succeed.
 //
-// It reads the current args, locates the flag index, and applies a JSON6902 replace
-// at exactly that index (composed by the pure csiClusterIDPatch helper).
-func PatchDispatchCSIClusterID(ctx context.Context, r Runner, dispatchKubeconfig, fsid string) error {
+// It goes through helm rather than patching the live Deployment, which is how this used to work and
+// why `lab deploy` broke after `lab tier2 up`: a `kubectl patch --type=json` of the container args
+// claims .spec.template.spec.containers[].args for the "kubectl-patch" field manager, and the next
+// `helm upgrade` of the release then fails outright with "conflict occurred while applying object
+// system/dispatch-controller ... conflict with \"kubectl-patch\"". Setting a value keeps helm the
+// single owner of the Deployment, and matches EnableVMMaterializer below.
+//
+// --reuse-values keeps everything the original install set (image refs, PKI, kine), so this adds the
+// fsid without needing to reconstruct the release's values.
+func SetDispatchCSIClusterID(ctx context.Context, r Runner, kubeconfig, dispatchChartPath, fsid string) error {
 	r = runnerOf(r)
 	slog.Info("wiring the ceph fsid into dispatch-controller", "fsid", fsid)
-
-	out, err := r.Output(ctx, "kubectl", "--kubeconfig", dispatchKubeconfig,
-		"-n", "system", "get", "deploy", "dispatch-controller",
-		"-o", "jsonpath={.spec.template.spec.containers[0].args}")
-	if err != nil {
-		return fmt.Errorf("get dispatch-controller args: %w", err)
-	}
-	var args []string
-	if err := json.Unmarshal(out, &args); err != nil {
-		return fmt.Errorf("parse dispatch-controller args %q: %w", string(out), err)
-	}
-	_, patch, err := csiClusterIDPatch(args, fsid)
-	if err != nil {
-		return err
-	}
-	if err := r.Run(ctx, "kubectl", "--kubeconfig", dispatchKubeconfig,
-		"-n", "system", "patch", "deploy", "dispatch-controller", "--type=json", "-p", patch); err != nil {
-		return fmt.Errorf("patch dispatch-controller csi-cluster-id: %w", err)
+	if err := r.Run(ctx, "helm", "upgrade", "ectobase-dispatch", dispatchChartPath,
+		"--kubeconfig", kubeconfig, "--namespace", "system",
+		"--reuse-values", "--set", "ceph.clusterID="+fsid, "--wait", "--timeout", "5m"); err != nil {
+		return fmt.Errorf("set dispatch-controller ceph.clusterID: %w", err)
 	}
 	slog.Info("dispatch-controller csi-cluster-id set", "fsid", fsid)
 	return nil
@@ -183,19 +172,4 @@ func EnableVMMaterializer(ctx context.Context, r Runner, kubeconfig, poolChartPa
 		return fmt.Errorf("enable vm-materializer: %w", err)
 	}
 	return nil
-}
-
-// csiClusterIDPatch finds the index of the `-csi-cluster-id=` arg in args and
-// composes the JSON6902 patch body that replaces it with `-csi-cluster-id=<fsid>`.
-// Pure (no I/O) so PatchDispatchCSIClusterID's index-finding + patch composition is
-// unit-tested. Errors if no `-csi-cluster-id=` arg is present.
-func csiClusterIDPatch(args []string, fsid string) (index int, patchJSON string, err error) {
-	const prefix = "-csi-cluster-id="
-	for i, a := range args {
-		if strings.HasPrefix(a, prefix) {
-			patch := fmt.Sprintf(`[{"op":"replace","path":"/spec/template/spec/containers/0/args/%d","value":"-csi-cluster-id=%s"}]`, i, fsid)
-			return i, patch, nil
-		}
-	}
-	return 0, "", fmt.Errorf("no %q arg found in dispatch-controller args %v", prefix, args)
 }

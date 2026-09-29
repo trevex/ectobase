@@ -74,10 +74,14 @@ spec:
             {{- end }}
             - "-csi-driver=rbd.csi.ceph.com"
             # The ceph fsid (clusterID) is per-deploy (the lab ceph deploy emits it), so it cannot be
-            # baked in; the tier2 live deploy patches this arg with the real fsid. Empty here =>
+            # baked in. It is a VALUE rather than something patched onto the live Deployment: a
+            # `kubectl patch` of this arg claims .spec.template.spec.containers[].args for the
+            # "kubectl-patch" field manager, and the next `helm upgrade` then fails the whole release
+            # with "conflict occurred while applying object ... dispatch-controller" — which is
+            # exactly what broke `lab deploy` after `lab tier2 up`. Empty =>
             # NetworkFence spec.parameters.clusterID omitted => the ceph-csi driver rejects the fence
             # ("missing or empty clusterID"). MUST be set to the fsid for the storage fence to succeed.
-            - "-csi-cluster-id="
+            - "-csi-cluster-id={{ .Values.ceph.clusterID }}"
             - "-csi-secret-name=csi-rbd-secret"
             - "-csi-secret-namespace=ceph-csi"
           env:

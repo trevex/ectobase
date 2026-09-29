@@ -6,33 +6,6 @@ import (
 	"testing"
 )
 
-func TestCSIClusterIDPatch(t *testing.T) {
-	args := []string{"-reflector-admin=x", "-csi-cluster-id=", "-csi-secret-name=y"}
-	i, patch, err := csiClusterIDPatch(args, "abc-123")
-	if err != nil {
-		t.Fatalf("csiClusterIDPatch: %v", err)
-	}
-	if i != 1 {
-		t.Fatalf("index = %d, want 1", i)
-	}
-	for _, want := range []string{
-		`"path":"/spec/template/spec/containers/0/args/1"`,
-		`-csi-cluster-id=abc-123`,
-		`"op":"replace"`,
-	} {
-		if !strings.Contains(patch, want) {
-			t.Fatalf("patch missing %q:\n%s", want, patch)
-		}
-	}
-}
-
-func TestCSIClusterIDPatchMissing(t *testing.T) {
-	args := []string{"-reflector-admin=x", "-csi-secret-name=y"}
-	if _, _, err := csiClusterIDPatch(args, "abc-123"); err == nil {
-		t.Fatalf("expected error when no -csi-cluster-id= arg present")
-	}
-}
-
 func TestKubeVirtCRPatch(t *testing.T) {
 	patch := kubevirtCRPatch()
 	for _, want := range []string{
@@ -87,31 +60,29 @@ func TestKubeVirtCDIArgv(t *testing.T) {
 	}
 }
 
-// TestPatchDispatchCSIClusterID drives PatchDispatchCSIClusterID through a runner that
-// returns a canned args array and asserts the JSON6902 patch it composes.
-func TestPatchDispatchCSIClusterID(t *testing.T) {
-	f := &csiArgsRunner{args: `["-reflector-admin=x","-csi-cluster-id=","-csi-secret-name=y"]`}
-	if err := PatchDispatchCSIClusterID(context.Background(), f, "/kc/dispatch.kubeconfig", "fsid-9"); err != nil {
-		t.Fatalf("PatchDispatchCSIClusterID: %v", err)
+// TestSetDispatchCSIClusterID asserts the fsid reaches the dispatch controller through HELM rather
+// than a kubectl patch of the live Deployment.
+//
+// The distinction is the bug this replaced: patching container args claims them for the
+// "kubectl-patch" field manager, so the next `helm upgrade` of the release fails with a field
+// conflict and `lab deploy` stops working after `lab tier2 up`. Asserting the argv keeps it that way.
+func TestSetDispatchCSIClusterID(t *testing.T) {
+	f := &fakeRunner{}
+	if err := SetDispatchCSIClusterID(context.Background(), f, "/kc/dispatch.kubeconfig", "/charts/ectobase-dispatch", "fsid-9"); err != nil {
+		t.Fatalf("SetDispatchCSIClusterID: %v", err)
 	}
-	c := f.findCall("kubectl", "patch", "deploy", "dispatch-controller", "--type=json")
+	c := f.findCall("helm", "upgrade", "ectobase-dispatch")
 	if c == nil {
-		t.Fatalf("no dispatch-controller patch call:\n%v", f.calls)
+		t.Fatalf("no dispatch helm upgrade:\n%v", f.calls)
 	}
 	joined := strings.Join(c, " ")
-	if !strings.Contains(joined, `-csi-cluster-id=fsid-9`) || !strings.Contains(joined, `/args/1`) {
-		t.Fatalf("patch argv wrong:\n%s", joined)
+	for _, want := range []string{"--reuse-values", "ceph.clusterID=fsid-9", "--namespace system"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("helm argv missing %q:\n%s", want, joined)
+		}
 	}
-}
-
-// csiArgsRunner is a fakeRunner whose Output returns a canned args JSON array (so the
-// PatchDispatchCSIClusterID read path has something to parse).
-type csiArgsRunner struct {
-	fakeRunner
-	args string
-}
-
-func (c *csiArgsRunner) Output(_ context.Context, name string, args ...string) ([]byte, error) {
-	c.record(name, args...)
-	return []byte(c.args), nil
+	// It must NOT go back to patching the Deployment.
+	if f.findCall("kubectl", "patch", "deploy", "dispatch-controller") != nil {
+		t.Fatalf("still patching the Deployment; that is what broke `lab deploy`:\n%v", f.calls)
+	}
 }
