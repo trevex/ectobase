@@ -34,6 +34,11 @@ const (
 	finalizerCompiledVM               = "compiled.ectobase.dev/compiledvm"
 	finalizerCompiledContainer        = "compiled.ectobase.dev/compiledcontainer"
 	finalizerCompiledVolumeAttachment = "compiled.ectobase.dev/compiledvolumeattachment"
+
+	// finalizerSourceReleased sits on a CompiledVM TWIN, not on a source. It holds a retired twin on
+	// the dispatch until the pool it was compiled for reports release (status.released), which is
+	// what lets a move be break-before-make: see movegate.go.
+	finalizerSourceReleased = "compiled.ectobase.dev/source-released"
 )
 
 // Source back-reference keys. Defined once in the api module (compiledv1) because the broker reads
