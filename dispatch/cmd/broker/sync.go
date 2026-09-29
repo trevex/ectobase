@@ -24,6 +24,11 @@ import (
 // twin removed or edited downstream by hand.
 const resyncPeriod = time.Minute
 
+// releasePollInterval is how soon a pass looks again while a retired twin is still held. The
+// downstream teardown it waits for (VM -> VMI -> virt-launcher -> claim) raises no dispatch event,
+// and a move is stalled until it finishes, so the minute-long resync would be the move's latency.
+const releasePollInterval = 5 * time.Second
+
 // syncRequest is the one work item every trigger enqueues. The sync ignores its request and
 // reconciles every type at once, so one shared key both coalesces a burst of events into a single
 // pass and keeps passes from running concurrently against each other.
@@ -89,6 +94,14 @@ func (r *brokerReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ctrl.
 	}
 	if err := b.SyncCompiledContainers(ctx); err != nil {
 		return ctrl.Result{}, err
+	}
+	// After the syncs: SyncCompiledVMs is what stops a retired twin's VM, this reports when it has.
+	pending, err := b.ReportReleases(ctx)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if pending {
+		return ctrl.Result{RequeueAfter: releasePollInterval}, nil
 	}
 	return ctrl.Result{RequeueAfter: resyncPeriod}, nil
 }
