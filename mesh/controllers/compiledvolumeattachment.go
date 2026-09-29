@@ -143,7 +143,12 @@ func unprotectedRebinds(desired, have []compiledv1.CompiledVolumeAttachment, vol
 
 // CompiledVolumeAttachmentReconciler upserts a VM's CompiledVolumeAttachments (one per
 // VolumeRef) and GCs attachments for VolumeRefs that were removed.
-type CompiledVolumeAttachmentReconciler struct{ Client client.Client }
+type CompiledVolumeAttachmentReconciler struct {
+	Client client.Client
+	// APIReader is an UNCACHED reader for the move gate: a twin the informer has not seen yet must
+	// still close it.
+	APIReader client.Reader
+}
 
 func (r *CompiledVolumeAttachmentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	var vm computev1.VirtualMachine
@@ -176,9 +181,9 @@ func (r *CompiledVolumeAttachmentReconciler) Reconcile(ctx context.Context, req 
 	// this VM exists, its pool may still be running the VM, so no disk is compiled into this pool.
 	// Stale attachments elsewhere are still removed below — a disk leaves at once; only arriving
 	// waits.
-	vmTwins, err := twinsOfSource(ctx, r.Client, &compiledv1.CompiledVMList{}, vm.Namespace, vm.Name)
+	vmTwins, err := gateTwins(ctx, r.APIReader, vm.Namespace, vm.Name)
 	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("list compiledvms: %w", err)
+		return ctrl.Result{}, err
 	}
 	gateOpen := len(awaitingRelease(validate.PoolNamespace(vm.Spec.ClusterName), vmTwins)) == 0
 	want := map[types.NamespacedName]compiledv1.CompiledVolumeAttachment{}

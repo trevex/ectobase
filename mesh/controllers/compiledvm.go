@@ -7,6 +7,8 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"slices"
+	"strings"
 
 	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	computev1 "github.com/trevex/ectobase/api/compute/v1alpha1"
@@ -74,7 +76,10 @@ func compiledCloudInit(ci *computev1.CloudInit) *compiledv1.CloudInit {
 
 // CompiledVMReconciler watches VirtualMachines and upserts their CompiledVM.
 type CompiledVMReconciler struct {
-	Client      client.Client
+	Client client.Client
+	// APIReader is an UNCACHED reader for the move gate: a twin the informer has not seen yet must
+	// still close it.
+	APIReader   client.Reader
 	NetworkName string // the multus NAD name for the flowplane overlay binding
 }
 
@@ -109,9 +114,9 @@ func (r *CompiledVMReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	// Break before make: retire every twin outside this pool, and compile nothing here until each
 	// of them is gone.
 	poolNS := validate.PoolNamespace(vm.Spec.ClusterName)
-	twins, err := twinsOfSource(ctx, r.Client, &compiledv1.CompiledVMList{}, vm.Namespace, vm.Name)
+	twins, err := gateTwins(ctx, r.APIReader, vm.Namespace, vm.Name)
 	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("list compiledvms: %w", err)
+		return ctrl.Result{}, err
 	}
 	if held := awaitingRelease(poolNS, twins); len(held) > 0 {
 		for _, twin := range held {
@@ -122,8 +127,13 @@ func (r *CompiledVMReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 				return ctrl.Result{}, fmt.Errorf("retire compiledvm %s/%s: %w", twin.Namespace, twin.Name, err)
 			}
 		}
+		var pools []string
+		for _, twin := range held {
+			pools = append(pools, twin.Spec.ClusterName)
+		}
 		return ctrl.Result{}, r.setMoving(ctx, &vm, metav1.ConditionTrue, "WaitingForSourceRelease",
-			"waiting for pool "+held[0].Spec.ClusterName+" to release the VM before it starts on "+vm.Spec.ClusterName)
+			"waiting for pool(s) "+strings.Join(slices.Compact(pools), ", ")+
+				" to release the VM before it starts on "+vm.Spec.ClusterName)
 	}
 	var nicList netv1.NetworkInterfaceList
 	if err := r.Client.List(ctx, &nicList, client.InNamespace(vm.Namespace)); err != nil {

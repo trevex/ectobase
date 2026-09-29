@@ -4,7 +4,11 @@
 package controllers
 
 import (
+	"cmp"
 	"context"
+	"errors"
+	"fmt"
+	"slices"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -23,7 +27,8 @@ import (
 // CompiledVMReleaseReconciler then drops the finalizer. Its disappearance is what opens the gate.
 
 // awaitingRelease returns the twins that keep poolNS closed: every twin outside it, and a twin inside
-// it that is itself terminating (a move reversed before the pool it returns to had let go). Pure.
+// it that is itself terminating (a move reversed before the pool it returns to had let go). Sorted
+// by cluster, then namespace, so what is reported about them does not churn between reconciles. Pure.
 func awaitingRelease(poolNS string, twins []client.Object) []*compiledv1.CompiledVM {
 	var out []*compiledv1.CompiledVM
 	for _, o := range twins {
@@ -35,7 +40,36 @@ func awaitingRelease(poolNS string, twins []client.Object) []*compiledv1.Compile
 			out = append(out, cvm)
 		}
 	}
+	slices.SortFunc(out, func(a, b *compiledv1.CompiledVM) int {
+		return cmp.Or(cmp.Compare(a.Spec.ClusterName, b.Spec.ClusterName), cmp.Compare(a.Namespace, b.Namespace))
+	})
 	return out
+}
+
+// gateTwins returns every CompiledVM twin of the source srcNamespace/srcName, read UNCACHED through
+// r. The gate must not trust the informer cache: a twin created moments before a clusterName change
+// can still be missing from it, and a gate that cannot see the source's twin opens while that pool
+// runs the VM. (A cache lagging the other way — a released twin still listed — only holds the gate
+// shut a little longer.) The workload label, which CompileVM stamps with the VM name, narrows the
+// cluster-wide list server-side — a label selector works on both the aggregated apiserver and CRDs,
+// a field selector does not — and the stamped source then drops a same-named VM of another
+// namespace.
+func gateTwins(ctx context.Context, r client.Reader, srcNamespace, srcName string) ([]client.Object, error) {
+	if r == nil {
+		return nil, errors.New("move gate needs an uncached reader")
+	}
+	var list compiledv1.CompiledVMList
+	if err := r.List(ctx, &list, client.MatchingLabels{"workload": srcName}); err != nil {
+		return nil, fmt.Errorf("list compiledvms uncached: %w", err)
+	}
+	var out []client.Object
+	for i := range list.Items {
+		ns, name, stamped := sourceOf(&list.Items[i])
+		if stamped && ns == srcNamespace && name == srcName {
+			out = append(out, &list.Items[i])
+		}
+	}
+	return out, nil
 }
 
 // retireTwin starts the handover of a twin. A twin compiled before the finalizer existed gets it

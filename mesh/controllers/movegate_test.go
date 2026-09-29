@@ -5,6 +5,8 @@ package controllers
 
 import (
 	"context"
+	"slices"
+	"strings"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -16,14 +18,18 @@ import (
 	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 )
 
-func vmTwin(ns string, terminating bool) *compiledv1.CompiledVM {
-	t := &compiledv1.CompiledVM{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "default-vm"}}
+// twinIn is the CompiledVM twin of default/vm compiled for the pool behind namespace ns.
+func twinIn(ns string, terminating bool) *compiledv1.CompiledVM {
+	cvm := &compiledv1.CompiledVM{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "default-vm"},
+		Spec:       compiledv1.CompiledVMSpec{ClusterName: strings.TrimPrefix(ns, "pool-")},
+	}
 	if terminating {
 		now := metav1.Now()
-		t.DeletionTimestamp = &now
-		t.Finalizers = []string{finalizerSourceReleased}
+		cvm.DeletionTimestamp = &now
+		cvm.Finalizers = []string{finalizerSourceReleased}
 	}
-	return t
+	return cvm
 }
 
 func TestAwaitingRelease(t *testing.T) {
@@ -31,20 +37,63 @@ func TestAwaitingRelease(t *testing.T) {
 		name  string
 		pool  string
 		twins []client.Object
-		want  int
+		want  []string // namespaces of the held twins, in the order returned
 	}{
-		{"first placement: no twins", "pool-b", nil, 0},
-		{"steady state: only the twin in its own pool", "pool-a", []client.Object{vmTwin("pool-a", false)}, 0},
-		{"move: a live twin in the old pool", "pool-b", []client.Object{vmTwin("pool-a", false)}, 1},
-		{"move in progress: the old twin terminating", "pool-b", []client.Object{vmTwin("pool-a", true)}, 1},
-		{"reversed mid-move: own pool's twin still terminating", "pool-b", []client.Object{vmTwin("pool-b", true)}, 1},
-		{"chained: two earlier pools still holding", "pool-b", []client.Object{vmTwin("pool-a", true), vmTwin("pool-c", false)}, 2},
+		{"first placement: no twins", "pool-b", nil, nil},
+		{"steady state: only the twin in its own pool", "pool-a", []client.Object{twinIn("pool-a", false)}, nil},
+		{"move: a live twin in the old pool", "pool-b", []client.Object{twinIn("pool-a", false)}, []string{"pool-a"}},
+		{"move in progress: the old twin terminating", "pool-b", []client.Object{twinIn("pool-a", true)}, []string{"pool-a"}},
+		{"reversed mid-move: own pool's twin still terminating", "pool-b", []client.Object{twinIn("pool-b", true)}, []string{"pool-b"}},
+		{"chained: two earlier pools still holding, sorted", "pool-b",
+			[]client.Object{twinIn("pool-c", false), twinIn("pool-a", true)}, []string{"pool-a", "pool-c"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := len(awaitingRelease(tc.pool, tc.twins)); got != tc.want {
-				t.Fatalf("awaitingRelease(%s) = %d twins, want %d", tc.pool, got, tc.want)
+			var got []string
+			for _, cvm := range awaitingRelease(tc.pool, tc.twins) {
+				got = append(got, cvm.Namespace)
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("awaitingRelease(%s) = %v, want %v", tc.pool, got, tc.want)
 			}
 		})
+	}
+}
+
+// The gate reads twins by the workload label, but a label is only a VM name: it must keep only
+// the twins stamped for this very source.
+func TestGateTwins_OnlyThisSource(t *testing.T) {
+	s := runtime.NewScheme()
+	if err := compiledv1.AddToScheme(s); err != nil {
+		t.Fatal(err)
+	}
+	twin := func(ns, name, workload, srcNS, srcName string) *compiledv1.CompiledVM {
+		cvm := &compiledv1.CompiledVM{ObjectMeta: metav1.ObjectMeta{
+			Namespace: ns, Name: name, Labels: map[string]string{"workload": workload},
+		}}
+		stampSource(cvm, srcNS, srcName)
+		return cvm
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(
+		twin("pool-a", "default-vm", "vm", "default", "vm"),
+		twin("pool-b", "default-vm", "vm", "default", "vm"),
+		twin("pool-a", "other-vm", "vm", "other", "vm"),        // same VM name, another tenant namespace
+		twin("pool-a", "default-vm2", "vm2", "default", "vm2"), // another VM entirely
+	).Build()
+
+	got, err := gateTwins(context.Background(), c, "default", "vm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var keys []string
+	for _, o := range got {
+		keys = append(keys, o.GetNamespace()+"/"+o.GetName())
+	}
+	slices.Sort(keys)
+	if want := []string{"pool-a/default-vm", "pool-b/default-vm"}; !slices.Equal(keys, want) {
+		t.Fatalf("gateTwins = %v, want %v", keys, want)
+	}
+	if _, err := gateTwins(context.Background(), nil, "default", "vm"); err == nil {
+		t.Fatal("gateTwins with no reader must fail loudly, not open the gate")
 	}
 }
 
@@ -55,7 +104,7 @@ func TestRetireTwin_FinalizesBeforeDeleting(t *testing.T) {
 	if err := compiledv1.AddToScheme(s); err != nil {
 		t.Fatal(err)
 	}
-	legacy := vmTwin("pool-a", false)
+	legacy := twinIn("pool-a", false)
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(legacy).Build()
 
 	if err := retireTwin(context.Background(), c, legacy); err != nil {

@@ -74,10 +74,10 @@ func TestCompiledTeardownFinalizerEnvtest(t *testing.T) {
 		t.Fatalf("setup nic reconciler: %v", err)
 	}
 	// Both of these root on VirtualMachine — the dual-finalizer case below depends on it.
-	if err := (&CompiledVMReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
+	if err := (&CompiledVMReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader()}).SetupWithManager(mgr); err != nil {
 		t.Fatalf("setup vm reconciler: %v", err)
 	}
-	if err := (&CompiledVolumeAttachmentReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
+	if err := (&CompiledVolumeAttachmentReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader()}).SetupWithManager(mgr); err != nil {
 		t.Fatalf("setup attachment reconciler: %v", err)
 	}
 	if err := (&CompiledVMReleaseReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {

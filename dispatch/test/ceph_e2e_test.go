@@ -254,11 +254,11 @@ func TestCeph_ScheduleCompileSyncMaterializeVolume_E2E(t *testing.T) {
 	//     twin name is <source-namespace>-<source-name>-<volume-ref>, since twins now share one
 	//     pool namespace) (bound c1, Boot, fedora).
 	// ================================================================
-	cr := &controllers.CompiledVMReconciler{Client: dispatchClient, NetworkName: "flowplane-overlay"}
+	cr := &controllers.CompiledVMReconciler{Client: dispatchClient, APIReader: dispatchClient, NetworkName: "flowplane-overlay"}
 	if _, err := cr.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKey{Namespace: ns, Name: "vm1"}}); err != nil {
 		t.Fatalf("compile Reconcile vm1 (CompiledVM): %v", err)
 	}
-	cva := &controllers.CompiledVolumeAttachmentReconciler{Client: dispatchClient}
+	cva := &controllers.CompiledVolumeAttachmentReconciler{Client: dispatchClient, APIReader: dispatchClient}
 	if _, err := cva.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKey{Namespace: ns, Name: "vm1"}}); err != nil {
 		t.Fatalf("compile Reconcile vm1 (CompiledVolumeAttachment): %v", err)
 	}
