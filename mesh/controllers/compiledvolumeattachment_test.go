@@ -99,3 +99,77 @@ func TestCompileVolumeAttachments_StampsTheRecordedIdentity(t *testing.T) {
 		t.Errorf("volumeRef = %q, want fresh", fresh.Spec.VolumeRef)
 	}
 }
+
+// TestUnprotectedRebinds is the guard for the one window in which a cluster rebind still loses
+// data, and the plan for this work named it as a risk left unaddressed.
+//
+// A disk becomes safe to move only once the pool that provisioned it has observed the bound claim:
+// that is when its PersistentVolume is flipped to Retain and its identity recorded. Before that the
+// PV still carries the StorageClass's Delete, so pruning the old attachment destroys the image while
+// the target provisions a blank one. The compiler can see this coming — it has the existing twins,
+// the desired ones, and the Volumes — so it should say so rather than proceed quietly.
+//
+// What must NOT be flagged is a first provisioning: a Volume with no identity and no prior
+// attachment is simply a new disk, which is the common case.
+func TestUnprotectedRebinds(t *testing.T) {
+	withIdentity := storagev1.Volume{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "boot"},
+		Status: storagev1.VolumeStatus{DiskIdentity: &storagev1.DiskIdentity{
+			CSI: &corev1.CSIPersistentVolumeSource{VolumeHandle: "h"},
+		}},
+	}
+	noIdentity := storagev1.Volume{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "boot"}}
+
+	att := func(ns, name, volumeRef string) compiledv1.CompiledVolumeAttachment {
+		return compiledv1.CompiledVolumeAttachment{
+			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name},
+			Spec:       compiledv1.CompiledVolumeAttachmentSpec{VolumeRef: volumeRef},
+		}
+	}
+
+	cases := []struct {
+		name    string
+		have    []compiledv1.CompiledVolumeAttachment
+		desired []compiledv1.CompiledVolumeAttachment
+		volumes []storagev1.Volume
+		want    int
+	}{{
+		name:    "rebind of an unprotected disk is flagged",
+		have:    []compiledv1.CompiledVolumeAttachment{att("pool-c1", "ns-vm1-boot", "boot")},
+		desired: []compiledv1.CompiledVolumeAttachment{att("pool-c2", "ns-vm1-boot", "boot")},
+		volumes: []storagev1.Volume{noIdentity},
+		want:    1,
+	}, {
+		name:    "rebind of a protected disk is not flagged — that is the whole point of the identity",
+		have:    []compiledv1.CompiledVolumeAttachment{att("pool-c1", "ns-vm1-boot", "boot")},
+		desired: []compiledv1.CompiledVolumeAttachment{att("pool-c2", "ns-vm1-boot", "boot")},
+		volumes: []storagev1.Volume{withIdentity},
+		want:    0,
+	}, {
+		name:    "staying put is not a rebind, however unprotected the disk is",
+		have:    []compiledv1.CompiledVolumeAttachment{att("pool-c1", "ns-vm1-boot", "boot")},
+		desired: []compiledv1.CompiledVolumeAttachment{att("pool-c1", "ns-vm1-boot", "boot")},
+		volumes: []storagev1.Volume{noIdentity},
+		want:    0,
+	}, {
+		name:    "first provisioning is not a rebind: no prior attachment to lose",
+		have:    nil,
+		desired: []compiledv1.CompiledVolumeAttachment{att("pool-c1", "ns-vm1-boot", "boot")},
+		volumes: []storagev1.Volume{noIdentity},
+		want:    0,
+	}}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := unprotectedRebinds(c.desired, c.have, c.volumes)
+			if len(got) != c.want {
+				t.Fatalf("got %d unprotected rebinds %+v, want %d", len(got), got, c.want)
+			}
+			if c.want == 1 {
+				if got[0].Volume != "boot" || got[0].From != "pool-c1" || got[0].To != "pool-c2" {
+					t.Fatalf("flagged the wrong move: %+v", got[0])
+				}
+			}
+		})
+	}
+}

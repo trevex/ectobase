@@ -475,7 +475,7 @@ func cephPurge(ctx context.Context, clusters []deploy.ComputeCluster) error {
 	return nil
 }
 
-// Tier2 deploys the Tier-2 (VM live-migration + fencing) prerequisites onto an
+// Tier2 deploys the Tier-2 (fenced cross-cluster VM reschedule) prerequisites onto an
 // already-up fabric: KubeVirt + CDI + the flowplane network binding on every compute
 // cluster, and the ceph fsid wired into the dispatch controller's ceph-csi fence
 // actuator. It is the `lab tier2 up` entry point. Requires fabric.ceph.enabled (RBD

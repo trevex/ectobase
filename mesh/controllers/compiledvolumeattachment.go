@@ -19,6 +19,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
@@ -82,6 +83,64 @@ func diskIdentityForAttachment(vol *storagev1.Volume) *compiledv1.DiskIdentity {
 	}
 }
 
+// unprotectedRebindsOf adapts the reconciler's []client.Object twin list to the pure check below.
+func unprotectedRebindsOf(desired []compiledv1.CompiledVolumeAttachment, have []client.Object, volumes []storagev1.Volume) []unprotectedRebind {
+	typed := make([]compiledv1.CompiledVolumeAttachment, 0, len(have))
+	for _, o := range have {
+		if cur, ok := o.(*compiledv1.CompiledVolumeAttachment); ok {
+			typed = append(typed, *cur)
+		}
+	}
+	return unprotectedRebinds(desired, typed, volumes)
+}
+
+// unprotectedRebind names a disk about to move pools while nothing is protecting it.
+type unprotectedRebind struct {
+	Volume string // the source Volume's name
+	From   string // the pool namespace the attachment is leaving
+	To     string // the pool namespace it is compiled into
+}
+
+// unprotectedRebinds reports the disks being moved to another pool before their identity has been
+// recorded — the one window in which a rebind still DESTROYS data rather than moving it.
+//
+// A disk is protected once the pool that provisioned it observes the bound claim: that is when its
+// PersistentVolume becomes Retain and its CSI identity is captured. Until then the PV still carries
+// the StorageClass's reclaimPolicy (Delete), so pruning the old attachment takes the image with it
+// while the target provisions a blank one. Nothing can protect a disk that has not been observed
+// yet, so the window is inherent — but it is narrow, knowable here, and worth saying out loud
+// instead of losing data quietly.
+//
+// Twins are matched by NAME rather than by spec.volumeRef so this still works for attachments
+// compiled before volumeRef existed: the name is identical across pools and only the namespace
+// differs, which is exactly what makes a move recognisable. The volumeRef is then taken from the
+// DESIRED attachment, which the current compiler always sets, to find the Volume.
+//
+// Pure, so the judgement is unit-tested rather than inferred from a reconcile.
+func unprotectedRebinds(desired, have []compiledv1.CompiledVolumeAttachment, volumes []storagev1.Volume) []unprotectedRebind {
+	protected := make(map[string]bool, len(volumes))
+	for i := range volumes {
+		id := volumes[i].Status.DiskIdentity
+		protected[volumes[i].Name] = id != nil && id.CSI != nil
+	}
+	byName := make(map[string]compiledv1.CompiledVolumeAttachment, len(desired))
+	for _, d := range desired {
+		byName[d.Name] = d
+	}
+	var out []unprotectedRebind
+	for _, cur := range have {
+		d, ok := byName[cur.Name]
+		if !ok || d.Namespace == cur.Namespace {
+			continue // gone entirely, or staying put: neither is a move
+		}
+		if d.Spec.VolumeRef == "" || protected[d.Spec.VolumeRef] {
+			continue
+		}
+		out = append(out, unprotectedRebind{Volume: d.Spec.VolumeRef, From: cur.Namespace, To: d.Namespace})
+	}
+	return out
+}
+
 // CompiledVolumeAttachmentReconciler upserts a VM's CompiledVolumeAttachments (one per
 // VolumeRef) and GCs attachments for VolumeRefs that were removed.
 type CompiledVolumeAttachmentReconciler struct{ Client client.Client }
@@ -126,6 +185,19 @@ func (r *CompiledVolumeAttachmentReconciler) Reconcile(ctx context.Context, req 
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("list attachments: %w", err)
 	}
+	// Warn before the diff below acts on it: a disk moving pools with no recorded identity is
+	// about to be destroyed rather than moved, and this is the last point at which anything knows.
+	if rebinds := unprotectedRebindsOf(desired, haveTwins, volList.Items); len(rebinds) > 0 {
+		lg := log.FromContext(ctx)
+		for _, rb := range rebinds {
+			lg.Error(nil, "moving a VM whose disk has no recorded identity yet — the image will be "+
+				"DESTROYED rather than moved; the disk becomes safe to move only once its pool has "+
+				"observed the bound claim (PersistentVolume flipped to Retain, identity captured)",
+				"vm", vm.Namespace+"/"+vm.Name, "volume", vm.Namespace+"/"+rb.Volume,
+				"from", rb.From, "to", rb.To)
+		}
+	}
+
 	haveKeys := map[types.NamespacedName]bool{}
 	for _, obj := range haveTwins {
 		cur, ok := obj.(*compiledv1.CompiledVolumeAttachment)
