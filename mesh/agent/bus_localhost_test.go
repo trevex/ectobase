@@ -180,8 +180,66 @@ func TestReassertSkipsThisNodesOwnNexthop(t *testing.T) {
 	}
 }
 
+// A local host key sent a set that includes this node (it announced the /32 too, mid-move) is
+// programmed to the first nexthop that is NOT this node, so flowplane's shadow never holds X->self.
+func TestLocalHostKeySkipsThisNodesOwnNexthop(t *testing.T) {
+	ctx := context.Background()
+	dp := newRecordingDP()
+	b := newGuestBus(dp)
+	localGuest(dp)
+	b.refreshLocalHosts(ctx)
+
+	b.apply(ctx, routeAdd(100, guestHost, selfNH, remoteNH))
+	if nh, ok := dp.get(100, guestHost); !ok || nh != remoteNH {
+		t.Fatalf("a local host key must be programmed to the first nexthop that is not this node (%s), got %q ok=%v", remoteNH, nh, ok)
+	}
+}
+
+// Sent only this node, a local host key has nothing to program: the dataplane gets a withdraw, and
+// neither then nor when the guest leaves does X->self ever reach it.
+func TestLocalHostKeyWithOnlyThisNodeIsWithdrawn(t *testing.T) {
+	ctx := context.Background()
+	dp := newRecordingDP()
+	b := newGuestBus(dp)
+	localGuest(dp)
+	b.refreshLocalHosts(ctx)
+	b.apply(ctx, routeAdd(100, guestHost, remoteNH)) // the other node's route, programmed
+
+	b.apply(ctx, routeAdd(100, guestHost, selfNH)) // now only this node announces it
+	if !withdrewKey(dp, 100, guestHost) {
+		t.Fatal("a local host key sent only this node must be withdrawn from the dataplane")
+	}
+	if b.installed[100][guestHost] {
+		t.Fatal("nothing is installed for it any more")
+	}
+
+	noLocalGuest(dp)
+	b.refreshLocalHosts(ctx)
+	for _, c := range addsFor(dp, 100, guestHost) {
+		if c.nexthop == selfNH {
+			t.Fatalf("X->self must never reach the dataplane, got %+v", c)
+		}
+	}
+}
+
+// Peer imports into a local host key choose their nexthop the same way.
+func TestPeerImportIntoALocalHostKeySkipsThisNodesOwnNexthop(t *testing.T) {
+	ctx := context.Background()
+	dp := newRecordingDP()
+	b := newGuestBus(dp)
+	setPeerImports(b, map[uint32][]PeerImport{100: {{PeerVNI: 200, ImportPrefixes: []string{"10.0.0.0/24"}}}})
+	localGuest(dp)
+	b.refreshLocalHosts(ctx)
+
+	b.apply(ctx, routeAdd(200, guestHost, selfNH, remoteNH))
+	if nh, ok := dp.get(100, guestHost); !ok || nh != remoteNH {
+		t.Fatalf("a peer import into a local host key must skip this node's own nexthop, got %q ok=%v", nh, ok)
+	}
+}
+
 // An E/W LB address is an anycast key with no self-route behind it: not a local host prefix, so it
-// keeps today's behaviour even on a node that hosts a guest in the same VNI.
+// keeps today's behaviour even on a node that hosts a guest in the same VNI — including a self
+// nexthop first, which flowplane delivers locally.
 func TestAnycastLBAddressIsUnaffected(t *testing.T) {
 	ctx := context.Background()
 	dp := newRecordingDP()

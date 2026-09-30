@@ -885,9 +885,19 @@ func (b *Bus) apply(ctx context.Context, ru *rbv1.RouteUpdate) {
 	switch ru.Op {
 	case rbv1.RouteOp_ROUTE_OP_ADD:
 		b.setLearnedOwn(ru.Vni, ru.Prefix, ownRoute{nexthops: append([]string(nil), ru.Nexthops...), external: ru.External})
-		// Own table install: delivery vni == the route's own vni (key and delivery match).
-		if err := b.dp.AddRoute(ctx, ru.Vni, ru.Prefix, nh, ru.External, ru.Vni); err != nil {
-			log.Printf("AddRoute vni=%d %s -> %s external=%t: %v", ru.Vni, ru.Prefix, nh, ru.External, err)
+		ownNH, ok := b.nexthopFor(ru.Vni, ru.Prefix, ru.Nexthops)
+		if !ok {
+			// A local guest's /32 whose only nexthop is this node: there is nowhere else to send
+			// it, and X->self must never sit in flowplane's shadow to be reinstalled on detach.
+			if err := b.dp.WithdrawRoute(ctx, ru.Vni, ru.Prefix); err != nil {
+				log.Printf("WithdrawRoute vni=%d %s (only this node announces it): %v", ru.Vni, ru.Prefix, err)
+			} else {
+				b.markWithdrawn(ru.Vni, ru.Prefix)
+				b.clearOrigin(ru.Vni, ru.Prefix)
+			}
+		} else if err := b.dp.AddRoute(ctx, ru.Vni, ru.Prefix, ownNH, ru.External, ru.Vni); err != nil {
+			// (Own table install: delivery vni == the route's own vni — key and delivery match.)
+			log.Printf("AddRoute vni=%d %s -> %s external=%t: %v", ru.Vni, ru.Prefix, ownNH, ru.External, err)
 			// Still attempt the peer import below: it targets other tables and must not be skipped.
 		} else {
 			b.markInstalled(ru.Vni, ru.Prefix)
@@ -936,11 +946,24 @@ func (b *Bus) applyPeer(ctx context.Context, ru *rbv1.RouteUpdate, nh string, im
 			if b.origin[im.localVNI][ru.Prefix] == "own" {
 				continue // local route wins; do not shadow it
 			}
+			impNH, ok := b.nexthopFor(im.localVNI, ru.Prefix, ru.Nexthops)
+			if !ok {
+				// Only this node, into a local guest's key: drop any import held there (see apply).
+				if b.origin[im.localVNI][ru.Prefix] == "peer" {
+					if err := b.dp.WithdrawRoute(ctx, im.localVNI, ru.Prefix); err != nil {
+						log.Printf("peer import WithdrawRoute vni=%d %s: %v", im.localVNI, ru.Prefix, err)
+						continue
+					}
+					b.clearOrigin(im.localVNI, ru.Prefix)
+					b.markWithdrawn(im.localVNI, ru.Prefix)
+				}
+				continue
+			}
 			// Peer import: key = im.localVNI (the importer's table), but delivery must be stamped
 			// with ru.Vni (the peer's own/origin vni) so the datapath encaps toward the peer VPC —
 			// this is the load-bearing case for delivery_vni.
-			if err := b.dp.AddRoute(ctx, im.localVNI, ru.Prefix, nh, false, ru.Vni); err != nil {
-				log.Printf("peer import AddRoute vni=%d %s -> %s: %v", im.localVNI, ru.Prefix, nh, err)
+			if err := b.dp.AddRoute(ctx, im.localVNI, ru.Prefix, impNH, false, ru.Vni); err != nil {
+				log.Printf("peer import AddRoute vni=%d %s -> %s: %v", im.localVNI, ru.Prefix, impNH, err)
 				continue
 			}
 			b.setOrigin(im.localVNI, ru.Prefix, "peer")
@@ -973,7 +996,11 @@ func (b *Bus) restoreImport(ctx context.Context, localVNI uint32, prefix string)
 		if !prefixInCIDRs(prefix, im.ImportPrefixes) {
 			continue
 		}
-		nh, ok := b.learnedPeer[im.PeerVNI][prefix]
+		learned, ok := b.learnedPeer[im.PeerVNI][prefix]
+		if !ok {
+			continue
+		}
+		nh, ok := b.nexthopFor(localVNI, prefix, []string{learned})
 		if !ok {
 			continue
 		}
@@ -1263,13 +1290,7 @@ func (b *Bus) releaseLocalHost(ctx context.Context, vni uint32, prefix string) {
 		b.restoreImport(ctx, vni, prefix)
 		return
 	}
-	nh := ""
-	for _, cand := range r.nexthops {
-		if !b.ownUnderlays[cand] {
-			nh = cand
-			break
-		}
-	}
+	nh := b.foreignNexthop(r.nexthops)
 	if nh == "" {
 		return
 	}
@@ -1282,6 +1303,32 @@ func (b *Bus) releaseLocalHost(ctx context.Context, vni uint32, prefix string) {
 	}
 	b.installed[vni][prefix] = true
 	b.setOrigin(vni, prefix, "own")
+}
+
+// nexthopFor picks the nexthop to program for (vni, prefix) from a route's sorted set. Any key but
+// a local guest's host prefix gets the first, as it always has — for an E/W LB address a self
+// nexthop is right, since flowplane delivers it locally. A local host key gets the first nexthop
+// that is not this node instead, so flowplane's shadow never holds X->self for a guest that is
+// here; ok is false when only this node is left.
+func (b *Bus) nexthopFor(vni uint32, prefix string, nexthops []string) (string, bool) {
+	if !b.localHosts[vni][prefix] {
+		if len(nexthops) == 0 {
+			return "", true
+		}
+		return nexthops[0], true
+	}
+	nh := b.foreignNexthop(nexthops)
+	return nh, nh != ""
+}
+
+// foreignNexthop is the first of nexthops that is not one of this node's VTEPs, or "".
+func (b *Bus) foreignNexthop(nexthops []string) string {
+	for _, nh := range nexthops {
+		if !b.ownUnderlays[nh] {
+			return nh
+		}
+	}
+	return ""
 }
 
 func (b *Bus) setLearnedOwn(vni uint32, prefix string, r ownRoute) {
