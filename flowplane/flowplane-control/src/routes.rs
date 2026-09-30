@@ -1,5 +1,15 @@
 use crate::{ControlCore, MapWriter};
 use flowplane_common::{IfaceKey, IfaceKey6, IfaceValue, RouteValue};
+use std::collections::HashMap;
+
+fn route_value(nexthop_ipv6: [u8; 16], nexthop_vni: u32, is_external: bool) -> RouteValue {
+    RouteValue {
+        nexthop_vni,
+        nexthop_ipv6,
+        is_external: is_external as u8,
+        _pad: [0; 3],
+    }
+}
 
 // A mesh route and a local interface's self-route can share a key: a VM that moves onto this node
 // is attached while the fabric still carries its old owner's /32 or /128. The self-route wins the
@@ -17,6 +27,7 @@ impl<W: MapWriter> ControlCore<W> {
         prefix_len == 128 && self.self_routes6.contains(&(vni, ipv6))
     }
 
+    /// Add a route that must not exist yet (`ROUTE_EXISTS` otherwise).
     pub fn create_route(
         &mut self,
         vni: u32,
@@ -34,16 +45,65 @@ impl<W: MapWriter> ControlCore<W> {
         {
             anyhow::bail!("ROUTE_EXISTS: route already exists");
         }
-        let val = RouteValue {
-            nexthop_vni,
+        self.replace_route(
+            vni,
+            ipv4,
+            prefix_len,
             nexthop_ipv6,
-            is_external: is_external as u8,
-            _pad: [0; 3],
-        };
+            nexthop_vni,
+            is_external,
+        )
+    }
+
+    /// Add a route, or replace the one listed on its key in place (the re-announce path): one
+    /// kernel upsert — none while a self-route holds the key — and the listed entry overwritten. A
+    /// moved prefix is never unrouted in between, and never waits on a kernel delete.
+    pub fn replace_route(
+        &mut self,
+        vni: u32,
+        ipv4: [u8; 4],
+        prefix_len: u32,
+        nexthop_ipv6: [u8; 16],
+        nexthop_vni: u32,
+        is_external: bool,
+    ) -> anyhow::Result<()> {
+        let val = route_value(nexthop_ipv6, nexthop_vni, is_external);
         if !self.self_route_holds(vni, ipv4, prefix_len) {
             self.w.route_upsert(vni, ipv4, prefix_len, val)?;
         }
-        self.routes_shadow.push((vni, ipv4, prefix_len, val));
+        match self
+            .routes_shadow
+            .iter_mut()
+            .find(|r| r.0 == vni && r.1 == ipv4 && r.2 == prefix_len)
+        {
+            Some(r) => r.3 = val,
+            None => self.routes_shadow.push((vni, ipv4, prefix_len, val)),
+        }
+        Ok(())
+    }
+
+    /// IPv6 sibling of [`Self::replace_route`].
+    pub fn replace_route6(
+        &mut self,
+        vni: u32,
+        ipv6: [u8; 16],
+        prefix_len: u32,
+        nexthop_ipv6: [u8; 16],
+        nexthop_vni: u32,
+        is_external: bool,
+    ) -> anyhow::Result<()> {
+        let val = route_value(nexthop_ipv6, nexthop_vni, is_external);
+        if !self.self_route6_holds(vni, ipv6, prefix_len) {
+            self.w.route6_upsert(vni, ipv6, prefix_len, val)?;
+        }
+        match self
+            .routes6_shadow
+            .iter_mut()
+            .find(|r| r.0 == vni && r.1 == ipv6 && r.2 == prefix_len)
+        {
+            Some(r) => r.3 = val,
+            None => self.routes6_shadow.push((vni, ipv6, prefix_len, val)),
+        }
         Ok(())
     }
 
@@ -51,19 +111,22 @@ impl<W: MapWriter> ControlCore<W> {
     /// them from the tries, or every withdraw finds nothing and leaves its route forwarding. Runs
     /// after the interfaces are recovered (`register_iface_meta`), since it reads them.
     ///
-    /// The tries also hold each local interface's self-route (`program_interface`), which the
-    /// shadows never list: a host route whose `INTERFACES{,6}` entry is local and whose nexthop is
-    /// that interface's own underlay in its own VNI. A recovered interface's self-route holds its
-    /// key again. One whose interface did not come back (its device went away while the process was
-    /// down) is left out of both, so a mesh route for its key overwrites it. A route that overwrote
-    /// a self-route's key names another nexthop, so it is adopted.
+    /// Every recovered interface's self-routes are (re)written and hold their keys. Whatever else
+    /// sat on such a key is a mesh route and is listed, the fabric's view: code from before the
+    /// keys were held let a mesh add overwrite a live self-route and a mesh withdraw delete one,
+    /// and adopt is where a node damaged that way gets local delivery back.
+    ///
+    /// A self-route whose interface did not come back (its device went away while the process was
+    /// down) is recognised by its `INTERFACES{,6}` entry — local, with the route's nexthop as its
+    /// underlay, in its own VNI — and is neither listed nor held, so a mesh route for its key
+    /// overwrites it.
     ///
     /// A mesh route a self-route was holding back is lost here: the kernel never had it. The mesh
     /// agent re-sends a route only when its route-bus session restarts (the subscribe replay) or
     /// the prefix changes, so until then detaching that interface removes the key instead of
     /// restoring the route.
     pub fn adopt_routes(&mut self) {
-        let is_self = |iv: Option<IfaceValue>, r: &RouteValue, vni: u32| {
+        let orphan = |iv: Option<IfaceValue>, r: &RouteValue, vni: u32| {
             iv.is_some_and(|iv| {
                 iv.is_local == 1
                     && iv.underlay_ipv6 == r.nexthop_ipv6
@@ -71,30 +134,54 @@ impl<W: MapWriter> ControlCore<W> {
                     && r.is_external == 0
             })
         };
-        self.self_routes.clear();
-        self.self_routes6.clear();
-        let mut shadow = Vec::new();
+        let own4: HashMap<(u32, [u8; 4]), RouteValue> = self
+            .ifaces_meta
+            .values()
+            .filter(|m| m.ipv4 != [0u8; 4])
+            .map(|m| ((m.vni, m.ipv4), route_value(m.underlay, m.vni, false)))
+            .collect();
+        let own6: HashMap<(u32, [u8; 16]), RouteValue> = self
+            .ifaces_meta
+            .values()
+            .filter(|m| m.ipv6 != [0u8; 16])
+            .map(|m| ((m.vni, m.ipv6), route_value(m.underlay, m.vni, false)))
+            .collect();
+
+        self.routes_shadow.clear();
         for (v, p, l, r) in self.w.route_entries() {
-            if l == 32 && is_self(self.w.ifaces_get(&IfaceKey::new(v, p)), &r, v) {
-                if self.ifaces_meta.values().any(|m| m.vni == v && m.ipv4 == p) {
-                    self.self_routes.insert((v, p));
-                }
-            } else {
-                shadow.push((v, p, l, r));
+            let listed = match own4.get(&(v, p)) {
+                Some(own) if l == 32 => r != *own,
+                _ => !(l == 32 && orphan(self.w.ifaces_get(&IfaceKey::new(v, p)), &r, v)),
+            };
+            if listed {
+                self.routes_shadow.push((v, p, l, r));
             }
         }
-        self.routes_shadow = shadow;
-        let mut shadow6 = Vec::new();
+        self.self_routes.clear();
+        for (&(v, p), &own) in &own4 {
+            // A key whose write fails stays unheld, so the kernel and the shadow still agree on
+            // it; the next adopt retries.
+            if self.w.route_upsert(v, p, 32, own).is_ok() {
+                self.self_routes.insert((v, p));
+            }
+        }
+
+        self.routes6_shadow.clear();
         for (v, p, l, r) in self.w.route6_entries() {
-            if l == 128 && is_self(self.w.ifaces6_get(&IfaceKey6::new(v, p)), &r, v) {
-                if self.ifaces_meta.values().any(|m| m.vni == v && m.ipv6 == p) {
-                    self.self_routes6.insert((v, p));
-                }
-            } else {
-                shadow6.push((v, p, l, r));
+            let listed = match own6.get(&(v, p)) {
+                Some(own) if l == 128 => r != *own,
+                _ => !(l == 128 && orphan(self.w.ifaces6_get(&IfaceKey6::new(v, p)), &r, v)),
+            };
+            if listed {
+                self.routes6_shadow.push((v, p, l, r));
             }
         }
-        self.routes6_shadow = shadow6;
+        self.self_routes6.clear();
+        for (&(v, p), &own) in &own6 {
+            if self.w.route6_upsert(v, p, 128, own).is_ok() {
+                self.self_routes6.insert((v, p));
+            }
+        }
     }
 
     /// Delete a route. Returns true if found and deleted, false if not found. A failed kernel
@@ -136,17 +223,14 @@ impl<W: MapWriter> ControlCore<W> {
         {
             anyhow::bail!("ROUTE_EXISTS: route already exists");
         }
-        let val = RouteValue {
-            nexthop_vni,
+        self.replace_route6(
+            vni,
+            ipv6,
+            prefix_len,
             nexthop_ipv6,
-            is_external: is_external as u8,
-            _pad: [0; 3],
-        };
-        if !self.self_route6_holds(vni, ipv6, prefix_len) {
-            self.w.route6_upsert(vni, ipv6, prefix_len, val)?;
-        }
-        self.routes6_shadow.push((vni, ipv6, prefix_len, val));
-        Ok(())
+            nexthop_vni,
+            is_external,
+        )
     }
 
     /// Delete an IPv6 route. Returns true if found, false if not found. Same failure contract as
@@ -299,12 +383,21 @@ mod tests {
 
     // A local interface's self-route lives in ROUTES{,6} but never in a shadow, so no withdraw can
     // take it: adopt must leave it out too, and a recovered interface's self-route holds its key
-    // against a mesh add again. A user route on the same key (a different nexthop) is still a user
-    // route, and a self-route whose interface did not come back holds nothing.
+    // against a mesh add again. A self-route whose interface did not come back holds nothing.
+    //
+    // Adopt also repairs what the pre-arbitration code could leave behind on a live interface's
+    // key: a mesh route that overwrote the self-route (kept in the shadow, as the fabric's view),
+    // or a self-route a mesh withdraw deleted. Both get the self-route back, held, or local
+    // delivery to that guest stays broken for as long as it lives.
     #[test]
-    fn adopt_leaves_self_routes_out_of_the_shadows() {
+    fn adopt_restores_and_holds_every_recovered_self_route() {
         use flowplane_common::{IfaceKey, IfaceKey6, IfaceValue};
         let local = [0xfd, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
+        let v6 = |last: u8| {
+            let mut a = P6;
+            a[15] = last;
+            a
+        };
         let iface = IfaceValue {
             tap_ifindex: 42,
             is_local: 1,
@@ -319,68 +412,105 @@ mod tests {
             is_external: 0,
             _pad: [0; 3],
         };
+        let foreign = RouteValue {
+            nexthop_ipv6: NH,
+            is_external: 1,
+            ..self_route
+        };
         let mut w = MemMapWriter::default();
+        // a: intact.
         w.ifaces_upsert(IfaceKey::new(100, [10, 0, 0, 5]), iface)
             .unwrap();
-        w.ifaces6_upsert(IfaceKey6::new(100, P6), iface).unwrap();
+        w.ifaces6_upsert(IfaceKey6::new(100, v6(5)), iface).unwrap();
         w.route_upsert(100, [10, 0, 0, 5], 32, self_route).unwrap();
-        w.route6_upsert(100, P6, 128, self_route).unwrap();
-        // A local interface whose key a remote route overwrote before the restart.
+        w.route6_upsert(100, v6(5), 128, self_route).unwrap();
+        // b: a mesh route overwrote its self-routes.
         w.ifaces_upsert(IfaceKey::new(100, [10, 0, 0, 6]), iface)
             .unwrap();
-        w.route_upsert(
-            100,
-            [10, 0, 0, 6],
-            32,
-            RouteValue {
-                nexthop_ipv6: NH,
-                ..self_route
-            },
-        )
-        .unwrap();
-
+        w.ifaces6_upsert(IfaceKey6::new(100, v6(6)), iface).unwrap();
+        w.route_upsert(100, [10, 0, 0, 6], 32, foreign).unwrap();
+        w.route6_upsert(100, v6(6), 128, foreign).unwrap();
+        // d: a mesh withdraw deleted its self-routes.
+        w.ifaces_upsert(IfaceKey::new(100, [10, 0, 0, 8]), iface)
+            .unwrap();
+        w.ifaces6_upsert(IfaceKey6::new(100, v6(8)), iface).unwrap();
         // An interface whose device went away while the process was down: not recovered.
         w.ifaces_upsert(IfaceKey::new(100, [10, 0, 0, 7]), iface)
             .unwrap();
         w.route_upsert(100, [10, 0, 0, 7], 32, self_route).unwrap();
 
         let mut c = ControlCore::new(w);
-        for (id, ipv4, ipv6) in [
-            (&b"a"[..], [10, 0, 0, 5], P6),
-            (b"b", [10, 0, 0, 6], [0; 16]),
-        ] {
+        for (id, last) in [(&b"a"[..], 5), (b"b", 6), (b"d", 8)] {
             c.register_iface_meta(
                 id.to_vec(),
                 crate::shadow::IfaceMeta {
                     vni: 100,
-                    ipv4,
-                    ipv6,
+                    ipv4: [10, 0, 0, last],
+                    ipv6: v6(last),
                     underlay: local,
                     ifindex: 42,
                 },
             );
         }
         c.adopt_routes();
-        let overwrote = RouteValue {
-            nexthop_ipv6: NH,
-            ..self_route
-        };
-        assert_eq!(c.routes_shadow, vec![(100, [10, 0, 0, 6], 32, overwrote)]);
-        assert!(c.routes6_shadow.is_empty());
-        assert!(!c.delete_route(100, [10, 0, 0, 5], 32).unwrap());
-        assert!(!c.delete_route6(100, P6, 128).unwrap());
-        assert!(c.w.routes.contains_key(&(100, [10, 0, 0, 5], 32)));
-        assert!(c.w.routes6.contains_key(&(100, P6, 128)));
+        assert_eq!(c.routes_shadow, vec![(100, [10, 0, 0, 6], 32, foreign)]);
+        assert_eq!(c.routes6_shadow, vec![(100, v6(6), 128, foreign)]);
+        for last in [5, 6, 8] {
+            assert_eq!(c.w.routes[&(100, [10, 0, 0, last], 32)], self_route);
+            assert_eq!(c.w.routes6[&(100, v6(last), 128)], self_route);
+        }
 
-        // The recovered interface's keys are held: a mesh add waits in the shadow.
-        c.create_route(100, [10, 0, 0, 5], 32, NH, 100, false)
+        // Every recovered key is held: a withdraw of b's mesh route and a mesh add over a or d
+        // touch the shadow only.
+        assert!(c.delete_route(100, [10, 0, 0, 6], 32).unwrap());
+        assert!(c.delete_route6(100, v6(6), 128).unwrap());
+        assert!(!c.delete_route(100, [10, 0, 0, 5], 32).unwrap());
+        for last in [5, 8] {
+            c.create_route(100, [10, 0, 0, last], 32, NH, 100, false)
+                .unwrap();
+            c.create_route6(100, v6(last), 128, NH, 100, false).unwrap();
+        }
+        for last in [5, 6, 8] {
+            assert_eq!(c.w.routes[&(100, [10, 0, 0, last], 32)], self_route);
+            assert_eq!(c.w.routes6[&(100, v6(last), 128)], self_route);
+        }
+        // The orphan's key is not held: a mesh add takes it.
+        c.create_route(100, [10, 0, 0, 7], 32, NH, 100, true)
             .unwrap();
-        c.create_route6(100, P6, 128, NH, 100, false).unwrap();
-        assert_eq!(c.w.routes[&(100, [10, 0, 0, 5], 32)], self_route);
-        assert_eq!(c.w.routes6[&(100, P6, 128)], self_route);
-        // The orphan's key is not: a mesh add takes it.
-        c.create_route(100, [10, 0, 0, 7], 32, NH, 100, false)
+        assert_eq!(c.w.routes[&(100, [10, 0, 0, 7], 32)], foreign);
+    }
+
+    // A re-announce replaces a route in place: one kernel write, no gap, and no dependence on a
+    // kernel delete that could fail. On a held key it changes only the shadow.
+    #[test]
+    fn replace_route_overwrites_in_place() {
+        let mut c = ControlCore::new(MemMapWriter::default());
+        c.replace_route(7, [10, 0, 0, 0], 24, NH, 7, false).unwrap();
+        c.replace_route6(7, P6, 64, NH, 7, false).unwrap();
+        // A remove would fail now; a replace never needs one.
+        c.w.route_remove_fault = Some((7, [10, 0, 0, 0], 24));
+        c.w.route6_remove_fault = Some((7, P6, 64));
+        let moved = [0xfd, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xaa];
+        c.replace_route(7, [10, 0, 0, 0], 24, moved, 8, true)
             .unwrap();
-        assert_eq!(c.w.routes[&(100, [10, 0, 0, 7], 32)], overwrote);
+        c.replace_route6(7, P6, 64, moved, 8, true).unwrap();
+        let want = RouteValue {
+            nexthop_vni: 8,
+            nexthop_ipv6: moved,
+            is_external: 1,
+            _pad: [0; 3],
+        };
+        assert_eq!(c.w.routes[&(7, [10, 0, 0, 0], 24)], want);
+        assert_eq!(c.w.routes6[&(7, P6, 64)], want);
+        assert_eq!(c.routes_shadow, vec![(7, [10, 0, 0, 0], 24, want)]);
+        assert_eq!(c.routes6_shadow, vec![(7, P6, 64, want)]);
+
+        c.self_routes.insert((7, [10, 0, 0, 5]));
+        c.replace_route(7, [10, 0, 0, 5], 32, NH, 7, false).unwrap();
+        c.replace_route(7, [10, 0, 0, 5], 32, moved, 7, false)
+            .unwrap();
+        assert!(!c.w.routes.contains_key(&(7, [10, 0, 0, 5], 32)));
+        assert_eq!(c.routes_shadow.len(), 2);
+        assert_eq!(c.routes_shadow[1].3.nexthop_ipv6, moved);
     }
 }

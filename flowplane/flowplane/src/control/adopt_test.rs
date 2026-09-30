@@ -97,6 +97,19 @@ fn route_pinned(pin: &Path, vni: u32, ipv4: [u8; 4]) -> Option<RouteValue> {
     trie.get(&Key::new(32 + 32, data), 0).ok()
 }
 
+/// Write one host route straight into the pinned `ROUTES`, as an older build could have.
+fn put_route_pinned(pin: &Path, vni: u32, ipv4: [u8; 4], val: RouteValue) {
+    let map = MapData::from_pin(pin.join("ROUTES")).expect("reopen pinned ROUTES");
+    let mut trie: LpmTrie<_, RouteLpmData, RouteValue> =
+        LpmTrie::try_from(aya::maps::Map::LpmTrie(map)).expect("ROUTES is an LPM trie");
+    let data = RouteLpmData {
+        vni: vni.to_be_bytes(),
+        ipv4,
+    };
+    trie.insert(&Key::new(32 + 32, data), val, 0)
+        .expect("write pinned route");
+}
+
 fn routes6_pinned(pin: &Path) -> Vec<(u32, [u8; 16], u32)> {
     let map = MapData::from_pin(pin.join("ROUTES6")).expect("reopen pinned ROUTES6");
     let trie: LpmTrie<_, RouteLpmData6, RouteValue> =
@@ -377,6 +390,21 @@ fn restart_adopts_pinned_state_and_relinks_guests() {
     // name the whole block, so adopt can tell what is missing.
     drop_nat_owner_pinned(pin.path(), owners[owners.len() / 2]);
 
+    // The damage an older build left on live nodes: a mesh route overwrote ifA's self-route, so the
+    // kernel sends traffic for a local guest to another node.
+    let stale_owner: std::net::Ipv6Addr = "fd00::77".parse().unwrap();
+    put_route_pinned(
+        pin.path(),
+        vni,
+        ip,
+        RouteValue {
+            nexthop_vni: vni,
+            nexthop_ipv6: stale_owner.octets(),
+            is_external: 0,
+            _pad: [0; 3],
+        },
+    );
+
     // A node upgraded from an older build still has the maps that build declared and this one does
     // not (the first-match firewall's rule slots, the scanned neighbor-NAT slots) pinned; nothing
     // reads them any more, and adopt must not leave them holding kernel memory. The stand-ins and
@@ -540,6 +568,15 @@ fn restart_adopts_pinned_state_and_relinks_guests() {
         "the withdraw removes the adopted v6 block"
     );
 
+    // Adopt repaired ifA's key: the self-route is back in the kernel, and the mesh route that had
+    // overwritten it is listed (the fabric's view) behind it.
+    let self_nh: std::net::Ipv6Addr = "fd00::1".parse().unwrap();
+    assert_eq!(
+        route_pinned(pin.path(), vni, ip).map(|r| r.nexthop_ipv6),
+        Some(self_nh.octets()),
+        "adopt restores the overwritten self-route"
+    );
+
     // The routes came back through adopt: a withdraw after the restart removes them from the pinned
     // tries. Without adopt the empty shadow made each withdraw a silent no-op and the route kept
     // forwarding. The self-route was never a withdrawable route and still is not.
@@ -566,6 +603,27 @@ fn restart_adopts_pinned_state_and_relinks_guests() {
             )
         })
         .expect("withdraw the self-route's key");
+    assert!(
+        removed,
+        "the mesh route that had overwritten the self-route is listed"
+    );
+    assert_eq!(routes_pinned(pin.path()), vec![self_route]);
+    assert_eq!(
+        route_pinned(pin.path(), vni, ip).map(|r| r.nexthop_ipv6),
+        Some(self_nh.octets()),
+        "its withdraw leaves the held self-route alone"
+    );
+    let (_, removed) = ctl
+        .with_core(|c| {
+            handlers::withdraw_route(
+                c,
+                &pb::WithdrawRouteRequest {
+                    vni,
+                    prefix: "10.0.0.5/32".into(),
+                },
+            )
+        })
+        .expect("withdraw the self-route's key again");
     assert!(!removed, "a self-route is not adopted as a route");
     assert_eq!(routes_pinned(pin.path()), vec![self_route]);
 

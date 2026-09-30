@@ -35,18 +35,16 @@ pub fn add_route<W: MapWriter>(
     } else {
         vni
     };
-    // Idempotent: drop any existing (vni, prefix) so a re-announce or moved prefix replaces
-    // the nexthop instead of hitting ROUTE_EXISTS (identical to the eBPF handler).
-    let res: anyhow::Result<()> = if is_v6 {
-        core.delete_route6(vni, bytes, len)
-            .and_then(|_| core.create_route6(vni, bytes, len, nexthop, dvni, external))
+    // Idempotent: a re-announce or moved prefix replaces the (vni, prefix) in place, so it never
+    // hits ROUTE_EXISTS, never leaves the prefix unrouted between a delete and a create, and never
+    // fails on a kernel delete it does not need.
+    if is_v6 {
+        core.replace_route6(vni, bytes, len, nexthop, dvni, external)?;
     } else {
         let mut v4 = [0u8; 4];
         v4.copy_from_slice(&bytes[..4]);
-        core.delete_route(vni, v4, len)
-            .and_then(|_| core.create_route(vni, v4, len, nexthop, dvni, external))
-    };
-    res?;
+        core.replace_route(vni, v4, len, nexthop, dvni, external)?;
+    }
     Ok(pb::AddRouteResponse {})
 }
 
@@ -592,6 +590,32 @@ mod tests {
             .get(&(200, [10, 1, 0, 0], 24))
             .expect("route programmed");
         assert_eq!(val2.nexthop_vni, 200, "delivery_vni=0 must default to vni");
+    }
+
+    // A re-announce that moves a prefix replaces it in place: it must not depend on a kernel
+    // delete (which can fail, and between delete and create leaves the prefix unrouted).
+    #[test]
+    fn add_route_reannounce_replaces_in_place() {
+        let mut c = core();
+        let add = |nh: &str, prefix: &str| pb::AddRouteRequest {
+            vni: 100,
+            prefix: prefix.into(),
+            nexthop_underlay: nh.into(),
+            ..Default::default()
+        };
+        add_route(&mut c, &add("fd00::1", "10.0.0.0/24")).unwrap();
+        add_route(&mut c, &add("fd00::1", "2001:db8::/64")).unwrap();
+        c.writer_mut().route_remove_fault = Some((100, [10, 0, 0, 0], 24));
+        let p6 = "2001:db8::".parse::<std::net::Ipv6Addr>().unwrap().octets();
+        c.writer_mut().route6_remove_fault = Some((100, p6, 64));
+        add_route(&mut c, &add("fd00::2", "10.0.0.0/24")).expect("v4 re-announce");
+        add_route(&mut c, &add("fd00::2", "2001:db8::/64")).expect("v6 re-announce");
+        let moved = "fd00::2".parse::<std::net::Ipv6Addr>().unwrap().octets();
+        assert_eq!(
+            c.writer().routes[&(100, [10, 0, 0, 0], 24)].nexthop_ipv6,
+            moved
+        );
+        assert_eq!(c.writer().routes6[&(100, p6, 64)].nexthop_ipv6, moved);
     }
 
     #[test]
