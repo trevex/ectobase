@@ -18,6 +18,11 @@ tests:
           path: spec.resources.requests.storage
           value: 1Gi
         documentSelector: {path: kind, value: PersistentVolumeClaim}
+      # The dispatch's entire state: a `helm uninstall` must leave the claim behind.
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep
+        documentSelector: {path: kind, value: PersistentVolumeClaim}
       # Empty storageClass means the cluster default, i.e. no storageClassName at all.
       - notExists:
           path: spec.storageClassName

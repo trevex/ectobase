@@ -34,7 +34,7 @@ pki:
 
 # imagePullPolicy applies to all containers in the chart.
 # External Ceph the dispatch controller fences against. clusterID is the cluster's fsid,
-# which only the deploy knows, so `lab tier2 up` sets it with `helm upgrade --reuse-values`.
+# which only the deploy knows, so `lab tier2 up` sets it with `helm upgrade --reset-then-reuse-values`.
 ceph:
   clusterID: ""
 
@@ -62,7 +62,8 @@ kine:
 postgres:
   persistence:
     # type is where that data directory lives:
-    #   pvc      - a ReadWriteOnce PersistentVolumeClaim (storageClass, size).
+    #   pvc      - a ReadWriteOnce PersistentVolumeClaim (storageClass, size). The claim outlives
+    #              the release: `helm uninstall` keeps it, so delete it by hand to drop the state.
     #   hostPath - a directory on the node (path). Node-local, so only safe where postgres cannot
     #              reschedule onto another node (a single-node cluster). Baseline PSA forbids
     #              hostPath; `namespace` is already PSA-privileged when pki.enabled.

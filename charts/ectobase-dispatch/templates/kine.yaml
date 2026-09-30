@@ -33,6 +33,9 @@ metadata:
   namespace: {{ .Values.namespace }}
   labels:
     {{- include "ectobase-dispatch.labels" . | nindent 4 }}
+  # The dispatch's entire state lives here, so a `helm uninstall` must not take it with the release.
+  annotations:
+    helm.sh/resource-policy: keep
 spec:
   accessModes: ["ReadWriteOnce"]
   {{- with $persistence.storageClass }}

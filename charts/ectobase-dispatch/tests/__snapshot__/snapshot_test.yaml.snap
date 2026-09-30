@@ -547,6 +547,8 @@ renders the dispatch control plane:
     apiVersion: v1
     kind: PersistentVolumeClaim
     metadata:
+      annotations:
+        helm.sh/resource-policy: keep
       labels:
         app.kubernetes.io/managed-by: Helm
         app.kubernetes.io/part-of: ectobase-dispatch
