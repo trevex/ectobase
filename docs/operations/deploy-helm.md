@@ -71,6 +71,7 @@ Source of truth: `charts/ectobase-dispatch/values.yaml` (schema: `values.schema.
 | `images.mesh` | `…/mesh:dev` | Shared image for the mesh compiler + reflector. |
 | `images.kine` | `rancher/kine:v0.13.0` | etcd-v3 shim over postgres. |
 | `images.postgres` | `postgres:16` | Backing store for kine (dev/smoke; not HA). |
+| `postgres.persistence.type` | `pvc` | Where postgres keeps all dispatch state: `pvc` (ReadWriteOnce, `storageClass` empty = cluster default, `size` 1Gi), `hostPath` (`path`, single-node clusters only), or `emptyDir` (lost on every postgres pod restart). A `pvc` needs a StorageClass before the install, or postgres stays Pending. |
 
 ## 2. Each compute/pool cluster
 

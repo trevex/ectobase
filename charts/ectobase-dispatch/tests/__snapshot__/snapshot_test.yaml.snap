@@ -545,6 +545,24 @@ renders the dispatch control plane:
     type: Opaque
   19: |
     apiVersion: v1
+    kind: PersistentVolumeClaim
+    metadata:
+      annotations:
+        helm.sh/resource-policy: keep
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-dispatch
+        helm.sh/chart: ectobase-dispatch-0.1.0
+      name: postgres-data
+      namespace: system
+    spec:
+      accessModes:
+        - ReadWriteOnce
+      resources:
+        requests:
+          storage: 1Gi
+  20: |
+    apiVersion: v1
     kind: Service
     metadata:
       labels:
@@ -560,7 +578,7 @@ renders the dispatch control plane:
           targetPort: 5432
       selector:
         app: dispatch-postgres
-  20: |
+  21: |
     apiVersion: apps/v1
     kind: Deployment
     metadata:
@@ -576,6 +594,8 @@ renders the dispatch control plane:
       selector:
         matchLabels:
           app: dispatch-postgres
+      strategy:
+        type: Recreate
       template:
         metadata:
           labels:
@@ -613,9 +633,10 @@ renders the dispatch control plane:
                 - mountPath: /var/lib/postgresql/data
                   name: data
           volumes:
-            - emptyDir: {}
-              name: data
-  21: |
+            - name: data
+              persistentVolumeClaim:
+                claimName: postgres-data
+  22: |
     apiVersion: v1
     kind: Service
     metadata:
@@ -632,7 +653,7 @@ renders the dispatch control plane:
           targetPort: 2379
       selector:
         app: dispatch-kine
-  22: |
+  23: |
     apiVersion: apps/v1
     kind: Deployment
     metadata:
@@ -679,7 +700,7 @@ renders the dispatch control plane:
                 requests:
                   cpu: 50m
                   memory: 64Mi
-  23: |
+  24: |
     apiVersion: v1
     kind: Namespace
     metadata:
@@ -689,7 +710,7 @@ renders the dispatch control plane:
         helm.sh/chart: ectobase-dispatch-0.1.0
         pod-security.kubernetes.io/enforce: privileged
       name: ectobase-system
-  24: |
+  25: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
@@ -699,7 +720,7 @@ renders the dispatch control plane:
         helm.sh/chart: ectobase-dispatch-0.1.0
       name: mesh-controller
       namespace: ectobase-system
-  25: |
+  26: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -854,7 +875,7 @@ renders the dispatch control plane:
           - get
           - patch
           - update
-  26: |
+  27: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -871,7 +892,7 @@ renders the dispatch control plane:
       - kind: ServiceAccount
         name: mesh-controller
         namespace: ectobase-system
-  27: |
+  28: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
@@ -881,7 +902,7 @@ renders the dispatch control plane:
         helm.sh/chart: ectobase-dispatch-0.1.0
       name: mesh-reflector
       namespace: ectobase-system
-  28: |
+  29: |
     apiVersion: apps/v1
     kind: Deployment
     metadata:
@@ -897,6 +918,8 @@ renders the dispatch control plane:
       selector:
         matchLabels:
           app.kubernetes.io/name: reflector
+      strategy:
+        type: Recreate
       template:
         metadata:
           labels:
@@ -941,7 +964,7 @@ renders the dispatch control plane:
             - name: routebus-tls
               secret:
                 secretName: reflector-routebus-tls
-  29: |
+  30: |
     apiVersion: v1
     kind: Service
     metadata:
@@ -965,7 +988,7 @@ renders the dispatch control plane:
       selector:
         app.kubernetes.io/name: reflector
       type: ClusterIP
-  30: |
+  31: |
     apiVersion: cert-manager.io/v1
     kind: Issuer
     metadata:
@@ -977,7 +1000,7 @@ renders the dispatch control plane:
       namespace: system
     spec:
       selfSigned: {}
-  31: |
+  32: |
     apiVersion: cert-manager.io/v1
     kind: Certificate
     metadata:
@@ -998,7 +1021,7 @@ renders the dispatch control plane:
         algorithm: ECDSA
         size: 256
       secretName: ectobase-ca
-  32: |
+  33: |
     apiVersion: cert-manager.io/v1
     kind: ClusterIssuer
     metadata:
@@ -1010,7 +1033,7 @@ renders the dispatch control plane:
     spec:
       ca:
         secretName: ectobase-ca
-  33: |
+  34: |
     apiVersion: cert-manager.io/v1
     kind: Certificate
     metadata:
@@ -1038,7 +1061,7 @@ renders the dispatch control plane:
       usages:
         - server auth
         - client auth
-  34: |
+  35: |
     apiVersion: cert-manager.io/v1
     kind: Certificate
     metadata:
@@ -1060,7 +1083,7 @@ renders the dispatch control plane:
       secretName: dispatch-controller-routebus-tls
       usages:
         - client auth
-  35: |
+  36: |
     apiVersion: cert-manager.io/v1
     kind: Certificate
     metadata:

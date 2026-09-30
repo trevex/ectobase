@@ -1,0 +1,100 @@
+suite: postgres storage
+templates:
+  - templates/kine.yaml
+tests:
+  # Postgres holds ALL dispatch cluster state: an emptyDir default lost it on every template change.
+  - it: persists to a PVC by default
+    asserts:
+      - containsDocument:
+          kind: PersistentVolumeClaim
+          apiVersion: v1
+          name: postgres-data
+          any: true
+      - equal:
+          path: spec.accessModes
+          value: ["ReadWriteOnce"]
+        documentSelector: {path: kind, value: PersistentVolumeClaim}
+      - equal:
+          path: spec.resources.requests.storage
+          value: 1Gi
+        documentSelector: {path: kind, value: PersistentVolumeClaim}
+      # The dispatch's entire state: a `helm uninstall` must leave the claim behind.
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep
+        documentSelector: {path: kind, value: PersistentVolumeClaim}
+      # Empty storageClass means the cluster default, i.e. no storageClassName at all.
+      - notExists:
+          path: spec.storageClassName
+        documentSelector: {path: kind, value: PersistentVolumeClaim}
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: data
+            persistentVolumeClaim:
+              claimName: postgres-data
+        documentSelector: {path: metadata.labels.app, value: dispatch-postgres}
+
+  - it: honours an explicit storageClass and size
+    set:
+      postgres.persistence.storageClass: ceph-rbd
+      postgres.persistence.size: 5Gi
+    asserts:
+      - equal:
+          path: spec.storageClassName
+          value: ceph-rbd
+        documentSelector: {path: kind, value: PersistentVolumeClaim}
+      - equal:
+          path: spec.resources.requests.storage
+          value: 5Gi
+        documentSelector: {path: kind, value: PersistentVolumeClaim}
+
+  - it: persists to a hostPath when asked
+    set:
+      postgres.persistence.type: hostPath
+    asserts:
+      - containsDocument:
+          kind: PersistentVolumeClaim
+          apiVersion: v1
+          name: postgres-data
+        not: true
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: data
+            hostPath:
+              path: /var/lib/ectobase/postgres
+              type: DirectoryOrCreate
+        documentSelector: {path: metadata.labels.app, value: dispatch-postgres}
+
+  - it: uses an emptyDir only when asked
+    set:
+      postgres.persistence.type: emptyDir
+    asserts:
+      - containsDocument:
+          kind: PersistentVolumeClaim
+          apiVersion: v1
+          name: postgres-data
+        not: true
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: data
+            emptyDir: {}
+        documentSelector: {path: metadata.labels.app, value: dispatch-postgres}
+
+  - it: rejects an unknown persistence type
+    set:
+      postgres.persistence.type: nfs
+    asserts:
+      - failedTemplate:
+          errorPattern: "postgres.persistence.type"
+
+  # A rolling update would start a second postgres against the RWO volume (or hostPath) the first
+  # still holds.
+  - it: postgres rolls out with Recreate
+    asserts:
+      - equal:
+          path: spec.strategy
+          value: {type: Recreate}
+        documentSelector: {path: metadata.labels.app, value: dispatch-postgres}

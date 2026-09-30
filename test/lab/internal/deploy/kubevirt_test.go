@@ -76,13 +76,38 @@ func TestSetDispatchCSIClusterID(t *testing.T) {
 		t.Fatalf("no dispatch helm upgrade:\n%v", f.calls)
 	}
 	joined := strings.Join(c, " ")
-	for _, want := range []string{"--reuse-values", "ceph.clusterID=fsid-9", "--namespace system"} {
+	for _, want := range []string{"--reset-then-reuse-values", "ceph.clusterID=fsid-9", "--namespace system"} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("helm argv missing %q:\n%s", want, joined)
 		}
 	}
+	assertNoBareReuseValues(t, c)
 	// It must NOT go back to patching the Deployment.
 	if f.findCall("kubectl", "patch", "deploy", "dispatch-controller") != nil {
 		t.Fatalf("still patching the Deployment; that is what broke `lab deploy`:\n%v", f.calls)
+	}
+}
+
+// TestEnableVMMaterializerResetsThenReusesValues pins the pool upgrade to the new chart's defaults.
+func TestEnableVMMaterializerResetsThenReusesValues(t *testing.T) {
+	f := &fakeRunner{}
+	if err := EnableVMMaterializer(context.Background(), f, "/kc/k02.kubeconfig", "/charts/ectobase-pool"); err != nil {
+		t.Fatalf("EnableVMMaterializer: %v", err)
+	}
+	c := f.findCall("helm", "upgrade", "ectobase-pool")
+	if !containsSubseq(c, []string{"--reset-then-reuse-values", "--set", "vmMaterializer.enabled=true"}) {
+		t.Fatalf("pool upgrade does not reset-then-reuse values:\n%v", c)
+	}
+	assertNoBareReuseValues(t, c)
+}
+
+// assertNoBareReuseValues fails on a plain --reuse-values: it renders against the old release's chart
+// defaults, so a value the chart gained since the last full deploy is missing.
+func assertNoBareReuseValues(t *testing.T, argv []string) {
+	t.Helper()
+	for _, a := range argv {
+		if a == "--reuse-values" {
+			t.Fatalf("helm argv uses --reuse-values, not --reset-then-reuse-values:\n%v", argv)
+		}
 	}
 }

@@ -1,0 +1,15 @@
+suite: reflector deployment
+templates:
+  - templates/reflector.yaml
+tests:
+  # hostNetwork on one node: a surged 2nd pod never schedules while the old one holds the host
+  # ports, so a RollingUpdate deadlocks.
+  - it: rolls out with Recreate
+    asserts:
+      - isKind:
+          of: Deployment
+        documentIndex: 0
+      - equal:
+          path: spec.strategy
+          value: {type: Recreate}
+        documentIndex: 0
