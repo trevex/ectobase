@@ -7,7 +7,7 @@ Helm chart for the ectobase fleet control-plane ("dispatch") cluster. Deploys:
 - **dispatch-controller** — controller-runtime manager running the ClusterPool reconciler +
   VM scheduler/failover against the aggregated apiserver.
 - **kine** — etcd-v3 shim over postgres, providing storage for the aggregated apiserver.
-- **postgres** — ephemeral postgres instance (dev/smoke; not HA).
+- **postgres** — single postgres instance backing kine; its data persists on a PVC by default (not HA).
 - **mesh-controller** (compiler) — compiles NIC/VM/Container objects into CompiledNIC/VM/Container.
 - **reflector** — routebus gRPC rendezvous server for the per-pool mesh agents.
 
@@ -27,3 +27,7 @@ is generated from `files/<role>/role.yaml` (committed via `make generate`).
 | `images.mesh` | `ghcr.io/trevex/ectobase/mesh:dev` | Compiler + reflector image |
 | `images.kine` | `rancher/kine:v0.13.0` | Kine image |
 | `images.postgres` | `postgres:16` | Postgres image |
+| `postgres.persistence.type` | `pvc` | Where postgres keeps ALL dispatch state: `pvc`, `hostPath`, or `emptyDir` (lost on every postgres pod restart) |
+| `postgres.persistence.storageClass` | `""` | StorageClass for `pvc`; empty uses the cluster default |
+| `postgres.persistence.size` | `1Gi` | Size of the `pvc` |
+| `postgres.persistence.path` | `/var/lib/ectobase/postgres` | Node directory for `hostPath` (single-node clusters only) |

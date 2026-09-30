@@ -4,11 +4,16 @@
 # Postgres + kine (etcd-v3 shim) for the dispatch aggregated apiserver's storage.
 # Mirrors dispatch/hack/kine-up.sh (rancher/kine over Postgres). kine exposes an
 # etcd-v3 gRPC endpoint on :2379 that the apiserver talks to via --etcd-servers.
-# Storage here is ephemeral (emptyDir) — this is a dev/smoke manifest, not HA.
+# Postgres holds ALL dispatch cluster state, so its data directory is persistent by default
+# (postgres.persistence: a PVC, or a hostPath). Single replica, not HA.
+{{- $persistence := .Values.postgres.persistence }}
+{{- if not (has $persistence.type (list "pvc" "hostPath" "emptyDir")) }}
+{{- fail (printf "invalid values: postgres.persistence.type=%q, must be one of pvc, hostPath, emptyDir" $persistence.type) }}
+{{- end }}
 ---
 # The postgres/kine password lives in a Secret rather than inline in the pod spec. Still dev-grade
-# (default value, ephemeral storage), but it keeps the credential out of the rendered Deployment and
-# lets an operator override it via values without editing templates.
+# (default value), but it keeps the credential out of the rendered Deployment and lets an operator
+# override it via values without editing templates.
 apiVersion: v1
 kind: Secret
 metadata:
@@ -19,6 +24,24 @@ metadata:
 type: Opaque
 stringData:
   password: {{ .Values.kine.password | quote }}
+{{- if eq $persistence.type "pvc" }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-data
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "ectobase-dispatch.labels" . | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- with $persistence.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ $persistence.size | quote }}
+{{- end }}
 ---
 apiVersion: v1
 kind: Service
@@ -45,6 +68,10 @@ metadata:
     {{- include "ectobase-dispatch.labels" . | nindent 4 }}
 spec:
   replicas: 1
+  # One data directory, one pod: a rolling update would start the new postgres against a RWO
+  # volume (or hostPath) the old one still holds. Recreate stops the old pod first.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: dispatch-postgres
@@ -67,6 +94,7 @@ spec:
                   key: password
             - name: POSTGRES_DB
               value: kine
+            # A subdirectory of the mount, so a fresh filesystem's lost+found does not stop initdb.
             - name: PGDATA
               value: /var/lib/postgresql/data/pgdata
           ports:
@@ -81,7 +109,16 @@ spec:
             periodSeconds: 5
       volumes:
         - name: data
+          {{- if eq $persistence.type "pvc" }}
+          persistentVolumeClaim:
+            claimName: postgres-data
+          {{- else if eq $persistence.type "hostPath" }}
+          hostPath:
+            path: {{ $persistence.path | quote }}
+            type: DirectoryOrCreate
+          {{- else }}
           emptyDir: {}
+          {{- end }}
 ---
 apiVersion: v1
 kind: Service
