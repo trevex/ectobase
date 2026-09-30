@@ -897,6 +897,8 @@ renders the dispatch control plane:
       selector:
         matchLabels:
           app.kubernetes.io/name: reflector
+      strategy:
+        type: Recreate
       template:
         metadata:
           labels:
