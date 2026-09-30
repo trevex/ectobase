@@ -167,14 +167,19 @@ impl DataplaneNode for NodeService {
             .clone();
         let r = req.into_inner();
         let log = format!("ROUTE withdraw vni={} prefix={}", r.vni, r.prefix);
-        let resp = tokio::task::spawn_blocking(move || {
+        let (resp, removed) = tokio::task::spawn_blocking(move || {
             attach
                 .control
                 .with_core(|c| handlers::withdraw_route(c, &r))
         })
         .await
         .map_err(|e| Status::internal(format!("withdraw_route task panicked: {e}")))??;
-        println!("{log}");
+        // An absent route is still a successful withdraw, but the log must not claim a removal.
+        if removed {
+            println!("{log}");
+        } else {
+            println!("{log}: absent, nothing removed");
+        }
         Ok(Response::new(resp))
     }
 

@@ -176,6 +176,12 @@ impl MapWriter for AyaWriter {
     fn route6_remove(&mut self, vni: u32, ipv6: [u8; 16], p: u32) -> anyhow::Result<()> {
         self.routes6.remove(vni, ipv6, p)
     }
+    fn route_entries(&self) -> Vec<(u32, [u8; 4], u32, RouteValue)> {
+        self.routes.entries()
+    }
+    fn route6_entries(&self) -> Vec<(u32, [u8; 16], u32, RouteValue)> {
+        self.routes6.entries()
+    }
     fn nat_upsert(&mut self, k: NatKey, v: NatValue) -> anyhow::Result<()> {
         self.nat.upsert(k, v)
     }

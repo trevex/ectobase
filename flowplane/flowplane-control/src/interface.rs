@@ -189,7 +189,9 @@ impl<W: MapWriter> ControlCore<W> {
         // Local self-route: a same-host guest reaches this interface by its overlay IP. Program a
         // /32 (and /128 when dual-stack) route to this interface's OWN underlay so tc_guest_tx's
         // LPM resolves a local destination to a local underlay, and the local fast path delivers it
-        // without a wire round-trip. These are NOT added to routes_shadow (not user-visible routes).
+        // without a wire round-trip. These are NOT added to routes_shadow (not user-visible routes):
+        // each overwrites any mesh route on its key, which stays listed, and holds the key until
+        // `remove_self_routes` (see routes.rs).
         if ipv4 != [0u8; 4] {
             self.w.route_upsert(
                 vni,
@@ -202,6 +204,7 @@ impl<W: MapWriter> ControlCore<W> {
                     _pad: [0; 3],
                 },
             )?;
+            self.self_routes.insert((vni, ipv4));
         }
         if ipv6 != [0u8; 16] {
             self.w.route6_upsert(
@@ -215,6 +218,7 @@ impl<W: MapWriter> ControlCore<W> {
                     _pad: [0; 3],
                 },
             )?;
+            self.self_routes6.insert((vni, ipv6));
         }
         if total_mbps != 0 || public_mbps != 0 {
             self.w
@@ -281,35 +285,27 @@ impl<W: MapWriter> ControlCore<W> {
         let _ = self.w.floating_ips_remove(&FloatingIPKey { vni, ipv4 });
         // Purge NAT config for the removed interface's guest IP.
         let _ = self.w.nat_remove(&NatKey { vni, ipv4 });
-        // Purge routes for this VNI (same as reset_vni).
-        let routes_to_del: Vec<([u8; 4], u32)> = self
+        // Purge routes for this VNI (same as reset_vni). Each goes through `delete_route`: a key a
+        // self-route still holds is left alone in the kernel, and a route whose kernel delete fails
+        // stays listed for a later withdraw to retry. The purge carries on, like its other writes.
+        let routes: Vec<_> = self
             .routes_shadow
             .iter()
-            .filter(|&&(v, _, _, _, _)| v == vni)
-            .map(|&(_, p, l, _, _)| (p, l))
+            .filter(|r| r.0 == vni)
+            .map(|&(_, p, l, _)| (p, l))
             .collect();
-        for (p, l) in &routes_to_del {
-            let _ = self.w.route_remove(vni, *p, *l);
+        for (p, l) in routes {
+            let _ = self.delete_route(vni, p, l);
         }
-        self.routes_shadow.retain(|&(v, p, l, _, _)| {
-            !routes_to_del
-                .iter()
-                .any(|&(rp, rl)| v == vni && rp == p && rl == l)
-        });
-        let routes6_to_del: Vec<([u8; 16], u32)> = self
+        let routes6: Vec<_> = self
             .routes6_shadow
             .iter()
-            .filter(|&&(v, _, _, _, _)| v == vni)
-            .map(|&(_, p, l, _, _)| (p, l))
+            .filter(|r| r.0 == vni)
+            .map(|&(_, p, l, _)| (p, l))
             .collect();
-        for (p, l) in &routes6_to_del {
-            let _ = self.w.route6_remove(vni, *p, *l);
+        for (p, l) in routes6 {
+            let _ = self.delete_route6(vni, p, l);
         }
-        self.routes6_shadow.retain(|&(v, p, l, _, _)| {
-            !routes6_to_del
-                .iter()
-                .any(|&(rp, rl)| v == vni && rp == p && rl == l)
-        });
         Ok(())
     }
 }
@@ -597,20 +593,8 @@ mod tests {
         )
         .unwrap();
         // Seed a route in this VNI (shadow + map).
-        c.routes_shadow
-            .push((vni, [192, 168, 0, 0], 24, vni, [0u8; 16]));
-        c.w.route_upsert(
-            vni,
-            [192, 168, 0, 0],
-            24,
-            flowplane_common::RouteValue {
-                nexthop_vni: vni,
-                nexthop_ipv6: [0u8; 16],
-                is_external: 0,
-                _pad: [0; 3],
-            },
-        )
-        .unwrap();
+        c.create_route(vni, [192, 168, 0, 0], 24, [0u8; 16], vni, false)
+            .unwrap();
 
         c.purge_vni(vni, gip).unwrap();
 
@@ -634,5 +618,103 @@ mod tests {
         // routes purged (map + shadow)
         assert!(!c.w.routes.contains_key(&(vni, [192, 168, 0, 0], 24)));
         assert!(c.routes_shadow.is_empty());
+    }
+
+    // A VM that moves onto this node is attached here while the fabric still carries its old
+    // owner's /32 and /128 (make-before-break guarantees the overlap). The self-route must win in
+    // the kernel, the mesh route must stay the fabric's view in the shadow, and neither side's
+    // later withdraw or detach may take the other's entry.
+    const IP: [u8; 4] = [10, 0, 0, 5];
+    const IP6: [u8; 16] = [0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5];
+    const SELF_NH: [u8; 16] = [0xfd; 16];
+    const MESH_NH: [u8; 16] = [0x99; 16];
+
+    fn kernel_nexthops(c: &ControlCore<MemMapWriter>) -> (Option<[u8; 16]>, Option<[u8; 16]>) {
+        (
+            c.w.routes.get(&(100, IP, 32)).map(|r| r.nexthop_ipv6),
+            c.w.routes6.get(&(100, IP6, 128)).map(|r| r.nexthop_ipv6),
+        )
+    }
+
+    fn add_mesh(c: &mut ControlCore<MemMapWriter>) {
+        // External, so a reinstall that loses a field shows.
+        c.create_route(100, IP, 32, MESH_NH, 100, true).unwrap();
+        c.create_route6(100, IP6, 128, MESH_NH, 100, true).unwrap();
+    }
+
+    #[test]
+    fn a_self_route_wins_over_a_mesh_route_and_survives_its_withdraw() {
+        let mut c = ControlCore::new(MemMapWriter::default());
+        add_mesh(&mut c);
+        c.program_interface(params(IP, IP6)).unwrap();
+        assert_eq!(kernel_nexthops(&c), (Some(SELF_NH), Some(SELF_NH)));
+        assert_eq!(c.routes_shadow.len(), 1, "the mesh route stays listed");
+        assert_eq!(c.routes6_shadow.len(), 1);
+
+        // The old owner's advert goes away: only the shadow forgets it.
+        assert!(c.delete_route(100, IP, 32).unwrap());
+        assert!(c.delete_route6(100, IP6, 128).unwrap());
+        assert_eq!(kernel_nexthops(&c), (Some(SELF_NH), Some(SELF_NH)));
+        assert!(c.routes_shadow.is_empty() && c.routes6_shadow.is_empty());
+
+        // Nothing to fall back to: the detach removes the key.
+        c.remove_self_routes(100, IP, IP6).unwrap();
+        assert_eq!(kernel_nexthops(&c), (None, None));
+    }
+
+    #[test]
+    fn detach_reinstalls_the_mesh_route_its_self_route_covered() {
+        let mut c = ControlCore::new(MemMapWriter::default());
+        add_mesh(&mut c);
+        c.program_interface(params(IP, IP6)).unwrap();
+        // The VM moves away again, or its attach is rolled back, while the fabric still points
+        // elsewhere: without the mesh route back, traffic to it black-holes here.
+        c.remove_self_routes(100, IP, IP6).unwrap();
+        assert_eq!(kernel_nexthops(&c), (Some(MESH_NH), Some(MESH_NH)));
+        assert_eq!(c.w.routes[&(100, IP, 32)].is_external, 1);
+        assert_eq!(c.w.routes6[&(100, IP6, 128)].is_external, 1);
+        // It is a mesh route again, so its withdraw reaches the kernel.
+        assert!(c.delete_route(100, IP, 32).unwrap());
+        assert!(c.delete_route6(100, IP6, 128).unwrap());
+        assert_eq!(kernel_nexthops(&c), (None, None));
+    }
+
+    #[test]
+    fn a_mesh_route_added_over_a_self_route_waits_in_the_shadow() {
+        let mut c = ControlCore::new(MemMapWriter::default());
+        c.program_interface(params(IP, IP6)).unwrap();
+        add_mesh(&mut c);
+        assert_eq!(kernel_nexthops(&c), (Some(SELF_NH), Some(SELF_NH)));
+        assert_eq!(c.routes_shadow.len(), 1);
+        assert_eq!(c.routes6_shadow.len(), 1);
+        // A re-announce is delete-then-create (the add_route handler): still shadow-only.
+        assert!(c.delete_route(100, IP, 32).unwrap());
+        assert!(c.delete_route6(100, IP6, 128).unwrap());
+        add_mesh(&mut c);
+        assert_eq!(kernel_nexthops(&c), (Some(SELF_NH), Some(SELF_NH)));
+
+        c.remove_self_routes(100, IP, IP6).unwrap();
+        assert_eq!(kernel_nexthops(&c), (Some(MESH_NH), Some(MESH_NH)));
+    }
+
+    // A kernel delete that fails leaves the route forwarding; the shadow must keep listing it, or
+    // no later withdraw can retry.
+    #[test]
+    fn purge_vni_keeps_a_route_whose_remove_failed() {
+        let mut c = ControlCore::new(MemMapWriter::default());
+        c.create_route(5, [192, 168, 0, 0], 24, MESH_NH, 5, false)
+            .unwrap();
+        c.create_route6(5, IP6, 64, MESH_NH, 5, false).unwrap();
+        c.w.route_remove_fault = Some((5, [192, 168, 0, 0], 24));
+        c.w.route6_remove_fault = Some((5, IP6, 64));
+        c.purge_vni(5, [10, 0, 0, 2]).unwrap();
+        assert_eq!(c.routes_shadow.len(), 1);
+        assert_eq!(c.routes6_shadow.len(), 1);
+
+        c.w.route_remove_fault = None;
+        c.w.route6_remove_fault = None;
+        assert!(c.delete_route(5, [192, 168, 0, 0], 24).unwrap());
+        assert!(c.delete_route6(5, IP6, 64).unwrap());
+        assert!(c.w.routes.is_empty() && c.w.routes6.is_empty());
     }
 }

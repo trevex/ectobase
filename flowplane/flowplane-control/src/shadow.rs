@@ -1,9 +1,9 @@
 //! Agnostic shadow/meta types moved out of the eBPF `Control::Inner`.
-/// (vni, prefix, prefix_len, nexthop_vni, nexthop_ipv6) — mirrors control/mod.rs RouteShadowV4.
-pub type RouteShadowV4 = (u32, [u8; 4], u32, u32, [u8; 16]);
-/// (vni, prefix, prefix_len, nexthop_vni, nexthop_ipv6) — mirrors control/mod.rs RouteShadowV6.
-pub type RouteShadowV6 = (u32, [u8; 16], u32, u32, [u8; 16]);
-
+/// A listed route: (vni, prefix, prefix_len, route). The whole value is kept so a mesh route a
+/// self-route was holding back can be reinstalled as it was added.
+pub type RouteShadowV4 = (u32, [u8; 4], u32, flowplane_common::RouteValue);
+/// IPv6 sibling of [`RouteShadowV4`].
+pub type RouteShadowV6 = (u32, [u8; 16], u32, flowplane_common::RouteValue);
 /// Agnostic per-interface metadata the nat/lb/fw/qos logic reads (subset of the eBPF IfaceRecord).
 #[derive(Clone, Copy, Debug)]
 pub struct IfaceMeta {

@@ -14,7 +14,7 @@ import (
 )
 
 // AdminServer implements RouteBusAdmin over a RIB: central sets/clears per-/64 route
-// fences to suppress a lost pool's overlay routes (the network half of Tier-2 fencing).
+// fences to hide a lost pool's overlay routes (the network half of Tier-2 fencing).
 type AdminServer struct {
 	pb.UnimplementedRouteBusAdminServer
 	rib *RIB
@@ -23,8 +23,8 @@ type AdminServer struct {
 // NewAdminServer wraps the RIB with the admin fence API.
 func NewAdminServer(rib *RIB) *AdminServer { return &AdminServer{rib: rib} }
 
-// SetFence blocks a node /64: rejects future announces from and withdraws existing
-// routes whose nexthop is inside it.
+// SetFence hides every nexthop inside a node /64 from subscribers — routes already
+// announced and any announced while the fence stands. The RIB keeps them stored.
 func (a *AdminServer) SetFence(_ context.Context, req *pb.FenceRequest) (*pb.FenceReply, error) {
 	if _, _, err := net.ParseCIDR(req.GetPrefix()); err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "invalid fence prefix %q: %v", req.GetPrefix(), err)
@@ -33,7 +33,9 @@ func (a *AdminServer) SetFence(_ context.Context, req *pb.FenceRequest) (*pb.Fen
 	return &pb.FenceReply{}, nil
 }
 
-// ClearFence removes a /64 block; owning agents restore their routes on next resync.
+// ClearFence releases a /64: the RIB re-advertises the routes it was hiding from what it
+// stores. Owning agents do not re-announce them — on a live session they never resend a
+// route they already sent.
 func (a *AdminServer) ClearFence(_ context.Context, req *pb.FenceRequest) (*pb.FenceReply, error) {
 	if _, _, err := net.ParseCIDR(req.GetPrefix()); err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "invalid fence prefix %q: %v", req.GetPrefix(), err)
