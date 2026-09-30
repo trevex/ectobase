@@ -150,9 +150,11 @@ reconciler applies two fences and requires both to confirm active:
   returns an error, so an unconfirmed blocklist never lets a reschedule proceed.
   Under the hood csi-addons runs `ceph osd blocklist add` for the CIDR.
 - Network fence (`fence.NetworkFencer`). Withdraws the `/64`'s overlay routes
-  by calling the reflector's `RouteBusAdmin.SetFence`, so even if a node in the
-  lost pool is still alive it can no longer attract or emit overlay traffic for
-  that prefix.
+  from every subscriber by calling the reflector's `RouteBusAdmin.SetFence`, so
+  even if a node in the lost pool is still alive it can no longer attract or emit
+  overlay traffic for that prefix. The fence is a filter on what the reflector
+  advertises: it keeps the routes stored, hides any the lost pool announces while
+  fenced, and keeps advertising another pool's nexthop for the same prefix.
 
 If any `/64` fails to confirm both fences, the reconciler marks every VM on
 the pool `FailoverBlocked` and leaves them in place — it writes only status,
@@ -261,7 +263,11 @@ un-fences only `/64`s the broker has confirmed drained:
   runs `ceph osd blocklist rm` on the state transition — a bare delete would
   leave the blocklist entry behind), and only after the un-fence reports
   `Succeeded` is the `NetworkFence` CR deleted;
-- the network fence is cleared with `RouteBusAdmin.ClearFence`.
+- the network fence is cleared with `RouteBusAdmin.ClearFence`, and the
+  reflector re-advertises the routes it was hiding from what it stored. The
+  agents do not re-announce them. By then the recovered pool's agent has already
+  withdrawn the routes of the VMs that failed over (their interfaces are gone),
+  so only the workloads that stayed come back.
 
 An un-drained `/64` stays fenced. This is the recovery-side fail-safe: storage
 is only reopened to a returned node once that node has proven it holds no stale

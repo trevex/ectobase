@@ -27,10 +27,10 @@ func TestPartition_WholePoolFence_CutsBothBackends(t *testing.T) {
 	if rib.HasRoute(100, "10.0.0.9/32") {
 		t.Fatalf("network fence must suppress the partitioned node's route")
 	}
-	// A further re-announce from the fenced /64 is rejected (no dual-IP).
+	// A further re-announce from the fenced /64 stays hidden (no dual-IP).
 	rib.Announce("stale-node", 100, "10.0.0.9/32", []string{"2001:db8:0:1::9"}, false)
 	if rib.HasRoute(100, "10.0.0.9/32") {
-		t.Fatalf("network fence must reject re-announces from the fenced /64")
+		t.Fatalf("network fence must hide re-announces from the fenced /64")
 	}
 
 	// Storage: the NetworkFence CR reports Succeeded -> storage cut confirmed.

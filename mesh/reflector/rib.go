@@ -32,7 +32,8 @@ type routeKey struct {
 // routeEntry reference-counts a (vni, prefix) route by origin: HA anycast edges all
 // announce the same route (e.g. 0.0.0.0/0 -> the anycast edge underlay), so the route
 // must stay advertised while ANY origin announces it and only be withdrawn when the
-// LAST origin drops. origins maps an origin id -> the nexthops it announced.
+// LAST origin drops. origins maps an origin id -> the nexthops it announced — stored
+// whether or not a fence currently hides them (see RIB.advertised).
 type routeEntry struct {
 	origins  map[string][]string
 	external bool
@@ -133,9 +134,11 @@ type RIB struct {
 	// sessions x records into one copy. nil means "rebuild on the next registration".
 	globalSnap []*pb.ServerMsg
 
-	// fenced blocks nexthops inside a node /64 (Tier-2 failover): announces whose
-	// nexthop falls inside a fenced prefix are rejected, and stored matching routes
-	// are withdrawn. Keyed by the /64 CIDR string.
+	// fenced hides nexthops inside a node /64 (Tier-2 failover) from subscribers. It is a
+	// filter on what is advertised, never a deletion: routes stay stored per origin, so
+	// releasing a fence re-advertises them without the owning agent re-announcing — which
+	// it would never do on a live session (it only sends its diff against what it already
+	// sent). Keyed by the CIDR string.
 	fenced map[string]*net.IPNet
 
 	// origins names the session that currently speaks for each node id, so a session that has
@@ -165,11 +168,10 @@ func NewRIB() *RIB {
 // Subscribe registers s for vni, streams the current table for that vni in a
 // deterministic order, then EndOfRIB (a graceful-restart / prune marker).
 //
-// No fence filtering is needed here: a fenced /64 can never have a route in
-// r.routes (Announce drops fenced-nexthop routes and SetFence withdraws any
-// already-stored ones, both under r.mu), so the snapshot is inherently
-// fence-clean. A subscriber that races an in-flight SetFence converges via the
-// WITHDRAW dropRouteAllOrigins fans out to all current sinks.
+// The snapshot carries each route as advertised — fence-filtered, and only the routes
+// left with a nexthop — so it matches what the live fanout has told everyone else.
+// SetFence and ClearFence recompute and fan out under r.mu too, so a subscriber can
+// neither miss a fence change nor see one twice.
 func (r *RIB) Subscribe(vni uint32, s Sink) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -205,7 +207,11 @@ func (r *RIB) Subscribe(vni uint32, s Sink) {
 	var n uint32
 	for _, k := range keys {
 		e := r.routes[k]
-		snap = append(snap, routeUpdate(k, mergeNexthops(e.origins), pb.RouteOp_ROUTE_OP_ADD, e.external))
+		nhs := r.advertised(e)
+		if len(nhs) == 0 {
+			continue // fenced away
+		}
+		snap = append(snap, routeUpdate(k, nhs, pb.RouteOp_ROUTE_OP_ADD, e.external))
 		n++
 	}
 	// One snapshot, handed over while r.mu is still held: the sink queues all of it (see Sink), and
@@ -227,19 +233,17 @@ func (r *RIB) Unsubscribe(vni uint32, sinkID string) {
 }
 
 // Announce inserts/replaces a route and fans out an ADD to subscribers of vni
-// (except the origin, which already has it).
+// (except the origin, which already has it). An announce whose nexthop is fenced is
+// stored like any other; it is simply not advertised until the fence is released.
 func (r *RIB) Announce(origin string, vni uint32, prefix string, nexthops []string, external bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if anyNexthopFenced(nexthops, r.fenced) {
-		return // drop: this nexthop is fenced
-	}
 	k := routeKey{vni, prefix}
 	e := r.routes[k]
 	if e.origins == nil {
 		e.origins = map[string][]string{}
 	}
-	before := mergeNexthops(e.origins)
+	before := r.advertised(e)
 	e.origins[origin] = nexthops
 	e.external = external
 	r.routes[k] = e
@@ -248,11 +252,9 @@ func (r *RIB) Announce(origin string, vni uint32, prefix string, nexthops []stri
 	}
 	r.byOrigin[origin][k] = struct{}{}
 	// Only fan out when the effective advertised route actually changes — a second
-	// anycast origin announcing an identical route must not churn subscribers.
-	after := mergeNexthops(e.origins)
-	if len(before) == 0 || !equalStrs(before, after) {
-		r.fanout(k, after, pb.RouteOp_ROUTE_OP_ADD, origin, external)
-	}
+	// anycast origin announcing an identical route must not churn subscribers, and an
+	// announce hidden behind a fence has nothing to tell them yet.
+	r.fanoutChange(k, before, r.advertised(e), origin, external)
 }
 
 // Withdraw removes a route and fans out a WITHDRAW.
@@ -266,9 +268,10 @@ func (r *RIB) Withdraw(origin string, vni uint32, prefix string) {
 	r.withdrawRouteOrigin(k, origin)
 }
 
-// withdrawRouteOrigin removes one origin from a route and fans out the minimal change:
-// WITHDRAW only when the last origin is gone, otherwise re-ADD if the merged nexthops
-// changed (else nothing). Caller holds r.mu; byOrigin bookkeeping is the caller's job.
+// withdrawRouteOrigin removes one origin from a route and fans out the minimal change to
+// what is advertised: WITHDRAW when nothing is left to advertise, otherwise re-ADD if the
+// advertised nexthops changed (else nothing — including a withdraw of a route a fence
+// already hides). Caller holds r.mu; byOrigin bookkeeping is the caller's job.
 func (r *RIB) withdrawRouteOrigin(k routeKey, origin string) {
 	e, ok := r.routes[k]
 	if !ok {
@@ -277,17 +280,14 @@ func (r *RIB) withdrawRouteOrigin(k routeKey, origin string) {
 	if _, has := e.origins[origin]; !has {
 		return
 	}
-	before := mergeNexthops(e.origins)
+	before := r.advertised(e)
 	delete(e.origins, origin)
 	if len(e.origins) == 0 {
 		delete(r.routes, k)
-		r.fanout(k, nil, pb.RouteOp_ROUTE_OP_WITHDRAW, "", false)
-		return
+	} else {
+		r.routes[k] = e
 	}
-	r.routes[k] = e
-	if after := mergeNexthops(e.origins); !equalStrs(before, after) {
-		r.fanout(k, after, pb.RouteOp_ROUTE_OP_ADD, "", e.external)
-	}
+	r.fanoutChange(k, before, r.advertised(e), "", e.external)
 }
 
 // dropOriginLocked withdraws every route, NAT block and public record a node originated, and
@@ -359,6 +359,19 @@ func (r *RIB) ReleaseOrigin(nodeID string, token uint64) {
 	r.dropOriginLocked(nodeID)
 }
 
+// fanoutChange tells subscribers of k.vni (except origin) about a change in what is
+// advertised for k: nothing when before and after agree, WITHDRAW when after is empty,
+// otherwise ADD with the new set. Caller holds r.mu.
+func (r *RIB) fanoutChange(k routeKey, before, after []string, origin string, external bool) {
+	switch {
+	case equalStrs(before, after):
+	case len(after) == 0:
+		r.fanout(k, nil, pb.RouteOp_ROUTE_OP_WITHDRAW, origin, external)
+	default:
+		r.fanout(k, after, pb.RouteOp_ROUTE_OP_ADD, origin, external)
+	}
+}
+
 // fanout sends an update to all subscribers of k.vni except origin. Caller holds r.mu.
 // Sink.Send is non-blocking, so holding the lock here is safe.
 func (r *RIB) fanout(k routeKey, nexthops []string, op pb.RouteOp, origin string, external bool) {
@@ -370,78 +383,92 @@ func (r *RIB) fanout(k routeKey, nexthops []string, op pb.RouteOp, origin string
 	}
 }
 
-// SetFence blocks a node /64: rejects future announces whose nexthop is inside it and
-// withdraws already-stored matching routes. Idempotent. The fenced set is expected to be
-// small (a handful of failed-over /64s), so the O(routes x fenced) scan is not a hot path.
+// SetFence hides every nexthop inside prefix (a node /64, or a pool's underlay aggregate)
+// from subscribers and fans out each route that changes: WITHDRAW where nothing is left,
+// ADD with the remaining nexthops where another origin still announces the key (an anycast
+// route, or the pool a failed-over VM now runs on). Nothing is deleted — the owning agents
+// never re-announce on a live session, so a deleted route would stay gone until their next
+// reconnect. Idempotent. The fenced set is expected to be small (a handful of failed-over
+// /64s), so the O(routes x fenced) scan is not a hot path.
 func (r *RIB) SetFence(prefix string) {
 	_, ipnet, err := net.ParseCIDR(prefix)
 	if err != nil {
 		return
 	}
 	r.mu.Lock()
-	r.fenced[prefix] = ipnet
-	var victims []routeKey
-	for k, e := range r.routes {
-		for _, nhs := range e.origins {
-			if anyNexthopFenced(nhs, r.fenced) {
-				victims = append(victims, k)
-				break
-			}
-		}
+	defer r.mu.Unlock()
+	if _, ok := r.fenced[prefix]; ok {
+		return
 	}
-	r.mu.Unlock()
-	for _, k := range victims {
-		r.dropRouteAllOrigins(k)
-	}
+	r.refilter(func() { r.fenced[prefix] = ipnet })
 }
 
-// ClearFence removes a /64 block. Routes are restored by the owning agents' next resync.
+// ClearFence releases a fence and re-advertises every route it was hiding, from what the
+// RIB still stores. That is exactly the set of workloads that stayed on the fenced nodes:
+// failover releases a fence only once its /64 reports drained (no VMI left running there),
+// and by then the recovered pool's agent has withdrawn the routes of the VMs that moved
+// away — their interfaces are gone, and its level-triggered diff withdraws them within
+// seconds — so nothing that failed over comes back. A release that ever outran that
+// withdraw would advertise the stale nexthop beside the new pool's only until it lands.
 func (r *RIB) ClearFence(prefix string) {
 	r.mu.Lock()
-	delete(r.fenced, prefix)
-	r.mu.Unlock()
+	defer r.mu.Unlock()
+	if _, ok := r.fenced[prefix]; !ok {
+		return
+	}
+	r.refilter(func() { delete(r.fenced, prefix) })
 }
 
-// HasRoute reports whether (vni, prefix) is currently stored. Test/inspection helper.
+// refilter applies change to the fence set and fans out every route whose advertised
+// nexthops it changed. Caller holds r.mu for the whole of it, so no announce, withdraw or
+// subscribe can land between the before and after views.
+func (r *RIB) refilter(change func()) {
+	before := make(map[routeKey][]string, len(r.routes))
+	for k, e := range r.routes {
+		before[k] = r.advertised(e)
+	}
+	change()
+	for k, e := range r.routes {
+		r.fanoutChange(k, before[k], r.advertised(e), "", e.external)
+	}
+}
+
+// advertised is the route subscribers see for e: the merged nexthops of every origin minus
+// those inside a fenced prefix. Empty means the key is not advertised at all. Caller holds r.mu.
+func (r *RIB) advertised(e routeEntry) []string {
+	merged := mergeNexthops(e.origins)
+	if len(r.fenced) == 0 {
+		return merged
+	}
+	out := merged[:0]
+	for _, nh := range merged {
+		if !nexthopFenced(nh, r.fenced) {
+			out = append(out, nh)
+		}
+	}
+	return out
+}
+
+// HasRoute reports whether (vni, prefix) is currently advertised — stored AND left with a
+// nexthop no fence hides — which is what a subscriber would see. Test/inspection helper.
 func (r *RIB) HasRoute(vni uint32, prefix string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	_, ok := r.routes[routeKey{vni, prefix}]
-	return ok
+	e, ok := r.routes[routeKey{vni, prefix}]
+	return ok && len(r.advertised(e)) > 0
 }
 
-func anyNexthopFenced(nexthops []string, fenced map[string]*net.IPNet) bool {
-	for _, nh := range nexthops {
-		ip := net.ParseIP(nh)
-		if ip == nil {
-			continue
-		}
-		for _, ipnet := range fenced {
-			if ipnet.Contains(ip) {
-				return true
-			}
+func nexthopFenced(nh string, fenced map[string]*net.IPNet) bool {
+	ip := net.ParseIP(nh)
+	if ip == nil {
+		return false
+	}
+	for _, ipnet := range fenced {
+		if ipnet.Contains(ip) {
+			return true
 		}
 	}
 	return false
-}
-
-// dropRouteAllOrigins removes a route entirely (all origins) and fans out a single
-// WITHDRAW to subscribers. Used by SetFence to evict a fenced node's routes.
-func (r *RIB) dropRouteAllOrigins(k routeKey) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	e, ok := r.routes[k]
-	if !ok {
-		return
-	}
-	for origin := range e.origins {
-		if s, ok := r.byOrigin[origin]; ok {
-			delete(s, k)
-		}
-	}
-	delete(r.routes, k)
-	// fanout requires r.mu held (it reads r.subscribers); Sink.Send is non-blocking.
-	r.fanout(k, nil, pb.RouteOp_ROUTE_OP_WITHDRAW, "", e.external)
 }
 
 func routeUpdate(k routeKey, nexthops []string, op pb.RouteOp, external bool) *pb.ServerMsg {
