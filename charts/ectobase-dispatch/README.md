@@ -75,3 +75,12 @@ across, so the first upgrade starts postgres on an empty data directory.
 This sequence is only needed on the emptyDir-to-persistent transition. After that, postgres
 restarting on its own keeps all state: deleting the postgres pod live left every `ClusterPool` in
 place with its lease still renewing, with no manual step.
+
+Upgrade order matters too. Upgrade every pool chart (its `dispatch-broker` Deployment) before this
+one: an un-upgraded broker keeps recreating a retiring `CompiledVM` twin's VM and disks instead of
+letting them go, and has no release report to send, so a move off that pool or a delete of a VM on
+it hangs until the pool chart is upgraded. And land this chart's own three Deployments —
+`dispatch-apiserver`, `dispatch-controller`, `mesh-controller` — from the same `helm upgrade`
+rather than patching one image ahead of the others: an old `dispatch-controller` never releases a
+fenced pool's retired twins, so a Tier-2 failover would hang. See
+[Upgrade order](../../docs/operations/deploy-helm.md#upgrade-order) for the full explanation.

@@ -211,8 +211,12 @@ two Secrets pre-provisioned out-of-band (in `ectobase-system`) *before* the brok
 On the dispatch side, enrollment also creates seven per-pool objects alongside the `ClusterPool`
 (the lab generates them; see `clusterPoolsManifest` in `test/lab/internal/deploy/ectobase.go`):
 the **`pool-<pool>` Namespace** the compiler writes this pool's twins into, a **`dispatch-broker`
-Role + RoleBinding** in it (read-only on the compiled kinds plus `compiledvms/status`, bound to
-`ectobase:cluster:<pool>`), a pre-created **`RouteBusIdentity`** named `<pool>`, the
+Role + RoleBinding** in it — `get`/`list`/`watch` on `compilednics`, `compiledvms`,
+`compiledvolumeattachments`, `compiledcontainers`, and `get`/`update`/`patch` on
+`compiledvms/status` and `compiledvolumeattachments/status` (the `patch` on `compiledvms/status`
+is what lets the broker report a retired twin's release; see
+[Broker sync](../architecture/multi-cluster-control-plane.md#broker-sync)) — bound to
+`ectobase:cluster:<pool>`, a pre-created **`RouteBusIdentity`** named `<pool>`, the
 **`dispatch-broker-bootstrap-<pool>`** ServiceAccount, and a **`dispatch-broker-pool-<pool>`**
 ClusterRole + Binding scoped with `resourceNames: [<pool>]` and bound to both that SA and the
 pool's cert identity `ectobase:cluster:<pool>`.
@@ -256,6 +260,26 @@ Source of truth: `charts/ectobase-pool/values.yaml` (schema: `values.schema.json
 The Tier-1 knobs live under `tier1Failover.*` (`snrNamespace`, `nodeSelector`, `unhealthyThreshold`,
 `minHealthy`, `remediationStrategy`, `watchdog.*`). See the
 [Helm values reference](../reference/helm-values.md) for the complete list.
+
+## Upgrade order
+
+A planned move or a VM delete relies on both sides of the fleet speaking the release protocol
+(see [Broker sync](../architecture/multi-cluster-control-plane.md#broker-sync)), so upgrade every
+pool chart before the dispatch chart.
+
+An un-upgraded pool's broker still treats a `CompiledVM` twin with a deletion timestamp as
+desired — it keeps recreating the twin's VM and disks downstream instead of letting them go — and
+it has no `ReportReleases` call (`dispatch/pkg/broker/release.go`) to make the report the dispatch
+side is waiting on. Nothing is destroyed and nothing runs on two pools — the design fails closed —
+but every move off that pool, and every delete of a VM on it, hangs until `helm upgrade` lands the
+pool chart's new broker image.
+
+The dispatch chart's `dispatch-apiserver`, `dispatch-controller` and `mesh-controller`
+Deployments come from one Helm release and move together; don't patch one of their images ahead
+of the others. An old `dispatch-controller` never runs `releaseFencedTwins`
+(`dispatch/pkg/failover/failover.go`), so a Tier-2 failover fences a lost pool correctly but never
+releases its retired twins, and the VMs it tries to rebind stay stuck waiting on a release that
+will never be reported.
 
 ## Trying it end to end
 

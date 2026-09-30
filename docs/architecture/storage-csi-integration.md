@@ -100,9 +100,37 @@ disks), or, if the old pool is lost, when failover has fenced it. The VM's `Movi
 which pool it is waiting on.
 
 Two writers on one image is otherwise possible: `ReadWriteOnce` is enforced per cluster, and the
-RBD images carry only `layering`, so Ceph does not refuse a second mapper. There is no force
-option; if a pool will not release a VM, fencing that pool is the way to take the decision away
-from it.
+RBD images carry only `layering`, so Ceph does not refuse a second mapper. There is no force flag
+on the machinery itself; what exists instead are two real procedures, for two different problems:
+
+- **The pool is actually gone.** Once its lease has gone stale past the failover threshold, the
+  `ClusterPool` goes `Unknown` (`poolLost`, `dispatch/pkg/failover/failover.go`), and once fence
+  coverage over every node it last reported is provably complete, failover fences the pool and, in
+  that same pass, marks its retired twins `status.released` itself (`releaseFencedTwins`) — there
+  is no broker left on that pool to report it. This also rebinds every *other* VM still bound to
+  the pool, not just the one waiting on the retired twin.
+- **The pool is up but will not release.** Fencing does not help here: fencing a healthy pool —
+  one whose lease is still renewing — releases nothing, because `releaseFencedTwins` only runs
+  once `poolLost` is already true. Instead, after checking by hand, on the pool, that nothing can
+  still run the VM or write its disks (no KubeVirt `VirtualMachine`, VMI, or virt-launcher pod, and
+  no claim carrying the twin's `workload` label — exactly what the broker's own `letGo` checks,
+  `dispatch/pkg/broker/release.go`), an operator with write access to `compiledvms/status` can
+  make the same report the broker would have made:
+
+  ```sh
+  kubectl patch compiledvms <ns>-<vm> -n pool-<cluster> --subresource=status --type=merge \
+    -p '{"status":{"released":true}}'
+  ```
+
+  This is the operator taking personal responsibility for the no-two-writers proof the machinery
+  would otherwise have made itself; get the manual check wrong and the VM runs in two places.
+
+A retired twin can also be stuck for reasons neither procedure reaches, so only that same manual
+patch (or removing whatever is actually wrong) gets it moving: the pool's `ClusterPool` was
+deleted outright, leaving failover's reconciler nothing to act on; the pool never had a lease to
+begin with, so `poolLost` fails safe rather than trust an absent timestamp; or the twin sits in a
+namespace outside the `pool-<cluster>` convention, left over from an older layout — neither the
+broker's `ReportReleases` nor failover's `releaseFencedTwins` lists outside that namespace.
 
 ## Node fencing for safe reschedule
 
