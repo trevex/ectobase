@@ -78,6 +78,25 @@ This is a one-time step. The strategy is not part of the pod template, so the pa
 rollout, and it sets the value the chart applies, so it never conflicts with Helm afterwards. The
 lab runs it on every deploy (`migrateRecreateDeployments` in `test/lab/internal/deploy/ectobase.go`).
 
+Moving `postgres.persistence.type` from `emptyDir` to `pvc` (or `hostPath`) is a separate one-time
+transition with its own cost, seen live on 2026-09-30: nothing carries the old emptyDir's data
+across, so the first upgrade starts postgres on an empty data directory.
+
+1. All dispatch state from before that upgrade is lost — once, on this transition only.
+2. kine keeps failing with `relation "kine" does not exist`, because it creates its schema only
+   at startup and had already done so against the emptyDir before postgres came back empty.
+   Restart it: `kubectl -n system rollout restart deploy/kine`.
+3. The dispatch apiserver keeps serving pre-upgrade objects from its watch cache (for example a
+   `ClusterPool` with the old `creationTimestamp`), and nothing converges until it and the
+   controllers reading the same objects are restarted too:
+   `kubectl -n system rollout restart deploy/dispatch-apiserver deploy/dispatch-controller` and
+   `kubectl -n ectobase-system rollout restart deploy/mesh-controller`. Then re-run the
+   install/upgrade so the objects are recreated against the now-empty store.
+
+This sequence is only needed on the emptyDir-to-persistent transition. After that, postgres
+restarting on its own keeps all state: deleting the postgres pod live left every `ClusterPool` in
+place with its lease still renewing, with no manual step.
+
 ### Dispatch values
 
 Source of truth: `charts/ectobase-dispatch/values.yaml` (schema: `values.schema.json`).
