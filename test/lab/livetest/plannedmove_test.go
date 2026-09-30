@@ -31,6 +31,10 @@ const (
 // plannedMoveFixture is a VM that actually RUNS — so a virt-launcher holds its disk — with one blank
 // RBD disk and no network. Blank (no bootImage) keeps a registry import out of the test; qemu starts
 // and holds the block device whether or not anything on it boots, which is all the overlap needs.
+//
+// The image is there only to make the VM materializable: a VM with no image waits for an attachment
+// marked boot, and a blank disk is not one. The materializer boots from the attachments whenever any
+// exist, so the image is never pulled.
 func plannedMoveFixture(clusterName string) string {
 	return fmt.Sprintf(`apiVersion: storage.ectobase.dev/v1alpha1
 kind: Volume
@@ -43,6 +47,7 @@ metadata: {name: %[1]s, namespace: %[3]s}
 spec:
   clusterName: %[4]s
   volumeRefs: [{name: %[2]s}]
+  image: quay.io/containerdisks/fedora:41
   runStrategy: Always
   resources:
     requests: {cpu: 100m, memory: 128Mi}
