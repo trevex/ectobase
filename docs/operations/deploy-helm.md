@@ -281,6 +281,14 @@ of the others. An old `dispatch-controller` never runs `releaseFencedTwins`
 releases its retired twins, and the VMs it tries to rebind stay stuck waiting on a release that
 will never be reported.
 
+Within a pool chart, `flowplane` must run the new image before `mesh-agent` does. The agent hands
+routes for its own guests' addresses to the dataplane and relies on flowplane letting a local
+guest's self-route hold that key; an older flowplane lets such a route overwrite the self-route,
+and a later withdraw then deletes it, which cuts the guest off on its own node. A normal
+`helm upgrade` of the pool chart can briefly run the new agent against the old flowplane on a
+node; the new flowplane repairs any self-route damaged that way when it starts. Never upgrade the
+`mesh` image on a pool on its own.
+
 ## Trying it end to end
 
 The [local fabric](../tutorials/local-fabric.md) runs this exact two-chart install across a
