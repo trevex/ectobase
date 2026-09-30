@@ -53,6 +53,31 @@ Wait for the aggregated API to serve before proceeding — the apiserver pod mus
 kubectl get clusterpools.platform.ectobase.dev
 ```
 
+### Upgrading from a chart version before Recreate
+
+The `postgres` and `reflector` Deployments now roll out with `Recreate`. A Deployment first
+created under the default `RollingUpdate` carries an apiserver-defaulted
+`spec.strategy.rollingUpdate` that Helm 4's server-side apply does not own and so never removes,
+and the API rejects `Recreate` next to it. Upgrading such a release fails with:
+
+```text
+Error: UPGRADE FAILED: server-side apply failed for object system/postgres apps/v1, Kind=Deployment: Deployment.apps "postgres" is invalid: spec.strategy.rollingUpdate: Forbidden: may not be specified when strategy `type` is 'Recreate'
+```
+
+Before that first upgrade, switch both Deployments once (the namespaces are the defaults of
+`namespace` and `agentNamespace`; use yours if you override them):
+
+```sh
+kubectl -n system patch deploy postgres --type=merge \
+  -p '{"spec":{"strategy":{"type":"Recreate","rollingUpdate":null}}}'
+kubectl -n ectobase-system patch deploy reflector --type=merge \
+  -p '{"spec":{"strategy":{"type":"Recreate","rollingUpdate":null}}}'
+```
+
+This is a one-time step. The strategy is not part of the pod template, so the patch starts no
+rollout, and it sets the value the chart applies, so it never conflicts with Helm afterwards. The
+lab runs it on every deploy (`migrateRecreateDeployments` in `test/lab/internal/deploy/ectobase.go`).
+
 ### Dispatch values
 
 Source of truth: `charts/ectobase-dispatch/values.yaml` (schema: `values.schema.json`).
