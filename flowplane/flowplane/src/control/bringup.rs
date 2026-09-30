@@ -217,9 +217,6 @@ impl Control {
             // Likewise the neighbor-NAT blocks in the pinned `NAT_OWNERS{,6}` tries: rebuild their
             // lists (repairing any a crash left partial) so a withdraw or overlap check sees them.
             inner.core.adopt_nat_owners();
-            // And the routes in the pinned `ROUTES{,6}` tries, so a withdraw after the restart
-            // finds what it withdraws instead of leaving it forwarding.
-            inner.core.adopt_routes();
             // Blocks the retired slot table still held. Adopt has just rebuilt the tries' own
             // blocks, so these fill in only what this build never saw.
             if !legacy.is_empty() {
@@ -232,6 +229,10 @@ impl Control {
                 recovered.len(),
             );
             inner.recovered = recovered;
+            // And the routes in the pinned `ROUTES{,6}` tries, so a withdraw after the restart
+            // finds what it withdraws instead of leaving it forwarding. After the interfaces: a
+            // recovered interface's self-route holds its key against mesh routes again.
+            inner.core.adopt_routes();
         }
         Ok(Self {
             inner: Mutex::new(inner),

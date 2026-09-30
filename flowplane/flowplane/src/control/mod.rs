@@ -466,6 +466,9 @@ impl Control {
                 let pd = g.pin_dir.clone();
                 loader::unpin_link(&pd, name);
             }
+            // A self-route written before the failure would hold its key with no interface behind
+            // it; give it up (restoring any mesh route it covered) like a detach does.
+            let _ = g.core.remove_self_routes(vni, ipv4, ipv6);
             return Err(e);
         }
         // All datapath writes succeeded — commit the in-memory bookkeeping.
@@ -557,10 +560,14 @@ impl Control {
         }
         let _ = g.core.writer_mut().meter_remove(&tap);
         let _ = g.core.writer_mut().dhcp_meta_remove(tap);
-        // Remove the local self-route(s) programmed by program_interface.
-        let _ = g.core.writer_mut().route_remove(rec.vni, rec.ipv4, 32);
-        if rec.ipv6 != [0u8; 16] {
-            let _ = g.core.writer_mut().route6_remove(rec.vni, rec.ipv6, 128);
+        // Remove the local self-route(s) programmed by program_interface, putting back any mesh
+        // route they were holding back (a VM moving away again while the fabric still points
+        // elsewhere would black-hole here otherwise).
+        if let Err(e) = g.core.remove_self_routes(rec.vni, rec.ipv4, rec.ipv6) {
+            eprintln!(
+                "detach: restoring the routes under {}'s self-routes failed: {e:#}",
+                rec.device
+            );
         }
         g.core.remove_fw_rules(tap);
         // Flush this interface's conntrack so a later reschedule of the same (VNI, overlayIP) cannot

@@ -85,6 +85,18 @@ fn routes_pinned(pin: &Path) -> Vec<(u32, [u8; 4], u32)> {
     v
 }
 
+/// The pinned `ROUTES` entry for one host route, by an exact /32 lookup.
+fn route_pinned(pin: &Path, vni: u32, ipv4: [u8; 4]) -> Option<RouteValue> {
+    let map = MapData::from_pin(pin.join("ROUTES")).expect("reopen pinned ROUTES");
+    let trie: LpmTrie<_, RouteLpmData, RouteValue> =
+        LpmTrie::try_from(aya::maps::Map::LpmTrie(map)).expect("ROUTES is an LPM trie");
+    let data = RouteLpmData {
+        vni: vni.to_be_bytes(),
+        ipv4,
+    };
+    trie.get(&Key::new(32 + 32, data), 0).ok()
+}
+
 fn routes6_pinned(pin: &Path) -> Vec<(u32, [u8; 16], u32)> {
     let map = MapData::from_pin(pin.join("ROUTES6")).expect("reopen pinned ROUTES6");
     let trie: LpmTrie<_, RouteLpmData6, RouteValue> =
@@ -718,6 +730,56 @@ fn restart_adopts_pinned_state_and_relinks_guests() {
             "retired map {name} still pinned after the migration"
         );
     }
+
+    // A VM moving onto this node: the fabric still carries its old owner's /32 while the interface
+    // is attached here. The adopted self-route keeps the kernel entry, the mesh route waits, and
+    // the detach puts it back rather than leaving the address unrouted.
+    let old_owner: std::net::Ipv6Addr = "fd00::99".parse().unwrap();
+    let moved = pb::AddRouteRequest {
+        vni,
+        prefix: "10.0.0.5/32".into(),
+        nexthop_underlay: old_owner.to_string(),
+        ..Default::default()
+    };
+    ctl.with_core(|c| handlers::add_route(c, &moved))
+        .expect("add the old owner's route");
+    let self_nh: std::net::Ipv6Addr = "fd00::1".parse().unwrap();
+    assert_eq!(
+        route_pinned(pin.path(), vni, ip).map(|r| r.nexthop_ipv6),
+        Some(self_nh.octets()),
+        "the self-route holds its key against the mesh route"
+    );
+    // A second interface keeps the VNI in use, or the detach of the last one purges every route
+    // in it, the reinstalled one included.
+    sh(&[
+        "ip", "link", "add", "fpt-g1", "type", "veth", "peer", "name", "fpt-g1p",
+    ]);
+    sh(&["ip", "link", "set", "fpt-g1", "up"]);
+    ctl.create_interface(
+        b"ifB",
+        "fpt-g1",
+        IfaceParams {
+            vni,
+            ipv4: [10, 0, 0, 6],
+            ipv6: [0; 16],
+            gateway_ipv4: [10, 0, 0, 1],
+            gateway_ipv6: [0; 16],
+            underlay_ipv6: self_nh.octets(),
+            total_mbps: 0,
+            public_mbps: 0,
+            netkit: false,
+            l3: false,
+            peer_capable: true,
+            offloaded: false,
+        },
+    )
+    .expect("create_interface ifB");
+    assert!(ctl.detach_interface(b"ifA").expect("detach ifA"));
+    assert_eq!(
+        route_pinned(pin.path(), vni, ip).map(|r| r.nexthop_ipv6),
+        Some(old_owner.octets()),
+        "the detach reinstalls the mesh route"
+    );
 
     // Unpinning detaches; the netns (and its devices) goes away with this thread.
     drop(ctl);

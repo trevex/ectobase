@@ -19,6 +19,9 @@ pub struct NatOwnerFault<K> {
 pub struct MemMapWriter {
     pub routes: HashMap<(u32, [u8; 4], u32), RouteValue>,
     pub routes6: HashMap<(u32, [u8; 16], u32), RouteValue>,
+    /// Test knobs: fail the remove of exactly one route, as a kernel map delete can.
+    pub route_remove_fault: Option<(u32, [u8; 4], u32)>,
+    pub route6_remove_fault: Option<(u32, [u8; 16], u32)>,
     pub nat: HashMap<NatKey, NatValue>,
     pub nat_ips: HashSet<(u32, [u8; 4])>,
     pub nat_owners: HashMap<(u32, NatOwnerKey), NatOwner>,
@@ -65,6 +68,9 @@ impl MapWriter for MemMapWriter {
         Ok(())
     }
     fn route_remove(&mut self, vni: u32, ipv4: [u8; 4], p: u32) -> anyhow::Result<()> {
+        if self.route_remove_fault == Some((vni, ipv4, p)) {
+            anyhow::bail!("injected ROUTES remove failure");
+        }
         self.routes.remove(&(vni, ipv4, p));
         Ok(())
     }
@@ -79,6 +85,9 @@ impl MapWriter for MemMapWriter {
         Ok(())
     }
     fn route6_remove(&mut self, vni: u32, ipv6: [u8; 16], p: u32) -> anyhow::Result<()> {
+        if self.route6_remove_fault == Some((vni, ipv6, p)) {
+            anyhow::bail!("injected ROUTES6 remove failure");
+        }
         self.routes6.remove(&(vni, ipv6, p));
         Ok(())
     }

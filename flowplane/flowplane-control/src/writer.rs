@@ -38,6 +38,8 @@ pub trait MapWriter {
         prefix_len: u32,
         val: RouteValue,
     ) -> anyhow::Result<()>;
+    /// Removing an absent route must succeed: `delete_route` keeps a route listed when its remove
+    /// fails, so an absent key failing would wedge every retry.
     fn route_remove(&mut self, vni: u32, ipv4: [u8; 4], prefix_len: u32) -> anyhow::Result<()>;
     fn route6_upsert(
         &mut self,
@@ -46,6 +48,7 @@ pub trait MapWriter {
         prefix_len: u32,
         val: RouteValue,
     ) -> anyhow::Result<()>;
+    /// Same contract as `route_remove`.
     fn route6_remove(&mut self, vni: u32, ipv6: [u8; 16], prefix_len: u32) -> anyhow::Result<()>;
     /// Adopt: every `(vni, prefix, prefix_len, route)` that survived a restart in the pinned
     /// `ROUTES` trie, self-routes included.
