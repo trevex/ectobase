@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -176,6 +177,42 @@ func TestCompiledTeardownFinalizerEnvtest(t *testing.T) {
 		mustBeGoneEventually(ctx, t, direct, vmTwin, &compiledv1.CompiledVM{})
 		mustBeGoneEventually(ctx, t, direct, attTwin, &compiledv1.CompiledVolumeAttachment{})
 		mustBeGoneEventually(ctx, t, direct, client.ObjectKeyFromObject(vm), &computev1.VirtualMachine{})
+	})
+
+	t.Run("VolumeAfterVM", func(t *testing.T) {
+		// A Volume created after its VM must still reach the CompiledVM's spec.volumes, or the pool
+		// materializes the VM without waiting for that disk.
+		vm := &computev1.VirtualMachine{}
+		vm.Name = "vm-late-vol"
+		vm.Namespace = "default"
+		vm.Spec.ClusterName = "c1"
+		vm.Spec.VolumeRefs = []computev1.LocalObjectReference{{Name: "vol-late"}}
+		mustCreate(ctx, t, direct, vm)
+
+		vmTwin := client.ObjectKey{Namespace: "pool-c1", Name: "default-vm-late-vol"}
+		var twin compiledv1.CompiledVM
+		mustExistEventually(ctx, t, direct, vmTwin, &twin)
+		if len(twin.Spec.Volumes) != 0 {
+			t.Fatalf("spec.volumes names a Volume that does not exist yet: %v", twin.Spec.Volumes)
+		}
+
+		vol := &storagev1.Volume{}
+		vol.Name = "vol-late"
+		vol.Namespace = "default"
+		vol.Spec.Size = resource.MustParse("1Gi")
+		vol.Spec.BootImage = "quay.io/containerdisks/fedora:41"
+		mustCreate(ctx, t, direct, vol)
+
+		want := []string{"default-vm-late-vol-vol-late"}
+		eventually(t, 20*time.Second, func() error {
+			if err := direct.Get(ctx, vmTwin, &twin); err != nil {
+				return err
+			}
+			if !slices.Equal(twin.Spec.Volumes, want) {
+				return fmt.Errorf("spec.volumes = %v, want %v", twin.Spec.Volumes, want)
+			}
+			return nil
+		})
 	})
 
 	t.Run("MoveWaitsForSourceRelease", func(t *testing.T) {

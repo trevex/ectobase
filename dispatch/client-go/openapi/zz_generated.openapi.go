@@ -1414,7 +1414,7 @@ func schema_ectobase_api_compiled_v1alpha1_CompiledVMSpec(ref common.ReferenceCa
 					},
 					"volumes": {
 						SchemaProps: spec.SchemaProps{
-							Description: "Volumes are the names of the CompiledVolumeAttachments this VM attaches, in the order its disks are listed. The materializer does not create the VM until every one of them exists on the pool: a VM created before its disks would start from a template without them, and KubeVirt does not re-read the template for an already-created VMI.",
+							Description: "Volumes are the names of the CompiledVolumeAttachments this VM attaches. Their order here does not set the guest's disk order: the VM lists the boot disk first, then the rest by name. The materializer does not create the VM until every one of them exists on the pool: a VM created before its disks would start from a template without them, and KubeVirt does not re-read the template for an already-created VMI.",
 							Type:        []string{"array"},
 							Items: &spec.SchemaOrArray{
 								Schema: &spec.Schema{

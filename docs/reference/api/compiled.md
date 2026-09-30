@@ -423,7 +423,7 @@ _Appears in:_
 | `runStrategy` _string_ | RunStrategy is the KubeVirt run strategy (defaulted upstream by the compiler). |  | Optional: \{\} <br /> |
 | `interfaces` _[CompiledVMInterface](#compiledvminterface) array_ | Interfaces are the VM's overlay interfaces (one per owned NetworkInterface). |  | Optional: \{\} <br /> |
 | `cloudInit` _[CloudInit](#cloudinit)_ | CloudInit, if set, is guest bootstrap delivered as a cloud-init NoCloud datasource. |  | Optional: \{\} <br /> |
-| `volumes` _string array_ | Volumes are the names of the CompiledVolumeAttachments this VM attaches, in the order its<br />disks are listed. The materializer does not create the VM until every one of them exists on<br />the pool: a VM created before its disks would start from a template without them, and<br />KubeVirt does not re-read the template for an already-created VMI. |  | Optional: \{\} <br /> |
+| `volumes` _string array_ | Volumes are the names of the CompiledVolumeAttachments this VM attaches. Their order here does<br />not set the guest's disk order: the VM lists the boot disk first, then the rest by name. The<br />materializer does not create the VM until every one of them exists on the pool: a VM created<br />before its disks would start from a template without them, and KubeVirt does not re-read the<br />template for an already-created VMI. |  | Optional: \{\} <br /> |
 
 
 #### CompiledVMStatus

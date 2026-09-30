@@ -276,27 +276,38 @@ func TestMaterializer_CreatesVM(t *testing.T) {
 }
 
 func TestReadyToMaterialize(t *testing.T) {
-	att := func(name string) compiledv1.CompiledVolumeAttachment {
-		return compiledv1.CompiledVolumeAttachment{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: name}}
+	att := func(name string, boot bool) compiledv1.CompiledVolumeAttachment {
+		return compiledv1.CompiledVolumeAttachment{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: name}, Spec: compiledv1.CompiledVolumeAttachmentSpec{Boot: boot}}
 	}
+	type atts = []compiledv1.CompiledVolumeAttachment
 	for _, tc := range []struct {
 		name  string
 		image string
 		vols  []string
-		atts  []compiledv1.CompiledVolumeAttachment
+		atts  atts
 		ready bool
 	}{
-		{name: "every named disk present", vols: []string{"ns-vm1-boot", "ns-vm1-data"}, atts: []compiledv1.CompiledVolumeAttachment{att("ns-vm1-data"), att("ns-vm1-boot")}, ready: true},
-		{name: "one of two disks present", vols: []string{"ns-vm1-boot", "ns-vm1-data"}, atts: []compiledv1.CompiledVolumeAttachment{att("ns-vm1-boot")}},
+		{name: "every named disk present", vols: []string{"ns-vm1-boot", "ns-vm1-data"}, atts: atts{att("ns-vm1-data", false), att("ns-vm1-boot", true)}, ready: true},
+		{name: "one of two disks present", vols: []string{"ns-vm1-boot", "ns-vm1-data"}, atts: atts{att("ns-vm1-boot", true)}},
 		{name: "no disk present yet", vols: []string{"ns-vm1-boot"}},
 		// The image is no substitute for a named disk: booting from it would be the empty-template
 		// failure all over again for a disk-booted VM, and the wrong disk for any other.
 		{name: "named disk missing, image set", image: "quay.io/containerdisks/fedora:41", vols: []string{"ns-vm1-boot"}},
-		{name: "an unnamed extra attachment is not a named one", vols: []string{"ns-vm1-boot"}, atts: []compiledv1.CompiledVolumeAttachment{att("ns-vm1-other")}},
+		{name: "an unnamed extra attachment is not a named one", vols: []string{"ns-vm1-boot"}, atts: atts{att("ns-vm1-other", true)}},
+		// The boot Volume compiled late, so only the data disk is named: every named disk is here,
+		// but with no image nothing of it is bootable, and a VMI started from it runs forever
+		// without booting — KubeVirt never recreates it.
+		{name: "only a data disk named, no image", vols: []string{"ns-vm1-data"}, atts: atts{att("ns-vm1-data", false)}},
+		{name: "a named boot disk present, no image", vols: []string{"ns-vm1-boot"}, atts: atts{att("ns-vm1-boot", true)}, ready: true},
+		// A boot disk that is present but not named does not count: it is not going into the VM.
+		{name: "boot disk present but not named", vols: []string{"ns-vm1-data"}, atts: atts{att("ns-vm1-data", false), att("ns-vm1-boot", true)}},
+		{name: "a data disk alongside an image", image: "quay.io/containerdisks/fedora:41", vols: []string{"ns-vm1-data"}, atts: atts{att("ns-vm1-data", false)}, ready: true},
 		{name: "containerDisk VM", image: "quay.io/containerdisks/fedora:41", ready: true},
 		{name: "nothing to boot from", ready: false},
-		// Compiled before spec.volumes existed: whatever attachments are here is all it ever knew.
-		{name: "legacy twin with an attachment", atts: []compiledv1.CompiledVolumeAttachment{att("ns-vm1-boot")}, ready: true},
+		// Compiled before spec.volumes existed (or before its Volumes did): whatever attachments are
+		// here is all it knows — but it still needs one of them to boot from.
+		{name: "legacy twin with a boot attachment", atts: atts{att("ns-vm1-data", false), att("ns-vm1-boot", true)}, ready: true},
+		{name: "legacy twin with only a data attachment", atts: atts{att("ns-vm1-data", false)}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cvm := &compiledv1.CompiledVM{
@@ -402,6 +413,15 @@ func TestMaterializer_CreatesVMOnceItsDisksArrive(t *testing.T) {
 	if err := c.Create(ctx, cvm); err != nil {
 		t.Fatalf("create compiledvm: %v", err)
 	}
+	// A disk whose volumeRef was removed but which the dispatch has not collected yet: it still
+	// carries the workload label, and must neither satisfy the wait nor enter the template.
+	stale := &compiledv1.CompiledVolumeAttachment{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "default-vm1-old", Labels: map[string]string{"workload": "vm1"}},
+		Spec:       compiledv1.CompiledVolumeAttachmentSpec{ClusterName: "cluster-a", Size: resource.MustParse("1Gi")},
+	}
+	if err := c.Create(ctx, stale); err != nil {
+		t.Fatalf("create stale attachment: %v", err)
+	}
 	if _, err := r.Reconcile(ctx, req); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
@@ -429,6 +449,6 @@ func TestMaterializer_CreatesVMOnceItsDisksArrive(t *testing.T) {
 	}
 	vols := vm.Spec.Template.Spec.Volumes
 	if len(vols) != 1 || vols[0].DataVolume == nil || vols[0].DataVolume.Name != "default-vm1-boot" {
-		t.Fatalf("want the VM to boot from its DataVolume, got volumes %+v", vols)
+		t.Fatalf("want the VM to boot from its DataVolume and nothing else, got volumes %+v", vols)
 	}
 }

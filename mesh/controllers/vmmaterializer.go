@@ -6,6 +6,7 @@ package controllers
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -127,33 +128,54 @@ func buildVM(cvm *compiledv1.CompiledVM, attachments []compiledv1.CompiledVolume
 	return vm
 }
 
-// readyToMaterialize says whether a CompiledVM can become a KubeVirt VM yet, and if not, why.
+// namedAttachments narrows the attachments carrying a CompiledVM's workload label to the ones it
+// names. A label match alone is not enough: an attachment whose volumeRef was removed keeps its
+// label until the dispatch collects it, and must not go back into the template meanwhile. A twin
+// compiled before spec.volumes existed names nothing and keeps all of them, as before. Pure.
+func namedAttachments(cvm *compiledv1.CompiledVM, atts []compiledv1.CompiledVolumeAttachment) []compiledv1.CompiledVolumeAttachment {
+	if len(cvm.Spec.Volumes) == 0 {
+		return atts
+	}
+	var out []compiledv1.CompiledVolumeAttachment
+	for _, a := range atts {
+		if slices.Contains(cvm.Spec.Volumes, a.Name) {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+// readyToMaterialize says whether a CompiledVM can become a KubeVirt VM yet, and if not, why. atts
+// are all the attachments carrying its workload label; only the ones it names count.
 //
 // The broker delivers a CompiledVM and its attachments independently, so either may arrive first.
 // A VM created ahead of its disks starts from a template without them — for a disk-booted VM, an
 // empty containerDisk — and KubeVirt keeps that VMI (and its invalid launcher pod) even after the
-// template is fixed. So the VM waits until every disk it names is here, and a VM with no disks
-// waits for an image, since there is nothing else to boot. A twin compiled before spec.volumes
-// existed names nothing; any attachment present is then taken as its disks, as before. Pure.
+// template is fixed. So the VM waits until every disk it names is here. Without an image it also
+// waits for a boot disk: a template of data disks alone starts a VMI that runs without ever
+// booting, and is never recreated. A twin compiled before spec.volumes existed names nothing; the
+// attachments present are then taken as its disks, as before. Pure.
 func readyToMaterialize(cvm *compiledv1.CompiledVM, atts []compiledv1.CompiledVolumeAttachment) (bool, string) {
-	if len(cvm.Spec.Volumes) > 0 {
-		have := make(map[string]bool, len(atts))
-		for _, a := range atts {
-			have[a.Name] = true
-		}
-		var missing []string
-		for _, v := range cvm.Spec.Volumes {
-			if !have[v] {
-				missing = append(missing, v)
-			}
-		}
-		if len(missing) > 0 {
-			return false, "waiting for volume attachment(s) " + strings.Join(missing, ", ")
-		}
-		return true, ""
+	atts = namedAttachments(cvm, atts)
+	have := make(map[string]bool, len(atts))
+	boot := false
+	for _, a := range atts {
+		have[a.Name] = true
+		boot = boot || a.Spec.Boot
 	}
-	if cvm.Spec.Image == "" && len(atts) == 0 {
+	var missing []string
+	for _, v := range cvm.Spec.Volumes {
+		if !have[v] {
+			missing = append(missing, v)
+		}
+	}
+	switch {
+	case len(missing) > 0:
+		return false, "waiting for volume attachment(s) " + strings.Join(missing, ", ")
+	case cvm.Spec.Image == "" && len(atts) == 0:
 		return false, "no image and no volume attachments: nothing to boot from"
+	case cvm.Spec.Image == "" && !boot:
+		return false, "waiting for a boot disk: no image, and none of the attachments is marked boot"
 	}
 	return true, ""
 }
@@ -180,7 +202,7 @@ func (r *VMMaterializerReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		log.FromContext(ctx).Info("not materializing VM yet", "reason", why)
 		return ctrl.Result{}, nil
 	}
-	desired := buildVM(&cvm, atts.Items)
+	desired := buildVM(&cvm, namedAttachments(&cvm, atts.Items))
 	if err := ctrl.SetControllerReference(&cvm, desired, r.Client.Scheme()); err != nil {
 		return ctrl.Result{}, err
 	}
