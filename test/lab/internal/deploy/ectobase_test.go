@@ -86,3 +86,12 @@ func TestClusterPoolsManifestEmpty(t *testing.T) {
 		t.Fatalf("expected empty manifest for no clusters, got %q", got)
 	}
 }
+
+// The dispatch cluster has no StorageClass until `lab ceph` runs, so the chart's default PVC would
+// sit Pending and `lab up` would never see the dispatch come up.
+func TestDispatchHelmArgsPersistPostgresOnHostPath(t *testing.T) {
+	args := dispatchHelmArgs("/kc", "/chart", "fd00:db8:0:1::1", true, "fd00:db8:0:1::1", "registry:5000", "")
+	if !containsSubseq(args, []string{"--set", "postgres.persistence.type=hostPath"}) {
+		t.Fatalf("dispatch install does not put postgres on a hostPath:\n%v", args)
+	}
+}
