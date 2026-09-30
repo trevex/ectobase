@@ -519,6 +519,11 @@ func (in *CompiledVMSpec) DeepCopyInto(out *CompiledVMSpec) {
 		*out = new(CloudInit)
 		**out = **in
 	}
+	if in.Volumes != nil {
+		in, out := &in.Volumes, &out.Volumes
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
 	return
 }
 

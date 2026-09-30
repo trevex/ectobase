@@ -11,6 +11,7 @@ API rule violation: list_type_missing,github.com/trevex/ectobase/api/compiled/v1
 API rule violation: list_type_missing,github.com/trevex/ectobase/api/compiled/v1alpha1,CompiledNICSpec,PeerImports
 API rule violation: list_type_missing,github.com/trevex/ectobase/api/compiled/v1alpha1,CompiledPeerImport,ImportPrefixes
 API rule violation: list_type_missing,github.com/trevex/ectobase/api/compiled/v1alpha1,CompiledVMSpec,Interfaces
+API rule violation: list_type_missing,github.com/trevex/ectobase/api/compiled/v1alpha1,CompiledVMSpec,Volumes
 API rule violation: list_type_missing,github.com/trevex/ectobase/api/compute/v1alpha1,ContainerSpec,Args
 API rule violation: list_type_missing,github.com/trevex/ectobase/api/compute/v1alpha1,ContainerSpec,Command
 API rule violation: list_type_missing,github.com/trevex/ectobase/api/compute/v1alpha1,ContainerSpec,Env

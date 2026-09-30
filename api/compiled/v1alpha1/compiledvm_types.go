@@ -32,6 +32,12 @@ type CompiledVMSpec struct {
 	// CloudInit, if set, is guest bootstrap delivered as a cloud-init NoCloud datasource.
 	// +optional
 	CloudInit *CloudInit `json:"cloudInit,omitempty"`
+	// Volumes are the names of the CompiledVolumeAttachments this VM attaches, in the order its
+	// disks are listed. The materializer does not create the VM until every one of them exists on
+	// the pool: a VM created before its disks would start from a template without them, and
+	// KubeVirt does not re-read the template for an already-created VMI.
+	// +optional
+	Volumes []string `json:"volumes,omitempty" protobuf:"bytes,7,rep,name=volumes"`
 }
 
 // CloudInit is guest bootstrap config for a compiled VM, delivered by the materializer

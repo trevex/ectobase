@@ -27,6 +27,11 @@ type CompiledVMSpecApplyConfiguration struct {
 	Interfaces []CompiledVMInterfaceApplyConfiguration `json:"interfaces,omitempty"`
 	// CloudInit, if set, is guest bootstrap delivered as a cloud-init NoCloud datasource.
 	CloudInit *CloudInitApplyConfiguration `json:"cloudInit,omitempty"`
+	// Volumes are the names of the CompiledVolumeAttachments this VM attaches, in the order its
+	// disks are listed. The materializer does not create the VM until every one of them exists on
+	// the pool: a VM created before its disks would start from a template without them, and
+	// KubeVirt does not re-read the template for an already-created VMI.
+	Volumes []string `json:"volumes,omitempty"`
 }
 
 // CompiledVMSpecApplyConfiguration constructs a declarative configuration of the CompiledVMSpec type for use with
@@ -85,5 +90,15 @@ func (b *CompiledVMSpecApplyConfiguration) WithInterfaces(values ...*CompiledVMI
 // If called multiple times, the CloudInit field is set to the value of the last call.
 func (b *CompiledVMSpecApplyConfiguration) WithCloudInit(value *CloudInitApplyConfiguration) *CompiledVMSpecApplyConfiguration {
 	b.CloudInit = value
+	return b
+}
+
+// WithVolumes adds the given value to the Volumes field in the declarative configuration
+// and returns the receiver, so that objects can be build by chaining "With" function invocations.
+// If called multiple times, values provided by each call will be appended to the Volumes field.
+func (b *CompiledVMSpecApplyConfiguration) WithVolumes(values ...string) *CompiledVMSpecApplyConfiguration {
+	for i := range values {
+		b.Volumes = append(b.Volumes, values[i])
+	}
 	return b
 }

@@ -853,6 +853,7 @@ func autoConvert_v1alpha1_CompiledVMSpec_To_compiled_CompiledVMSpec(in *Compiled
 	out.RunStrategy = in.RunStrategy
 	out.Interfaces = *(*[]compiled.CompiledVMInterface)(unsafe.Pointer(&in.Interfaces))
 	out.CloudInit = (*compiled.CloudInit)(unsafe.Pointer(in.CloudInit))
+	out.Volumes = *(*[]string)(unsafe.Pointer(&in.Volumes))
 	return nil
 }
 
@@ -868,6 +869,7 @@ func autoConvert_compiled_CompiledVMSpec_To_v1alpha1_CompiledVMSpec(in *compiled
 	out.RunStrategy = in.RunStrategy
 	out.Interfaces = *(*[]CompiledVMInterface)(unsafe.Pointer(&in.Interfaces))
 	out.CloudInit = (*CloudInit)(unsafe.Pointer(in.CloudInit))
+	out.Volumes = *(*[]string)(unsafe.Pointer(&in.Volumes))
 	return nil
 }
 

@@ -22,6 +22,11 @@ type CompiledVMSpec struct {
 	Interfaces []CompiledVMInterface
 	// CloudInit, if set, is guest bootstrap delivered as a cloud-init NoCloud datasource.
 	CloudInit *CloudInit
+	// Volumes are the names of the CompiledVolumeAttachments this VM attaches, in the order its
+	// disks are listed. The materializer does not create the VM until every one of them exists on
+	// the pool: a VM created before its disks would start from a template without them, and
+	// KubeVirt does not re-read the template for an already-created VMI.
+	Volumes []string
 }
 
 // CompiledVMInterface is a resolved overlay interface for a VM.
