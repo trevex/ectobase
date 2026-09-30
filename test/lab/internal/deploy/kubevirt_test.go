@@ -111,3 +111,24 @@ func assertNoBareReuseValues(t *testing.T, argv []string) {
 		}
 	}
 }
+
+// `lab tier2 up` upgrades the dispatch release too, so it migrates the Recreate Deployments first,
+// or a release from before the switch fails the same way `lab deploy` would.
+func TestSetDispatchCSIClusterIDMigratesRecreateFirst(t *testing.T) {
+	r := &strategyRunner{strategy: map[string]string{"reflector": "RollingUpdate"}}
+	if err := SetDispatchCSIClusterID(context.Background(), r, "/kc/dispatch.kubeconfig", "/charts/ectobase-dispatch", "fsid-9"); err != nil {
+		t.Fatalf("SetDispatchCSIClusterID: %v", err)
+	}
+	patch, upgrade := -1, -1
+	for i, c := range r.calls {
+		if patch < 0 && containsSubseq(c, []string{"kubectl", "patch", "deploy", "reflector"}) {
+			patch = i
+		}
+		if upgrade < 0 && containsSubseq(c, []string{"helm", "upgrade", "ectobase-dispatch"}) {
+			upgrade = i
+		}
+	}
+	if patch < 0 || upgrade < 0 || patch > upgrade {
+		t.Fatalf("want the reflector patched before the dispatch upgrade (patch=%d upgrade=%d):\n%v", patch, upgrade, r.calls)
+	}
+}

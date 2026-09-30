@@ -150,6 +150,10 @@ func labelNamespacePrivileged(ctx context.Context, r Runner, kubeconfig, ns stri
 // is missing, and the render fails or silently drops it.
 func SetDispatchCSIClusterID(ctx context.Context, r Runner, kubeconfig, dispatchChartPath, fsid string) error {
 	r = runnerOf(r)
+	// This upgrades the dispatch release too, so it needs the same migration `lab deploy` runs.
+	if err := migrateRecreateDeployments(ctx, r, kubeconfig); err != nil {
+		return fmt.Errorf("migrate dispatch Deployments to Recreate: %w", err)
+	}
 	slog.Info("wiring the ceph fsid into dispatch-controller", "fsid", fsid)
 	if err := r.Run(ctx, "helm", "upgrade", "ectobase-dispatch", dispatchChartPath,
 		"--kubeconfig", kubeconfig, "--namespace", "system",
