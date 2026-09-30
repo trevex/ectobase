@@ -105,9 +105,10 @@ on the machinery itself; what exists instead are two real procedures, for two di
 
 - **The pool is actually gone.** Once its lease has gone stale past the failover threshold, the
   `ClusterPool` goes `Unknown` (`poolLost`, `dispatch/pkg/failover/failover.go`), and once fence
-  coverage over every node it last reported is provably complete, failover fences the pool and, in
-  that same pass, marks its retired twins `status.released` itself (`releaseFencedTwins`) — there
-  is no broker left on that pool to report it. This also rebinds every *other* VM still bound to
+  coverage over every node it last reported is provably complete, failover fences the pool and
+  marks its retired twins `status.released` itself (`releaseFencedTwins`) — there is no broker
+  left on that pool to report it. It does so on every pass while the pool stays lost, because a
+  twin is only retired once the rebind has been compiled. This also rebinds every *other* VM still bound to
   the pool, not just the one waiting on the retired twin.
 - **The pool is up but will not release.** Fencing does not help here: fencing a healthy pool —
   one whose lease is still renewing — releases nothing, because `releaseFencedTwins` only runs
