@@ -268,3 +268,65 @@ func TestRIB_Fence_OverlappingFencesReleaseTogether(t *testing.T) {
 	r.ClearFence("2001:db8::/48")
 	wantAdd(t, sub, "10.0.0.5/32", fencedNH)
 }
+
+// updatesFor returns the RouteUpdates the sink saw for prefix.
+func updatesFor(f *fakeSink, prefix string) []*pb.RouteUpdate {
+	var out []*pb.RouteUpdate
+	for _, u := range updates(f) {
+		if u.Prefix == prefix {
+			out = append(out, u)
+		}
+	}
+	return out
+}
+
+// A fence is about how OTHER nodes reach a node's routes; the origin knows its own. It must not be
+// sent its own key on a fence change: the agent installs any tenant-VNI ADD as a mesh route, and on
+// its own guest's /32 that overwrites the key holding the guest's local self-route.
+func TestRIB_Fence_OriginIsNotSentItsOwnKey(t *testing.T) {
+	r := NewRIB()
+	origin := &fakeSink{id: "nodeA"}
+	other := &fakeSink{id: "nodeB"}
+	r.Subscribe(100, origin)
+	r.Subscribe(100, other)
+	r.Announce("nodeA", 100, "10.0.0.5/32", []string{fencedNH}, false)
+
+	r.SetFence(fencedNet)
+	if got := updatesFor(origin, "10.0.0.5/32"); len(got) != 0 {
+		t.Fatalf("the origin must not be sent a WITHDRAW for its own key on SetFence, got %+v", got)
+	}
+	wantWithdraw(t, other, "10.0.0.5/32")
+
+	r.ClearFence(fencedNet)
+	if got := updatesFor(origin, "10.0.0.5/32"); len(got) != 0 {
+		t.Fatalf("the origin must not be sent an ADD for its own key on ClearFence, got %+v", got)
+	}
+	wantAdd(t, other, "10.0.0.5/32", fencedNH)
+}
+
+// Every origin of a multi-origin key is spared the fence change, the healthy one included; the
+// rest of the fabric sees the reduced set, then the restored one.
+func TestRIB_Fence_NoOriginOfAMultiOriginKeyIsSentTheChange(t *testing.T) {
+	r := NewRIB()
+	fenced := &fakeSink{id: "nodeA"}
+	healthy := &fakeSink{id: "nodeB"}
+	other := &fakeSink{id: "nodeC"}
+	for _, s := range []*fakeSink{fenced, healthy, other} {
+		r.Subscribe(100, s)
+	}
+	r.Announce("nodeA", 100, "0.0.0.0/0", []string{fencedNH}, true)
+	r.Announce("nodeB", 100, "0.0.0.0/0", []string{healthyNH}, true)
+	nFenced, nHealthy := len(updatesFor(fenced, "0.0.0.0/0")), len(updatesFor(healthy, "0.0.0.0/0"))
+
+	r.SetFence(fencedNet)
+	wantAdd(t, other, "0.0.0.0/0", healthyNH)
+	r.ClearFence(fencedNet)
+	wantAdd(t, other, "0.0.0.0/0", fencedNH, healthyNH)
+
+	if got := updatesFor(fenced, "0.0.0.0/0")[nFenced:]; len(got) != 0 {
+		t.Fatalf("the fenced origin must not be sent the fence change for its key, got %+v", got)
+	}
+	if got := updatesFor(healthy, "0.0.0.0/0")[nHealthy:]; len(got) != 0 {
+		t.Fatalf("the healthy origin must not be sent the fence change for its key, got %+v", got)
+	}
+}

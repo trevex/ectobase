@@ -254,7 +254,7 @@ func (r *RIB) Announce(origin string, vni uint32, prefix string, nexthops []stri
 	// Only fan out when the effective advertised route actually changes — a second
 	// anycast origin announcing an identical route must not churn subscribers, and an
 	// announce hidden behind a fence has nothing to tell them yet.
-	r.fanoutChange(k, before, r.advertised(e), origin, external)
+	r.fanoutChange(k, before, r.advertised(e), only(origin), external)
 }
 
 // Withdraw removes a route and fans out a WITHDRAW.
@@ -287,7 +287,7 @@ func (r *RIB) withdrawRouteOrigin(k routeKey, origin string) {
 	} else {
 		r.routes[k] = e
 	}
-	r.fanoutChange(k, before, r.advertised(e), "", e.external)
+	r.fanoutChange(k, before, r.advertised(e), nil, e.external)
 }
 
 // dropOriginLocked withdraws every route, NAT block and public record a node originated, and
@@ -359,27 +359,41 @@ func (r *RIB) ReleaseOrigin(nodeID string, token uint64) {
 	r.dropOriginLocked(nodeID)
 }
 
-// fanoutChange tells subscribers of k.vni (except origin) about a change in what is
-// advertised for k: nothing when before and after agree, WITHDRAW when after is empty,
+// fanoutChange tells subscribers of k.vni (except those skip names) about a change in what
+// is advertised for k: nothing when before and after agree, WITHDRAW when after is empty,
 // otherwise ADD with the new set. Caller holds r.mu.
-func (r *RIB) fanoutChange(k routeKey, before, after []string, origin string, external bool) {
+func (r *RIB) fanoutChange(k routeKey, before, after []string, skip func(id string) bool, external bool) {
 	switch {
 	case equalStrs(before, after):
 	case len(after) == 0:
-		r.fanout(k, nil, pb.RouteOp_ROUTE_OP_WITHDRAW, origin, external)
+		r.fanout(k, nil, pb.RouteOp_ROUTE_OP_WITHDRAW, skip, external)
 	default:
-		r.fanout(k, after, pb.RouteOp_ROUTE_OP_ADD, origin, external)
+		r.fanout(k, after, pb.RouteOp_ROUTE_OP_ADD, skip, external)
 	}
 }
 
-// fanout sends an update to all subscribers of k.vni except origin. Caller holds r.mu.
-// Sink.Send is non-blocking, so holding the lock here is safe.
-func (r *RIB) fanout(k routeKey, nexthops []string, op pb.RouteOp, origin string, external bool) {
+// fanout sends an update to all subscribers of k.vni except those skip names (nil skips
+// none). Caller holds r.mu. Sink.Send is non-blocking, so holding the lock here is safe.
+func (r *RIB) fanout(k routeKey, nexthops []string, op pb.RouteOp, skip func(id string) bool, external bool) {
 	for id, s := range r.subscribers[k.vni] {
-		if id == origin {
+		if skip != nil && skip(id) {
 			continue
 		}
 		s.Send(routeUpdate(k, nexthops, op, external))
+	}
+}
+
+// only skips the one subscriber whose sink id is origin. Sink ids and origins share one
+// namespace: the server keys both by the session's Hello node id.
+func only(origin string) func(id string) bool {
+	return func(id string) bool { return id == origin }
+}
+
+// originsOf skips every subscriber that is itself an origin of e.
+func originsOf(e routeEntry) func(id string) bool {
+	return func(id string) bool {
+		_, ok := e.origins[id]
+		return ok
 	}
 }
 
@@ -410,6 +424,8 @@ func (r *RIB) SetFence(prefix string) {
 // away — their interfaces are gone, and its level-triggered diff withdraws them within
 // seconds — so nothing that failed over comes back. A release that ever outran that
 // withdraw would advertise the stale nexthop beside the new pool's only until it lands.
+// Neither fence change reaches a key's own origins (see refilter), so the recovered pool's
+// agent is never handed its own guests' routes back, stale or not.
 func (r *RIB) ClearFence(prefix string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -422,6 +438,12 @@ func (r *RIB) ClearFence(prefix string) {
 // refilter applies change to the fence set and fans out every route whose advertised
 // nexthops it changed. Caller holds r.mu for the whole of it, so no announce, withdraw or
 // subscribe can land between the before and after views.
+//
+// The change goes to every subscriber EXCEPT the key's own origins. A fence is about how
+// other nodes reach a node's routes; the origin knows its own, and the agent installs any
+// tenant-VNI ADD it is sent as a mesh route — on its own guest's /32 that overwrites the
+// key holding the guest's local self-route. Announce never hands an origin its own route
+// either (it skips the announcer), so this keeps the fence from being the one path that does.
 func (r *RIB) refilter(change func()) {
 	before := make(map[routeKey][]string, len(r.routes))
 	for k, e := range r.routes {
@@ -429,7 +451,7 @@ func (r *RIB) refilter(change func()) {
 	}
 	change()
 	for k, e := range r.routes {
-		r.fanoutChange(k, before[k], r.advertised(e), "", e.external)
+		r.fanoutChange(k, before[k], r.advertised(e), originsOf(e), e.external)
 	}
 }
 
