@@ -38,9 +38,12 @@ func TestNetworkFencer_FenceCallsAdmin(t *testing.T) {
 		t.Fatalf("Fence: %v", err)
 	}
 	if rib.HasRoute(100, "10.0.0.5/32") {
-		t.Fatalf("Fence should have withdrawn the route via admin RPC")
+		t.Fatalf("Fence should have hidden the route via admin RPC")
 	}
 	if err := f.Release(context.Background(), "2001:db8:0:1::/64"); err != nil {
 		t.Fatalf("Release: %v", err)
+	}
+	if !rib.HasRoute(100, "10.0.0.5/32") {
+		t.Fatalf("Release should have re-advertised the route without a re-announce")
 	}
 }
