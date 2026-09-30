@@ -38,6 +38,16 @@ The [vm-materializer](kubevirt-integration.md) then references these DataVolumes
 the VM's disks (boot attachment first), so the KubeVirt VM boots from persistent
 RBD storage.
 
+The broker delivers a `CompiledVM` and its `CompiledVolumeAttachment`s independently, so either
+can arrive first, and the vm-materializer will not create the KubeVirt `VirtualMachine` until
+every attachment `CompiledVM.spec.volumes` names is present — and, for a VM with no image, until
+one of the attachments it has is marked boot. This is not a cosmetic ordering: a VM created ahead
+of its disks starts from a template that does not yet reference them (for a disk-booted VM, that
+means an empty `containerDisk`), and KubeVirt never re-reads a template for a VMI that already
+exists. Fixing the template afterwards would not fix that VMI or its virt-launcher pod — both
+would stay invalid forever. Waiting until the disks are all there avoids ever creating that VMI in
+the first place (`mesh/controllers/vmmaterializer.go`, `readyToMaterialize`).
+
 ## Disk lifetime across clusters
 
 A VM's `spec.clusterName` can change — a planned move, or a Tier-2 failover
@@ -79,6 +89,20 @@ once its identity has been recorded, so a move in the seconds between the claim
 binding and that first reconcile leaves the target to provision a blank disk. The
 original is *orphaned* in Ceph rather than destroyed, and the compiler logs the VM,
 the volume and both pools when it sees a move that early.
+
+### A move is break-before-make
+
+Changing `spec.clusterName` never runs a VM on two pools at once. The compiler retires the VM's
+twin in the old pool — deleted, but held by the `compiled.ectobase.dev/source-released` finalizer —
+and compiles neither the VM nor its disks into the new pool until that twin is gone. It goes when
+the old pool's broker reports `status.released` (nothing left that could run the VM or hold its
+disks), or, if the old pool is lost, when failover has fenced it. The VM's `Moving` condition says
+which pool it is waiting on.
+
+Two writers on one image is otherwise possible: `ReadWriteOnce` is enforced per cluster, and the
+RBD images carry only `layering`, so Ceph does not refuse a second mapper. There is no force
+option; if a pool will not release a VM, fencing that pool is the way to take the decision away
+from it.
 
 ## Node fencing for safe reschedule
 
