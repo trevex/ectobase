@@ -400,7 +400,13 @@ impl Routes {
                 ipv4,
             },
         );
-        self.map.remove(&key).context("remove route")
+        absent_ok(self.map.remove(&key)).context("remove route")
+    }
+
+    /// Every `(vni, prefix, prefix_len, route)` in the trie (adopt). A read error is logged, not
+    /// returned: what was read is still worth adopting.
+    pub fn entries(&self) -> Vec<(u32, [u8; 4], u32, RouteValue)> {
+        route_entries(self.map.iter(), "ROUTES", |d: RouteLpmData| (d.vni, d.ipv4))
     }
 
     /// Longest-prefix-match lookup for `ipv4` within `vni`'s routing table. A fully-specified
@@ -416,6 +422,51 @@ impl Routes {
         );
         self.map.get(&key, 0).ok()
     }
+}
+
+/// A delete of a key that is not there, as success. The route and NAT-owner removes promise it
+/// (the `MapWriter` contract), so a withdraw retried after a partial failure, or of a key already
+/// gone, does not wedge on its own earlier progress. aya reports a delete's ENOENT as a syscall
+/// error today; `KeyNotFound` is how it reports a lookup's.
+fn absent_ok(r: Result<(), MapError>) -> Result<(), MapError> {
+    match r {
+        Err(MapError::KeyNotFound) => Ok(()),
+        Err(MapError::SyscallError(SyscallError { io_error, .. }))
+            if io_error.kind() == std::io::ErrorKind::NotFound =>
+        {
+            Ok(())
+        }
+        r => r,
+    }
+}
+
+/// Decode a `ROUTES{,6}` walk: each key is the VNI's 32 bits followed by the prefix, so the route's
+/// own prefix length is the key's minus 32. A key shorter than the VNI was not written by `upsert`
+/// and is skipped.
+fn route_entries<D: aya::Pod, A>(
+    walk: impl Iterator<Item = Result<(Key<D>, RouteValue), MapError>>,
+    name: &str,
+    split: impl Fn(D) -> ([u8; 4], A),
+) -> Vec<(u32, A, u32, RouteValue)> {
+    let mut out = Vec::new();
+    for r in walk {
+        match r {
+            Ok((k, v)) => {
+                let Some(len) = k.prefix_len().checked_sub(32) else {
+                    continue;
+                };
+                let (vni, prefix) = split(k.data());
+                out.push((u32::from_be_bytes(vni), prefix, len, v));
+            }
+            // A key-walk error ends aya's iteration: the routes past it go unlisted.
+            Err(e) => eprintln!(
+                "adopt: WARNING reading {name} failed ({:#}); routes it skipped stay programmed but \
+                 cannot be withdrawn until re-announced",
+                anyhow::Error::from(e)
+            ),
+        }
+    }
+    out
 }
 
 /// Typed handle over the `ROUTES6` BPF LPM trie map (IPv6 overlay routes).
@@ -454,7 +505,14 @@ impl Routes6 {
                 ipv6,
             },
         );
-        self.map.remove(&key).context("remove route6")
+        absent_ok(self.map.remove(&key)).context("remove route6")
+    }
+
+    /// v6 sibling of [`Routes::entries`].
+    pub fn entries(&self) -> Vec<(u32, [u8; 16], u32, RouteValue)> {
+        route_entries(self.map.iter(), "ROUTES6", |d: RouteLpmData6| {
+            (d.vni, d.ipv6)
+        })
     }
 
     /// v6 sibling of [`Routes::get`]: longest-prefix-match lookup for `ipv6` within `vni`'s
@@ -509,19 +567,10 @@ impl<K: aya::Pod> NatOwnerTrie<K> {
     }
 
     pub fn remove(&mut self, prefix_len: u32, key: K) -> anyhow::Result<()> {
-        match self.map.remove(&Key::new(prefix_len, key)) {
-            // Absent is success (the `MapWriter` contract): a withdraw retried after a partial
-            // failure removes every prefix of its block again, including those already gone.
-            // aya reports a delete's ENOENT as a syscall error today; `KeyNotFound` is how it
-            // reports a lookup's.
-            Err(MapError::KeyNotFound) => Ok(()),
-            Err(MapError::SyscallError(SyscallError { io_error, .. }))
-                if io_error.kind() == std::io::ErrorKind::NotFound =>
-            {
-                Ok(())
-            }
-            r => r.with_context(|| format!("remove {}", self.name)),
-        }
+        // Absent is success (the `MapWriter` contract): a withdraw retried after a partial failure
+        // removes every prefix of its block again, including those already gone.
+        absent_ok(self.map.remove(&Key::new(prefix_len, key)))
+            .with_context(|| format!("remove {}", self.name))
     }
 
     /// Every `(prefix_len, key, owner)` in the trie (adopt). A read error is logged, not returned:
@@ -655,5 +704,50 @@ mod tests {
         };
         ifaces.upsert(k, v).expect("upsert");
         assert_eq!(ifaces.get(&k), Some(v));
+    }
+
+    #[test]
+    fn absent_ok_passes_only_a_missing_key() {
+        let errno = |kind| {
+            Err(MapError::SyscallError(SyscallError {
+                call: "bpf_map_delete_elem",
+                io_error: std::io::Error::from(kind),
+            }))
+        };
+        assert!(absent_ok(Err(MapError::KeyNotFound)).is_ok());
+        assert!(absent_ok(errno(std::io::ErrorKind::NotFound)).is_ok());
+        assert!(absent_ok(errno(std::io::ErrorKind::PermissionDenied)).is_err());
+    }
+
+    // The adopt walk undoes `Routes::upsert`'s key: the VNI back from big-endian and the route's
+    // prefix length back from the key's. A walk error is skipped, not fatal.
+    #[test]
+    fn route_entries_decode_the_upsert_key() {
+        let v = RouteValue {
+            nexthop_vni: 9,
+            ..Default::default()
+        };
+        let key = |len, vni: u32, ipv4| {
+            Key::new(
+                len,
+                RouteLpmData {
+                    vni: vni.to_be_bytes(),
+                    ipv4,
+                },
+            )
+        };
+        let walk = vec![
+            Ok((key(32 + 24, 100, [10, 0, 0, 0]), v)),
+            Err(MapError::KeyNotFound),
+            Ok((key(32, 0x01_02_03, [0; 4]), v)),
+            Ok((key(16, 100, [0; 4]), v)),
+        ];
+        let got = route_entries(walk.into_iter(), "ROUTES", |d: RouteLpmData| {
+            (d.vni, d.ipv4)
+        });
+        assert_eq!(
+            got,
+            vec![(100, [10, 0, 0, 0], 24, v), (0x01_02_03, [0; 4], 0, v)]
+        );
     }
 }

@@ -31,6 +31,9 @@ pub struct ControlCore<W: MapWriter> {
     // ROUTES domain
     pub(crate) routes_shadow: Vec<shadow::RouteShadowV4>,
     pub(crate) routes6_shadow: Vec<shadow::RouteShadowV6>,
+    // The (vni, host ip) keys whose kernel entry is a local interface's self-route (routes.rs).
+    pub(crate) self_routes: std::collections::HashSet<(u32, [u8; 4])>,
+    pub(crate) self_routes6: std::collections::HashSet<(u32, [u8; 16])>,
     // NAT domain: interface meta + lb shadow the nat conflict checks read.
     pub(crate) ifaces_meta: std::collections::HashMap<Vec<u8>, shadow::IfaceMeta>,
     // LB domain: the load balancers (keyed by id) + the Maglev table-id allocator.
@@ -61,6 +64,8 @@ impl<W: MapWriter> ControlCore<W> {
             w,
             routes_shadow: Vec::new(),
             routes6_shadow: Vec::new(),
+            self_routes: std::collections::HashSet::new(),
+            self_routes6: std::collections::HashSet::new(),
             ifaces_meta: std::collections::HashMap::new(),
             lbs: std::collections::HashMap::new(),
             next_table_id: 1,

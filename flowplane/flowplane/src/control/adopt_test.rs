@@ -20,7 +20,9 @@ use std::process::Command;
 use aya::maps::lpm_trie::{Key, LpmTrie};
 use aya::maps::{of_maps::HashOfMaps, Array, HashMap as AyaHashMap, MapData};
 use aya::programs::{SchedClassifier, TcAttachType};
-use flowplane_common::{FwBind, FwPolKey, NatOwner, NatOwnerKey, NatOwnerKey6};
+use flowplane_common::{
+    FwBind, FwPolKey, NatOwner, NatOwnerKey, NatOwnerKey6, RouteLpmData, RouteLpmData6, RouteValue,
+};
 
 use super::{hex_encode, Control, IfaceParams};
 use crate::legacy_nat::{LegacyNeighborNat, LegacyNeighborNat6};
@@ -64,6 +66,64 @@ fn scopes_pinned(pin: &Path) -> Vec<u64> {
     let mut ids: Vec<u64> = map.keys().filter_map(Result::ok).collect();
     ids.sort_unstable();
     ids
+}
+
+/// The pinned `ROUTES{,6}` tries' keys as `(vni, prefix, route prefix_len)`, sorted.
+fn routes_pinned(pin: &Path) -> Vec<(u32, [u8; 4], u32)> {
+    let map = MapData::from_pin(pin.join("ROUTES")).expect("reopen pinned ROUTES");
+    let trie: LpmTrie<_, RouteLpmData, RouteValue> =
+        LpmTrie::try_from(aya::maps::Map::LpmTrie(map)).expect("ROUTES is an LPM trie");
+    let mut v: Vec<_> = trie
+        .keys()
+        .map(|k| {
+            let k = k.expect("walk ROUTES");
+            let d = k.data();
+            (u32::from_be_bytes(d.vni), d.ipv4, k.prefix_len() - 32)
+        })
+        .collect();
+    v.sort_unstable();
+    v
+}
+
+/// The pinned `ROUTES` entry for one host route, by an exact /32 lookup.
+fn route_pinned(pin: &Path, vni: u32, ipv4: [u8; 4]) -> Option<RouteValue> {
+    let map = MapData::from_pin(pin.join("ROUTES")).expect("reopen pinned ROUTES");
+    let trie: LpmTrie<_, RouteLpmData, RouteValue> =
+        LpmTrie::try_from(aya::maps::Map::LpmTrie(map)).expect("ROUTES is an LPM trie");
+    let data = RouteLpmData {
+        vni: vni.to_be_bytes(),
+        ipv4,
+    };
+    trie.get(&Key::new(32 + 32, data), 0).ok()
+}
+
+/// Write one host route straight into the pinned `ROUTES`, as an older build could have.
+fn put_route_pinned(pin: &Path, vni: u32, ipv4: [u8; 4], val: RouteValue) {
+    let map = MapData::from_pin(pin.join("ROUTES")).expect("reopen pinned ROUTES");
+    let mut trie: LpmTrie<_, RouteLpmData, RouteValue> =
+        LpmTrie::try_from(aya::maps::Map::LpmTrie(map)).expect("ROUTES is an LPM trie");
+    let data = RouteLpmData {
+        vni: vni.to_be_bytes(),
+        ipv4,
+    };
+    trie.insert(&Key::new(32 + 32, data), val, 0)
+        .expect("write pinned route");
+}
+
+fn routes6_pinned(pin: &Path) -> Vec<(u32, [u8; 16], u32)> {
+    let map = MapData::from_pin(pin.join("ROUTES6")).expect("reopen pinned ROUTES6");
+    let trie: LpmTrie<_, RouteLpmData6, RouteValue> =
+        LpmTrie::try_from(aya::maps::Map::LpmTrie(map)).expect("ROUTES6 is an LPM trie");
+    let mut v: Vec<_> = trie
+        .keys()
+        .map(|k| {
+            let k = k.expect("walk ROUTES6");
+            let d = k.data();
+            (u32::from_be_bytes(d.vni), d.ipv6, k.prefix_len() - 32)
+        })
+        .collect();
+    v.sort_unstable();
+    v
 }
 
 fn nat_owners_trie<K: aya::Pod>(pin: &Path, name: &str) -> LpmTrie<MapData, K, NatOwner> {
@@ -264,6 +324,34 @@ fn restart_adopts_pinned_state_and_relinks_guests() {
     let owners6 = nat_owners6_pinned(pin.path());
     assert!(!owners6.is_empty(), "the v6 block is programmed");
 
+    // Two mesh routes beside the interface's own self-route (10.0.0.5/32).
+    let route = pb::AddRouteRequest {
+        vni: 7,
+        prefix: "10.0.0.61/32".into(),
+        nexthop_underlay: "fd00::99".into(),
+        ..Default::default()
+    };
+    let route6 = pb::AddRouteRequest {
+        prefix: "2001:db8:61::/64".into(),
+        ..route.clone()
+    };
+    for r in [&route, &route6] {
+        ctl.with_core(|c| handlers::add_route(c, r))
+            .expect("add route");
+    }
+    let r61 = (7, [10, 0, 0, 61], 32);
+    let self_route = (vni, ip, 32);
+    let r6: (u32, [u8; 16], u32) = (
+        7,
+        "2001:db8:61::"
+            .parse::<std::net::Ipv6Addr>()
+            .unwrap()
+            .octets(),
+        64,
+    );
+    assert_eq!(routes_pinned(pin.path()), vec![self_route, r61]);
+    assert_eq!(routes6_pinned(pin.path()), vec![r6]);
+
     // The process "exits": every fd and in-memory structure goes, only pins remain.
     drop(ctl);
     let guest_link = pin
@@ -301,6 +389,21 @@ fn restart_adopts_pinned_state_and_relinks_guests() {
     // A crash mid-write: one of the block's prefixes never made it into the trie. The rest still
     // name the whole block, so adopt can tell what is missing.
     drop_nat_owner_pinned(pin.path(), owners[owners.len() / 2]);
+
+    // The damage an older build left on live nodes: a mesh route overwrote ifA's self-route, so the
+    // kernel sends traffic for a local guest to another node.
+    let stale_owner: std::net::Ipv6Addr = "fd00::77".parse().unwrap();
+    put_route_pinned(
+        pin.path(),
+        vni,
+        ip,
+        RouteValue {
+            nexthop_vni: vni,
+            nexthop_ipv6: stale_owner.octets(),
+            is_external: 0,
+            _pad: [0; 3],
+        },
+    );
 
     // A node upgraded from an older build still has the maps that build declared and this one does
     // not (the first-match firewall's rule slots, the scanned neighbor-NAT slots) pinned; nothing
@@ -465,6 +568,65 @@ fn restart_adopts_pinned_state_and_relinks_guests() {
         "the withdraw removes the adopted v6 block"
     );
 
+    // Adopt repaired ifA's key: the self-route is back in the kernel, and the mesh route that had
+    // overwritten it is listed (the fabric's view) behind it.
+    let self_nh: std::net::Ipv6Addr = "fd00::1".parse().unwrap();
+    assert_eq!(
+        route_pinned(pin.path(), vni, ip).map(|r| r.nexthop_ipv6),
+        Some(self_nh.octets()),
+        "adopt restores the overwritten self-route"
+    );
+
+    // The routes came back through adopt: a withdraw after the restart removes them from the pinned
+    // tries. Without adopt the empty shadow made each withdraw a silent no-op and the route kept
+    // forwarding. The self-route was never a withdrawable route and still is not.
+    let withdraw_of = |r: &pb::AddRouteRequest| pb::WithdrawRouteRequest {
+        vni: r.vni,
+        prefix: r.prefix.clone(),
+    };
+    for r in [&route, &route6] {
+        let (_, removed) = ctl
+            .with_core(|c| handlers::withdraw_route(c, &withdraw_of(r)))
+            .expect("withdraw an adopted route");
+        assert!(removed, "{} was adopted", r.prefix);
+    }
+    assert_eq!(routes_pinned(pin.path()), vec![self_route]);
+    assert!(routes6_pinned(pin.path()).is_empty());
+    let (_, removed) = ctl
+        .with_core(|c| {
+            handlers::withdraw_route(
+                c,
+                &pb::WithdrawRouteRequest {
+                    vni,
+                    prefix: "10.0.0.5/32".into(),
+                },
+            )
+        })
+        .expect("withdraw the self-route's key");
+    assert!(
+        removed,
+        "the mesh route that had overwritten the self-route is listed"
+    );
+    assert_eq!(routes_pinned(pin.path()), vec![self_route]);
+    assert_eq!(
+        route_pinned(pin.path(), vni, ip).map(|r| r.nexthop_ipv6),
+        Some(self_nh.octets()),
+        "its withdraw leaves the held self-route alone"
+    );
+    let (_, removed) = ctl
+        .with_core(|c| {
+            handlers::withdraw_route(
+                c,
+                &pb::WithdrawRouteRequest {
+                    vni,
+                    prefix: "10.0.0.5/32".into(),
+                },
+            )
+        })
+        .expect("withdraw the self-route's key again");
+    assert!(!removed, "a self-route is not adopted as a route");
+    assert_eq!(routes_pinned(pin.path()), vec![self_route]);
+
     // Increment 1's gap, closed. Adopt cannot tell whether a block it found in the trie is still
     // wanted: if the agent restarted too it withdraws only what it installed itself, so a block
     // withdrawn (or handed to another node) while BOTH were down stays listed forever — still
@@ -626,6 +788,56 @@ fn restart_adopts_pinned_state_and_relinks_guests() {
             "retired map {name} still pinned after the migration"
         );
     }
+
+    // A VM moving onto this node: the fabric still carries its old owner's /32 while the interface
+    // is attached here. The adopted self-route keeps the kernel entry, the mesh route waits, and
+    // the detach puts it back rather than leaving the address unrouted.
+    let old_owner: std::net::Ipv6Addr = "fd00::99".parse().unwrap();
+    let moved = pb::AddRouteRequest {
+        vni,
+        prefix: "10.0.0.5/32".into(),
+        nexthop_underlay: old_owner.to_string(),
+        ..Default::default()
+    };
+    ctl.with_core(|c| handlers::add_route(c, &moved))
+        .expect("add the old owner's route");
+    let self_nh: std::net::Ipv6Addr = "fd00::1".parse().unwrap();
+    assert_eq!(
+        route_pinned(pin.path(), vni, ip).map(|r| r.nexthop_ipv6),
+        Some(self_nh.octets()),
+        "the self-route holds its key against the mesh route"
+    );
+    // A second interface keeps the VNI in use, or the detach of the last one purges every route
+    // in it, the reinstalled one included.
+    sh(&[
+        "ip", "link", "add", "fpt-g1", "type", "veth", "peer", "name", "fpt-g1p",
+    ]);
+    sh(&["ip", "link", "set", "fpt-g1", "up"]);
+    ctl.create_interface(
+        b"ifB",
+        "fpt-g1",
+        IfaceParams {
+            vni,
+            ipv4: [10, 0, 0, 6],
+            ipv6: [0; 16],
+            gateway_ipv4: [10, 0, 0, 1],
+            gateway_ipv6: [0; 16],
+            underlay_ipv6: self_nh.octets(),
+            total_mbps: 0,
+            public_mbps: 0,
+            netkit: false,
+            l3: false,
+            peer_capable: true,
+            offloaded: false,
+        },
+    )
+    .expect("create_interface ifB");
+    assert!(ctl.detach_interface(b"ifA").expect("detach ifA"));
+    assert_eq!(
+        route_pinned(pin.path(), vni, ip).map(|r| r.nexthop_ipv6),
+        Some(old_owner.octets()),
+        "the detach reinstalls the mesh route"
+    );
 
     // Unpinning detaches; the netns (and its devices) goes away with this thread.
     drop(ctl);

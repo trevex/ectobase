@@ -229,6 +229,10 @@ impl Control {
                 recovered.len(),
             );
             inner.recovered = recovered;
+            // And the routes in the pinned `ROUTES{,6}` tries, so a withdraw after the restart
+            // finds what it withdraws instead of leaving it forwarding. After the interfaces: a
+            // recovered interface's self-route holds its key against mesh routes again.
+            inner.core.adopt_routes();
         }
         Ok(Self {
             inner: Mutex::new(inner),
