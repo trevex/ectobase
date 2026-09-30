@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 
 	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
@@ -16,6 +17,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
@@ -125,6 +127,37 @@ func buildVM(cvm *compiledv1.CompiledVM, attachments []compiledv1.CompiledVolume
 	return vm
 }
 
+// readyToMaterialize says whether a CompiledVM can become a KubeVirt VM yet, and if not, why.
+//
+// The broker delivers a CompiledVM and its attachments independently, so either may arrive first.
+// A VM created ahead of its disks starts from a template without them — for a disk-booted VM, an
+// empty containerDisk — and KubeVirt keeps that VMI (and its invalid launcher pod) even after the
+// template is fixed. So the VM waits until every disk it names is here, and a VM with no disks
+// waits for an image, since there is nothing else to boot. A twin compiled before spec.volumes
+// existed names nothing; any attachment present is then taken as its disks, as before. Pure.
+func readyToMaterialize(cvm *compiledv1.CompiledVM, atts []compiledv1.CompiledVolumeAttachment) (bool, string) {
+	if len(cvm.Spec.Volumes) > 0 {
+		have := make(map[string]bool, len(atts))
+		for _, a := range atts {
+			have[a.Name] = true
+		}
+		var missing []string
+		for _, v := range cvm.Spec.Volumes {
+			if !have[v] {
+				missing = append(missing, v)
+			}
+		}
+		if len(missing) > 0 {
+			return false, "waiting for volume attachment(s) " + strings.Join(missing, ", ")
+		}
+		return true, ""
+	}
+	if cvm.Spec.Image == "" && len(atts) == 0 {
+		return false, "no image and no volume attachments: nothing to boot from"
+	}
+	return true, ""
+}
+
 // VMMaterializerReconciler turns local CompiledVMs into KubeVirt VirtualMachines. It runs on the
 // DOWNSTREAM cluster (a plain k8s cluster with KubeVirt installed), not against the central
 // aggregated apiserver.
@@ -140,6 +173,12 @@ func (r *VMMaterializerReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		if err := r.Client.List(ctx, &atts, client.InNamespace(cvm.Namespace), client.MatchingLabels{"workload": w}); err != nil {
 			return ctrl.Result{}, fmt.Errorf("list attachments: %w", err)
 		}
+	}
+	// Not ready: create nothing, and leave alone a VM that already exists. An attachment arriving
+	// re-enqueues this CompiledVM (cvmsForAttachment).
+	if ok, why := readyToMaterialize(&cvm, atts.Items); !ok {
+		log.FromContext(ctx).Info("not materializing VM yet", "reason", why)
+		return ctrl.Result{}, nil
 	}
 	desired := buildVM(&cvm, atts.Items)
 	if err := ctrl.SetControllerReference(&cvm, desired, r.Client.Scheme()); err != nil {

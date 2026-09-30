@@ -13,6 +13,7 @@ import (
 	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	computev1 "github.com/trevex/ectobase/api/compute/v1alpha1"
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	storagev1 "github.com/trevex/ectobase/api/storage/v1alpha1"
 	"github.com/trevex/ectobase/api/validate"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -32,9 +33,10 @@ import (
 const defaultRunStrategy = "RerunOnFailure"
 
 // CompileVM lowers a VirtualMachine into a CompiledVM: containerDisk image, compute
-// resources, run strategy (defaulted), the cluster binding (from placement), and
-// one resolved overlay interface (MAC + networkName) per owned NetworkInterface.
-func CompileVM(vm *computev1.VirtualMachine, nics []netv1.NetworkInterface, placement Placement, networkName string) compiledv1.CompiledVM {
+// resources, run strategy (defaulted), the cluster binding (from placement), one
+// resolved overlay interface (MAC + networkName) per owned NetworkInterface, and the
+// names of the attachments compiled for its existing Volumes.
+func CompileVM(vm *computev1.VirtualMachine, nics []netv1.NetworkInterface, volumes []storagev1.Volume, placement Placement, networkName string) compiledv1.CompiledVM {
 	runStrategy := vm.Spec.RunStrategy
 	if runStrategy == "" {
 		runStrategy = defaultRunStrategy
@@ -47,6 +49,18 @@ func CompileVM(vm *computev1.VirtualMachine, nics []netv1.NetworkInterface, plac
 	for _, ref := range vm.Spec.InterfaceRefs {
 		ifaces = append(ifaces, compiledv1.CompiledVMInterface{MAC: macByNIC[ref.Name], NetworkName: networkName})
 	}
+	// Only the Volumes that exist, as CompileVolumeAttachments does: a missing one has no
+	// attachment, and the pool would hold the VM back waiting for it.
+	exists := map[string]bool{}
+	for i := range volumes {
+		exists[volumes[i].Name] = true
+	}
+	var attachments []string
+	for _, ref := range vm.Spec.VolumeRefs {
+		if exists[ref.Name] {
+			attachments = append(attachments, attachmentTwinName(vm.Namespace, vm.Name, ref.Name))
+		}
+	}
 	compiled := compiledv1.CompiledVM{
 		TypeMeta:   metav1.TypeMeta{APIVersion: "compiled.ectobase.dev/v1alpha1", Kind: "CompiledVM"},
 		ObjectMeta: metav1.ObjectMeta{Name: compiledTwinName(vm.Namespace, vm.Name), Namespace: validate.PoolNamespace(placement.ClusterName)},
@@ -57,6 +71,7 @@ func CompileVM(vm *computev1.VirtualMachine, nics []netv1.NetworkInterface, plac
 			RunStrategy: runStrategy,
 			Interfaces:  ifaces,
 			CloudInit:   compiledCloudInit(vm.Spec.CloudInit),
+			Volumes:     attachments,
 		},
 	}
 	if placement.WorkloadID != "" {
@@ -139,8 +154,15 @@ func (r *CompiledVMReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	if err := r.Client.List(ctx, &nicList, client.InNamespace(vm.Namespace)); err != nil {
 		return ctrl.Result{}, fmt.Errorf("list nics: %w", err)
 	}
+	// Listed only when referenced: a containerDisk VM needs none of them.
+	var volList storagev1.VolumeList
+	if len(vm.Spec.VolumeRefs) > 0 {
+		if err := r.Client.List(ctx, &volList, client.InNamespace(vm.Namespace)); err != nil {
+			return ctrl.Result{}, fmt.Errorf("list volumes: %w", err)
+		}
+	}
 	placement := Placement{ClusterName: vm.Spec.ClusterName, WorkloadID: vm.Name}
-	compiled := CompileVM(&vm, nicList.Items, placement, r.NetworkName)
+	compiled := CompileVM(&vm, nicList.Items, volList.Items, placement, r.NetworkName)
 	key := types.NamespacedName{Namespace: compiled.Namespace, Name: compiled.Name}
 	var existing compiledv1.CompiledVM
 	err = r.Client.Get(ctx, key, &existing)
@@ -197,7 +219,7 @@ func (r *CompiledVMReconciler) setMoving(ctx context.Context, vm *computev1.Virt
 }
 
 // SetupWithManager watches VirtualMachines (Owns their CompiledVMs) and re-enqueues
-// a VM when one of its NetworkInterfaces changes (MAC).
+// a VM when one of its NetworkInterfaces changes (MAC) or one of its Volumes appears.
 func (r *CompiledVMReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		// Distinct name: CompiledVolumeAttachmentReconciler also For(VirtualMachine), and
@@ -212,6 +234,10 @@ func (r *CompiledVMReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// GenerationChangedPredicate avoids recompiling every VM on unrelated NIC
 		// status writes (e.g. port allocation).
 		Watches(&netv1.NetworkInterface{}, handler.EnqueueRequestsFromMapFunc(r.vmsForNIC),
+			builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+		// A Volume that appears after its VM adds an attachment the CompiledVM must name. Only
+		// existence matters here, and the predicate passes creates and deletes through.
+		Watches(&storagev1.Volume{}, handler.EnqueueRequestsFromMapFunc(vmsForVolume(r.Client)),
 			builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Complete(r)
 }
