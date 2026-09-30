@@ -6,26 +6,27 @@ package agent
 import (
 	"context"
 	"testing"
-	"time"
 
 	rbv1 "github.com/trevex/ectobase/mesh/gen/routebusv1"
 )
 
-// The dataplane's self-route owns the key of every locally attached interface's host prefix. A bus
-// route for that same (vni, prefix) — the guest's own /32 announced by another node, as in a VM move
-// or the reflector re-advertising a fenced route — must never be programmed over it, nor withdrawn
-// from under it: flowplane stores both in one key, so an AddRoute replaces local delivery with an
-// encap and a WithdrawRoute deletes the self-route.
+// A bus route for a locally attached interface's host prefix — the guest's own /32 announced by
+// another node during a VM move, say — is handed to the dataplane like any other: flowplane holds
+// that key for the interface and applies the add/withdraw to its shadow only, reinstalling the
+// shadowed route when the interface detaches. The agent adds one fallback on top: once the
+// interface leaves, it re-asserts the bus route it holds for the key, in case flowplane lost its
+// shadow across a restart.
 
 const (
 	guestIP   = "10.0.0.5"
 	guestHost = "10.0.0.5/32"
+	selfNH    = "fd00::a" // this node's VTEP
 	remoteNH  = "fd00::b" // another node's VTEP announcing the same /32
 )
 
 func localGuest(dp *recordingDP) {
 	dp.mu.Lock()
-	dp.ifaces = []LocalInterface{{InterfaceID: "vm", Vni: 100, OverlayIPs: []string{guestIP}, Underlay: "fd00::a"}}
+	dp.ifaces = []LocalInterface{{InterfaceID: "vm", Vni: 100, OverlayIPs: []string{guestIP}, Underlay: selfNH}}
 	dp.mu.Unlock()
 }
 
@@ -41,6 +42,19 @@ func withdrewKey(dp *recordingDP, vni uint32, prefix string) bool {
 	return dp.withdrew[key(vni, prefix)]
 }
 
+// addsFor returns every AddRoute call for (vni, prefix), in order.
+func addsFor(dp *recordingDP, vni uint32, prefix string) []routeCall {
+	dp.mu.Lock()
+	defer dp.mu.Unlock()
+	var out []routeCall
+	for _, c := range dp.routeAdds {
+		if c.vni == vni && c.prefix == prefix {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 func routeAdd(vni uint32, prefix string, nhs ...string) *rbv1.RouteUpdate {
 	return &rbv1.RouteUpdate{Vni: vni, Prefix: prefix, Nexthops: nhs, Op: rbv1.RouteOp_ROUTE_OP_ADD}
 }
@@ -49,137 +63,135 @@ func routeWithdraw(vni uint32, prefix string) *rbv1.RouteUpdate {
 	return &rbv1.RouteUpdate{Vni: vni, Prefix: prefix, Op: rbv1.RouteOp_ROUTE_OP_WITHDRAW}
 }
 
-// (1) An ADD for a local guest's own /32 is recorded, not programmed.
-func TestBusRouteForALocalHostPrefixIsNotProgrammed(t *testing.T) {
+func newGuestBus(dp *recordingDP) *Bus { return NewBus("nodeA", selfNH, dp, false) }
+
+// An ADD and a WITHDRAW for a local guest's own /32 reach the dataplane like any other key, and
+// the agent keeps its ordinary bookkeeping for it.
+func TestBusRouteForALocalHostPrefixIsPassedThrough(t *testing.T) {
 	ctx := context.Background()
 	dp := newRecordingDP()
-	b := NewBus("nodeA", "fd00::a", dp, false)
+	b := newGuestBus(dp)
 	localGuest(dp)
 	b.refreshLocalHosts(ctx)
 
 	b.apply(ctx, routeAdd(100, guestHost, remoteNH))
-	if nh, ok := dp.get(100, guestHost); ok {
-		t.Fatalf("a bus route over a local guest's host prefix must not be programmed, got -> %s", nh)
-	}
-}
-
-// (2) A WITHDRAW for a local guest's own /32 never reaches the dataplane.
-func TestBusWithdrawForALocalHostPrefixIsNotSent(t *testing.T) {
-	ctx := context.Background()
-	dp := newRecordingDP()
-	b := NewBus("nodeA", "fd00::a", dp, false)
-	localGuest(dp)
-	b.refreshLocalHosts(ctx)
-
-	b.apply(ctx, routeAdd(100, guestHost, remoteNH))
-	b.apply(ctx, routeWithdraw(100, guestHost))
-	if withdrewKey(dp, 100, guestHost) {
-		t.Fatal("a WITHDRAW for a local guest's host prefix must not reach the dataplane: it would delete the self-route")
-	}
-}
-
-// (3) The guest leaves (moved away) while another node's route for its /32 is known: the node must
-// now program that route, or it black-holes traffic to the moved VM.
-func TestBusRouteIsProgrammedOnceTheLocalInterfaceLeaves(t *testing.T) {
-	ctx := context.Background()
-	dp := newRecordingDP()
-	b := NewBus("nodeA", "fd00::a", dp, false)
-	localGuest(dp)
-	b.refreshLocalHosts(ctx)
-	b.apply(ctx, routeAdd(100, guestHost, remoteNH))
-
-	noLocalGuest(dp)
-	b.refreshLocalHosts(ctx)
 	if nh, ok := dp.get(100, guestHost); !ok || nh != remoteNH {
-		t.Fatalf("once the guest left, the held route must be programmed -> %s, got %q ok=%v", remoteNH, nh, ok)
+		t.Fatalf("the ADD must reach the dataplane (flowplane shadows it while the key is held), got %q ok=%v", nh, ok)
 	}
-	// It is an ordinary installed route from here on: a later WITHDRAW removes it.
+	if !b.installed[100][guestHost] {
+		t.Fatal("the agent must keep its installed bookkeeping for a local host key")
+	}
 	b.apply(ctx, routeWithdraw(100, guestHost))
 	if !withdrewKey(dp, 100, guestHost) {
-		t.Fatal("the programmed route must be withdrawn when its origin withdraws it")
+		t.Fatal("the WITHDRAW must reach the dataplane, or flowplane's shadow keeps a stale route")
 	}
 }
 
-// (3b) A route withdrawn while the guest was still local is not resurrected when it leaves.
-func TestBusRouteWithdrawnWhileLocalIsNotProgrammedOnLeave(t *testing.T) {
+// An interface arriving over a programmed bus route changes nothing on the agent's side: no
+// withdraw, no bookkeeping drop. The old node's later WITHDRAW is passed through, so flowplane's
+// shadow does not keep a stale route to reinstall on detach.
+func TestLocalInterfaceArrivingOverAProgrammedRouteKeepsItsBookkeeping(t *testing.T) {
 	ctx := context.Background()
 	dp := newRecordingDP()
-	b := NewBus("nodeA", "fd00::a", dp, false)
+	b := newGuestBus(dp)
+	b.refreshLocalHosts(ctx)
+	b.apply(ctx, routeAdd(100, guestHost, remoteNH))
+
+	localGuest(dp)
+	b.refreshLocalHosts(ctx)
+	if withdrewKey(dp, 100, guestHost) {
+		t.Fatal("the interface arriving must not withdraw the key")
+	}
+	if !b.installed[100][guestHost] {
+		t.Fatal("the interface arriving must not drop the route from the bookkeeping")
+	}
+	b.apply(ctx, routeWithdraw(100, guestHost))
+	if !withdrewKey(dp, 100, guestHost) {
+		t.Fatal("the old node's WITHDRAW must reach the dataplane")
+	}
+}
+
+// Fallback: once the guest leaves, the agent re-asserts the bus route it holds for the key, in case
+// flowplane lost its shadow across a restart.
+func TestHeldRouteIsReassertedOnceTheLocalInterfaceLeaves(t *testing.T) {
+	ctx := context.Background()
+	dp := newRecordingDP()
+	b := newGuestBus(dp)
 	localGuest(dp)
 	b.refreshLocalHosts(ctx)
 	b.apply(ctx, routeAdd(100, guestHost, remoteNH))
-	b.apply(ctx, routeWithdraw(100, guestHost))
+	n := len(addsFor(dp, 100, guestHost))
 
 	noLocalGuest(dp)
 	b.refreshLocalHosts(ctx)
-	if nh, ok := dp.get(100, guestHost); ok {
-		t.Fatalf("a withdrawn route must not be programmed when the guest leaves, got -> %s", nh)
+	got := addsFor(dp, 100, guestHost)
+	if len(got) != n+1 || got[n].nexthop != remoteNH {
+		t.Fatalf("the held route must be re-asserted -> %s once the guest leaves, got %+v", remoteNH, got[n:])
 	}
 }
 
-// (4) The guest arrives while a bus route for its /32 is programmed (a VM moving here): the
-// dataplane's program_interface has overwritten the key, so the agent drops the route from its
-// bookkeeping WITHOUT a WithdrawRoute — and a later WITHDRAW from the old node or an EndOfRIB
-// prune must not send one either.
-func TestLocalInterfaceArrivingOverAProgrammedRouteIsNotWithdrawn(t *testing.T) {
+// The fallback never reinstates what the bus has withdrawn.
+func TestRouteWithdrawnWhileLocalIsNotReassertedOnLeave(t *testing.T) {
 	ctx := context.Background()
 	dp := newRecordingDP()
-	b := NewBus("nodeA", "fd00::a", dp, false)
-	b.refreshLocalHosts(ctx)
-	b.apply(ctx, routeAdd(100, guestHost, remoteNH))
-	if _, ok := dp.get(100, guestHost); !ok {
-		t.Fatal("precondition: the remote route is programmed while the guest is elsewhere")
-	}
-
+	b := newGuestBus(dp)
 	localGuest(dp)
 	b.refreshLocalHosts(ctx)
-	if withdrewKey(dp, 100, guestHost) {
-		t.Fatal("the guest arriving must not withdraw the key: that would delete its self-route")
-	}
-	if b.installed[100][guestHost] {
-		t.Fatal("the agent must stop owning the route once a local interface holds its key")
-	}
-
+	b.apply(ctx, routeAdd(100, guestHost, remoteNH))
 	b.apply(ctx, routeWithdraw(100, guestHost))
-	b.seen = map[uint32]map[string]bool{}
-	b.rxRoutes = map[uint32]uint32{}
-	b.handleServerMsg(ctx, &rbv1.ServerMsg{Msg: &rbv1.ServerMsg_EndOfRib{EndOfRib: &rbv1.EndOfRIB{Vni: 100}}})
-	if withdrewKey(dp, 100, guestHost) {
-		t.Fatal("neither the old node's WITHDRAW nor the prune may withdraw a local guest's host prefix")
+	n := len(addsFor(dp, 100, guestHost))
+
+	noLocalGuest(dp)
+	b.refreshLocalHosts(ctx)
+	if got := addsFor(dp, 100, guestHost); len(got) != n {
+		t.Fatalf("a withdrawn route must not be re-asserted when the guest leaves, got %+v", got[n:])
 	}
 }
 
-// Between reconcile ticks the agent's view of its interfaces can lag the dataplane. A guest that
-// arrived since the last refresh must still be protected: a stale view is refreshed before a
-// host-prefix update touches the dataplane.
-func TestLocalInterfaceArrivingBetweenTicksIsProtected(t *testing.T) {
+// The held set can carry this node's own VTEP (it announced the /32 too, e.g. mid-move). The
+// fallback must re-assert a nexthop that is NOT this node — and nothing when only this node is left.
+func TestReassertSkipsThisNodesOwnNexthop(t *testing.T) {
 	ctx := context.Background()
 	dp := newRecordingDP()
-	b := NewBus("nodeA", "fd00::a", dp, false)
+	b := newGuestBus(dp)
+	localGuest(dp)
 	b.refreshLocalHosts(ctx)
-	b.apply(ctx, routeAdd(100, guestHost, remoteNH))
+	b.apply(ctx, routeAdd(100, guestHost, selfNH, remoteNH))
+	n := len(addsFor(dp, 100, guestHost))
 
-	localGuest(dp) // program_interface ran; no reconcile tick yet
-	b.localHostsAt = time.Now().Add(-time.Hour)
-	b.apply(ctx, routeWithdraw(100, guestHost))
-	if withdrewKey(dp, 100, guestHost) {
-		t.Fatal("a guest that arrived between ticks must be protected from a WITHDRAW of its host prefix")
+	noLocalGuest(dp)
+	b.refreshLocalHosts(ctx)
+	got := addsFor(dp, 100, guestHost)
+	if len(got) != n+1 || got[n].nexthop != remoteNH {
+		t.Fatalf("the re-assert must skip this node's own nexthop and use %s, got %+v", remoteNH, got[n:])
+	}
+
+	// Only this node left in the set: nothing to re-assert.
+	dp2 := newRecordingDP()
+	b2 := newGuestBus(dp2)
+	localGuest(dp2)
+	b2.refreshLocalHosts(ctx)
+	b2.apply(ctx, routeAdd(100, guestHost, selfNH))
+	n2 := len(addsFor(dp2, 100, guestHost))
+	noLocalGuest(dp2)
+	b2.refreshLocalHosts(ctx)
+	if got := addsFor(dp2, 100, guestHost); len(got) != n2 {
+		t.Fatalf("with only this node's own nexthop there is nothing to re-assert, got %+v", got[n2:])
 	}
 }
 
-// (5) An E/W LB address is an anycast key with no self-route behind it: it is not any local
-// interface's host prefix, so it keeps today's behaviour — programmed on ADD, withdrawn on WITHDRAW —
-// even on a node that hosts a guest in the same VNI.
+// An E/W LB address is an anycast key with no self-route behind it: not a local host prefix, so it
+// keeps today's behaviour even on a node that hosts a guest in the same VNI.
 func TestAnycastLBAddressIsUnaffected(t *testing.T) {
 	ctx := context.Background()
 	dp := newRecordingDP()
-	b := NewBus("nodeA", "fd00::a", dp, false)
+	b := newGuestBus(dp)
 	localGuest(dp)
 	b.refreshLocalHosts(ctx)
 
 	const lb = "10.0.0.100/32"
-	b.apply(ctx, routeAdd(100, lb, "fd00::a", remoteNH))
-	if nh, ok := dp.get(100, lb); !ok || nh != "fd00::a" {
+	b.apply(ctx, routeAdd(100, lb, selfNH, remoteNH))
+	if nh, ok := dp.get(100, lb); !ok || nh != selfNH {
 		t.Fatalf("an LB address must be programmed as today (primary nexthop), got %q ok=%v", nh, ok)
 	}
 	b.apply(ctx, routeWithdraw(100, lb))
@@ -188,53 +200,64 @@ func TestAnycastLBAddressIsUnaffected(t *testing.T) {
 	}
 }
 
-// (6) Prune respects the guard: a route the node held while its guest was local, and which the
-// reflector no longer has, is forgotten at EndOfRIB — so it is not programmed when the guest leaves.
-// A plain stale mesh route in the same VNI is still pruned.
-func TestPruneForgetsAHeldRouteAndStillPrunesOthers(t *testing.T) {
+// The EndOfRIB prune treats a local host key like any other: a route the reflector no longer has is
+// withdrawn (flowplane drops it from its shadow) and forgotten, so the fallback cannot re-assert it
+// when the guest leaves.
+func TestPruneWithdrawsAndForgetsAStaleRouteForALocalHostKey(t *testing.T) {
 	ctx := context.Background()
 	dp := newRecordingDP()
-	b := NewBus("nodeA", "fd00::a", dp, false)
+	b := newGuestBus(dp)
 	localGuest(dp)
 	b.refreshLocalHosts(ctx)
 	b.apply(ctx, routeAdd(100, guestHost, remoteNH))
-	b.apply(ctx, routeAdd(100, "10.0.0.9/32", remoteNH))
 
 	// Reconnect: nothing is replayed.
 	b.seen = map[uint32]map[string]bool{}
 	b.rxRoutes = map[uint32]uint32{}
 	b.handleServerMsg(ctx, &rbv1.ServerMsg{Msg: &rbv1.ServerMsg_EndOfRib{EndOfRib: &rbv1.EndOfRIB{Vni: 100}}})
-	if withdrewKey(dp, 100, guestHost) {
-		t.Fatal("the prune must not withdraw a local guest's host prefix")
+	if !withdrewKey(dp, 100, guestHost) {
+		t.Fatal("the prune must withdraw a stale route for a local host key too")
 	}
-	if !withdrewKey(dp, 100, "10.0.0.9/32") {
-		t.Fatal("the prune must still withdraw a stale mesh route")
-	}
-
+	n := len(addsFor(dp, 100, guestHost))
 	noLocalGuest(dp)
 	b.refreshLocalHosts(ctx)
-	if nh, ok := dp.get(100, guestHost); ok {
-		t.Fatalf("a held route the reflector no longer has must not be programmed when the guest leaves, got -> %s", nh)
+	if got := addsFor(dp, 100, guestHost); len(got) != n {
+		t.Fatalf("a pruned route must not be re-asserted when the guest leaves, got %+v", got[n:])
 	}
 }
 
-// A peer import is guarded the same way: it is not programmed over a local interface's host prefix
-// in the importing VNI, and is restored once that interface leaves.
-func TestPeerImportOverALocalHostPrefixWaitsForTheInterfaceToLeave(t *testing.T) {
+// A route re-asserted on leave is recorded as installed but not as replayed: if the reflector no
+// longer has it, the in-progress replay's prune still removes it.
+func TestReassertedRouteIsStillPrunable(t *testing.T) {
 	ctx := context.Background()
 	dp := newRecordingDP()
-	b := NewBus("nodeA", "fd00::a", dp, false)
+	b := newGuestBus(dp)
+	localGuest(dp)
+	b.refreshLocalHosts(ctx)
+	b.apply(ctx, routeAdd(100, guestHost, remoteNH))
+
+	// Reconnect; the guest leaves before the replay closes, and the replay does not carry the /32.
+	b.seen = map[uint32]map[string]bool{}
+	b.rxRoutes = map[uint32]uint32{}
+	noLocalGuest(dp)
+	b.refreshLocalHosts(ctx)
+	b.handleServerMsg(ctx, &rbv1.ServerMsg{Msg: &rbv1.ServerMsg_EndOfRib{EndOfRib: &rbv1.EndOfRIB{Vni: 100}}})
+	if !withdrewKey(dp, 100, guestHost) {
+		t.Fatal("a re-asserted route the replay did not carry must be pruned")
+	}
+}
+
+// Peer imports pass through the same way.
+func TestPeerImportOverALocalHostPrefixIsPassedThrough(t *testing.T) {
+	ctx := context.Background()
+	dp := newRecordingDP()
+	b := newGuestBus(dp)
 	setPeerImports(b, map[uint32][]PeerImport{100: {{PeerVNI: 200, ImportPrefixes: []string{"10.0.0.0/24"}}}})
 	localGuest(dp)
 	b.refreshLocalHosts(ctx)
 
 	b.apply(ctx, routeAdd(200, guestHost, remoteNH))
-	if nh, ok := dp.get(100, guestHost); ok {
-		t.Fatalf("a peer import must not be programmed over a local host prefix, got -> %s", nh)
-	}
-	noLocalGuest(dp)
-	b.refreshLocalHosts(ctx)
 	if nh, ok := dp.get(100, guestHost); !ok || nh != remoteNH {
-		t.Fatalf("the peer import must be restored once the guest leaves, got %q ok=%v", nh, ok)
+		t.Fatalf("a peer import must reach the dataplane like any other, got %q ok=%v", nh, ok)
 	}
 }

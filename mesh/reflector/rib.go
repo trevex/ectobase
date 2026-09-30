@@ -402,37 +402,59 @@ func originsOf(e routeEntry) func(id string) bool {
 // ADD with the remaining nexthops where another origin still announces the key (an anycast
 // route, or the pool a failed-over VM now runs on). Nothing is deleted — the owning agents
 // never re-announce on a live session, so a deleted route would stay gone until their next
-// reconnect. Idempotent. The fenced set is expected to be small (a handful of failed-over
-// /64s), so the O(routes x fenced) scan is not a hot path.
+// reconnect. Idempotent, and keyed by the network, not its spelling (see fenceKey). The fenced
+// set is expected to be small (a handful of failed-over /64s), so the O(routes x fenced) scan is
+// not a hot path.
 func (r *RIB) SetFence(prefix string) {
-	_, ipnet, err := net.ParseCIDR(prefix)
-	if err != nil {
+	key, ipnet, ok := fenceKey(prefix)
+	if !ok {
 		return
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if _, ok := r.fenced[prefix]; ok {
+	if _, ok := r.fenced[key]; ok {
 		return
 	}
-	r.refilter(func() { r.fenced[prefix] = ipnet })
+	r.refilter(func() { r.fenced[key] = ipnet })
 }
 
 // ClearFence releases a fence and re-advertises every route it was hiding, from what the
-// RIB still stores. That is exactly the set of workloads that stayed on the fenced nodes:
-// failover releases a fence only once its /64 reports drained (no VMI left running there),
-// and by then the recovered pool's agent has withdrawn the routes of the VMs that moved
-// away — their interfaces are gone, and its level-triggered diff withdraws them within
-// seconds — so nothing that failed over comes back. A release that ever outran that
-// withdraw would advertise the stale nexthop beside the new pool's only until it lands.
-// Neither fence change reaches a key's own origins (see refilter), so the recovered pool's
-// agent is never handed its own guests' routes back, stale or not.
+// RIB still stores — no agent re-announces them.
+//
+// KNOWN WINDOW (follow-up: gate the release on route state). Failover releases a /64 once
+// its broker reports it drained, which means the stale VMI objects are gone — not that the
+// recovered pool's agent has withdrawn their routes. That agent withdraws a route only after
+// the CNI DEL has detached the interface AND its next reconcile tick, so a release can land
+// first and re-advertise a failed-over VM's /32 as {stale source, new pool}. Agents program
+// only Nexthops[0] of that sorted set, so non-origin nodes may send the VM's traffic to the
+// stale source until the withdraw lands, normally seconds. A pool whose kubelet died but whose
+// agent and flowplane kept running can keep announcing such a zombie interface after the
+// release, with no bound. The naive fix — keep hiding every key the fenced source shares with
+// another origin — would also hide the recovered pool's E/W LB anycast addresses, which are
+// shared by design.
+//
+// Neither fence change reaches a key's own origins (see refilter).
 func (r *RIB) ClearFence(prefix string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if _, ok := r.fenced[prefix]; !ok {
+	key, _, ok := fenceKey(prefix)
+	if !ok {
 		return
 	}
-	r.refilter(func() { delete(r.fenced, prefix) })
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.fenced[key]; !ok {
+		return
+	}
+	r.refilter(func() { delete(r.fenced, key) })
+}
+
+// fenceKey is the canonical key of a fence prefix: its network in canonical form, so
+// "2001:db8:0:1::a/64" and "2001:0db8:0:1::/64" are one fence.
+func fenceKey(prefix string) (string, *net.IPNet, bool) {
+	_, ipnet, err := net.ParseCIDR(prefix)
+	if err != nil {
+		return "", nil, false
+	}
+	return ipnet.String(), ipnet, true
 }
 
 // refilter applies change to the fence set and fans out every route whose advertised
@@ -444,6 +466,11 @@ func (r *RIB) ClearFence(prefix string) {
 // tenant-VNI ADD it is sent as a mesh route — on its own guest's /32 that overwrites the
 // key holding the guest's local self-route. Announce never hands an origin its own route
 // either (it skips the announcer), so this keeps the fence from being the one path that does.
+//
+// The cost: an origin that also holds OTHER origins' nexthops for the key (an anycast origin
+// sent the merged set by a later Announce) keeps its copy through the fence change, so that
+// copy can go stale — still naming a fenced nexthop, or missing a released one. It converges
+// the next time the advertised set changes by an Announce or Withdraw.
 func (r *RIB) refilter(change func()) {
 	before := make(map[routeKey][]string, len(r.routes))
 	for k, e := range r.routes {

@@ -193,17 +193,22 @@ type Bus struct {
 	rxRoutes map[uint32]uint32
 
 	// localHosts[vni][prefix] is the host prefix (/32 or /128) of every interface attached on this
-	// node, from the dataplane's ListInterfaces. The dataplane's self-route owns each of those keys,
-	// and flowplane keeps a self-route and a mesh route in the SAME key: an AddRoute over it replaces
-	// local delivery with an encap, and a WithdrawRoute deletes the self-route. So a bus route for a
-	// local host prefix — the guest's own /32 announced by another node during a VM move, or handed
-	// back when the reflector releases a fence — is held in learnedOwn but never programmed or
-	// withdrawn while the interface is here. Refreshed every reconcile tick and, for a host-prefix
-	// update, whenever it is older than localHostsMaxAge (see refreshLocalHostsIfStale).
+	// node, from the dataplane's ListInterfaces, refreshed every reconcile tick; ownUnderlays is this
+	// node's VTEP(s) from the same read. A bus route for a local host prefix — the guest's own /32
+	// announced by another node during a VM move, say — is passed to the dataplane like any other
+	// key: flowplane HOLDS a local interface's key, applies a mesh add/withdraw for it to its shadow
+	// only, and reinstalls the shadowed route when the interface detaches. The agent adds one
+	// fallback on top: when the interface leaves, it re-asserts the bus route it holds for the key
+	// (releaseLocalHost), in case flowplane lost its shadow across a restart.
+	//
+	// ROLLOUT: this relies on flowplane holding local keys, so that flowplane must be deployed
+	// BEFORE this agent. Against an older flowplane, a passed-through AddRoute for a local key
+	// replaces the self-route with an encap and a WithdrawRoute deletes it.
 	localHosts   map[uint32]map[string]bool
-	localHostsAt time.Time
-	// learnedOwn[vni][prefix] is the last bus route learned for (vni, prefix) on its own table,
-	// programmed or not: what a held-back route is programmed from once its local interface leaves.
+	ownUnderlays map[string]bool
+	// learnedOwn[vni][prefix] is the bus route last learned for (vni, prefix) on its own table,
+	// kept only for that fallback. A WITHDRAW or the EndOfRIB prune forgets it, so the fallback
+	// never reinstates a route the bus has withdrawn.
 	learnedOwn map[uint32]map[string]ownRoute
 
 	// reconcileEvery is how often Run recomputes the desired announcement set and pushes deltas onto
@@ -219,18 +224,12 @@ type natEntry struct {
 	vni              uint32
 }
 
-// ownRoute is one learned own-table bus route, as AddRoute programs it.
+// ownRoute is one learned own-table bus route: its whole nexthop set, since the one apply
+// programs (the first) can be this node's own VTEP.
 type ownRoute struct {
-	nexthop  string
+	nexthops []string
 	external bool
 }
-
-// localHostsMaxAge bounds how stale the local-interface view may be when a host-prefix route update
-// is about to touch the dataplane. The reconcile tick refreshes it every defaultReconcileEvery, but a
-// VM that arrives between ticks has already had its self-route programmed; refreshing on EVERY
-// update would cost one ListInterfaces per route in a replay, so a replay pays at most one per
-// second instead.
-const localHostsMaxAge = time.Second
 
 // NeighborNatBlock is one neighbor-NAT block as ReplaceNeighborNats takes it.
 type NeighborNatBlock struct {
@@ -433,6 +432,7 @@ func NewBus(nodeID, underlay string, dp Dataplane, isEdge bool) *Bus {
 		seen:            map[uint32]map[string]bool{},
 		rxRoutes:        map[uint32]uint32{},
 		localHosts:      map[uint32]map[string]bool{},
+		ownUnderlays:    map[string]bool{},
 		learnedOwn:      map[uint32]map[string]ownRoute{},
 		peerImports:     map[uint32][]PeerImport{},
 		origin:          map[uint32]map[string]string{},
@@ -540,8 +540,6 @@ func (b *Bus) reconcileStep(ctx context.Context, stream rbv1.RouteBus_SessionCli
 	b.setPeerImportsLocked(desired.PeeringImports)
 	b.mu.Unlock()
 	b.syncEgressImports(ctx, prevEgress, desired.EgressVNIs)
-	// After reconcile read the interfaces and before the delta goes out: every host prefix this
-	// delta announces is already guarded when the reflector's reaction to it arrives.
 	b.refreshLocalHosts(ctx)
 	b.noteSubscribed(desired.Subs)
 	d := diffDesired(*applied, desired)
@@ -658,12 +656,9 @@ func (b *Bus) pruneVNI(ctx context.Context, vni uint32, want uint32) {
 			vni, got, want)
 		return
 	}
-	b.refreshLocalHostsIfStale(ctx)
 	inst := b.installed[vni]
 	seen := b.seen[vni]
-	// A held-back route the reflector no longer has must not be programmed when its local
-	// interface leaves, so it is forgotten here like any other stale route — just with nothing to
-	// withdraw.
+	// A route the reflector no longer has must not be re-asserted when a local interface leaves.
 	for prefix := range b.learnedOwn[vni] {
 		if !seen[prefix] {
 			b.delLearnedOwn(vni, prefix)
@@ -671,10 +666,6 @@ func (b *Bus) pruneVNI(ctx context.Context, vni uint32, want uint32) {
 	}
 	for prefix := range inst {
 		if seen[prefix] {
-			continue
-		}
-		if b.isLocalHost(vni, prefix) {
-			delete(inst, prefix) // the self-route owns the key: never withdraw it (see localHosts)
 			continue
 		}
 		if err := b.dp.WithdrawRoute(ctx, vni, prefix); err != nil {
@@ -695,10 +686,6 @@ func (b *Bus) markInstalled(vni uint32, prefix string) {
 		b.installed[vni] = map[string]bool{}
 	}
 	b.installed[vni][prefix] = true
-	b.markSeen(vni, prefix)
-}
-
-func (b *Bus) markSeen(vni uint32, prefix string) {
 	if b.seen[vni] == nil {
 		b.seen[vni] = map[string]bool{}
 	}
@@ -895,18 +882,11 @@ func (b *Bus) apply(ctx context.Context, ru *rbv1.RouteUpdate) {
 	// are ADDITIVE (they target different tables), not mutually exclusive — a node that hosts guests in
 	// two peered VPCs sees ru.Vni be its own table *and* a peer VNI at once. So install the own route
 	// into ru.Vni's table first, then (if ru.Vni is imported) import it into the importer tables.
-	if isHostPrefix(ru.Prefix) {
-		b.refreshLocalHostsIfStale(ctx)
-	}
 	switch ru.Op {
 	case rbv1.RouteOp_ROUTE_OP_ADD:
-		b.setLearnedOwn(ru.Vni, ru.Prefix, ownRoute{nexthop: nh, external: ru.External})
-		if b.isLocalHost(ru.Vni, ru.Prefix) {
-			// A local interface's self-route owns this key: hold the route (and count it as
-			// replayed, so the prune keeps it) and program it only once the interface leaves.
-			b.markSeen(ru.Vni, ru.Prefix)
-			// Otherwise the own table install: delivery vni == the route's own vni (key and delivery match).
-		} else if err := b.dp.AddRoute(ctx, ru.Vni, ru.Prefix, nh, ru.External, ru.Vni); err != nil {
+		b.setLearnedOwn(ru.Vni, ru.Prefix, ownRoute{nexthops: append([]string(nil), ru.Nexthops...), external: ru.External})
+		// Own table install: delivery vni == the route's own vni (key and delivery match).
+		if err := b.dp.AddRoute(ctx, ru.Vni, ru.Prefix, nh, ru.External, ru.Vni); err != nil {
 			log.Printf("AddRoute vni=%d %s -> %s external=%t: %v", ru.Vni, ru.Prefix, nh, ru.External, err)
 			// Still attempt the peer import below: it targets other tables and must not be skipped.
 		} else {
@@ -922,18 +902,14 @@ func (b *Bus) apply(ctx context.Context, ru *rbv1.RouteUpdate) {
 		}
 	case rbv1.RouteOp_ROUTE_OP_WITHDRAW:
 		b.delLearnedOwn(ru.Vni, ru.Prefix)
-		// Under a local interface's key nothing of ours is programmed, and a WithdrawRoute would
-		// delete its self-route.
-		if !b.isLocalHost(ru.Vni, ru.Prefix) {
-			if err := b.dp.WithdrawRoute(ctx, ru.Vni, ru.Prefix); err != nil {
-				log.Printf("WithdrawRoute vni=%d %s: %v", ru.Vni, ru.Prefix, err)
-			} else {
-				b.markWithdrawn(ru.Vni, ru.Prefix)
-				// The own route is gone: restore a shadowed peer import for this (vni, prefix) if one exists,
-				// else clear the tag entirely.
-				b.clearOrigin(ru.Vni, ru.Prefix)
-				b.restoreImport(ctx, ru.Vni, ru.Prefix)
-			}
+		if err := b.dp.WithdrawRoute(ctx, ru.Vni, ru.Prefix); err != nil {
+			log.Printf("WithdrawRoute vni=%d %s: %v", ru.Vni, ru.Prefix, err)
+		} else {
+			b.markWithdrawn(ru.Vni, ru.Prefix)
+			// The own route is gone: restore a shadowed peer import for this (vni, prefix) if one exists,
+			// else clear the tag entirely.
+			b.clearOrigin(ru.Vni, ru.Prefix)
+			b.restoreImport(ctx, ru.Vni, ru.Prefix)
 		}
 		// Withdraw from importer tables too: applyPeer clears its own learnedPeer bookkeeping and only
 		// touches importer tables tagged "peer", so the own withdraw/restore above is unaffected.
@@ -960,9 +936,6 @@ func (b *Bus) applyPeer(ctx context.Context, ru *rbv1.RouteUpdate, nh string, im
 			if b.origin[im.localVNI][ru.Prefix] == "own" {
 				continue // local route wins; do not shadow it
 			}
-			if b.isLocalHost(im.localVNI, ru.Prefix) {
-				continue // a local interface owns the key; restoreImport installs it once it leaves
-			}
 			// Peer import: key = im.localVNI (the importer's table), but delivery must be stamped
 			// with ru.Vni (the peer's own/origin vni) so the datapath encaps toward the peer VPC —
 			// this is the load-bearing case for delivery_vni.
@@ -979,8 +952,8 @@ func (b *Bus) applyPeer(ctx context.Context, ru *rbv1.RouteUpdate, nh string, im
 			if !prefixInCIDRs(ru.Prefix, im.prefixes) {
 				continue
 			}
-			if b.origin[im.localVNI][ru.Prefix] != "peer" || b.isLocalHost(im.localVNI, ru.Prefix) {
-				continue // an own route, a local interface (or nothing) holds this key; leave it
+			if b.origin[im.localVNI][ru.Prefix] != "peer" {
+				continue // an own route (or nothing) holds this key; leave it
 			}
 			if err := b.dp.WithdrawRoute(ctx, im.localVNI, ru.Prefix); err != nil {
 				log.Printf("peer import WithdrawRoute vni=%d %s: %v", im.localVNI, ru.Prefix, err)
@@ -996,9 +969,6 @@ func (b *Bus) applyPeer(ctx context.Context, ru *rbv1.RouteUpdate, nh string, im
 // prefix): for each active import on this local vni whose prefixes contain the route and for which a
 // learned peer route still exists, AddRoute it back and re-tag as "peer".
 func (b *Bus) restoreImport(ctx context.Context, localVNI uint32, prefix string) {
-	if b.isLocalHost(localVNI, prefix) {
-		return
-	}
 	for _, im := range b.peerImports[localVNI] {
 		if !prefixInCIDRs(prefix, im.ImportPrefixes) {
 			continue
@@ -1239,31 +1209,23 @@ func (d dpAdapter) ListInterfaces(ctx context.Context) ([]LocalInterface, error)
 	return out, nil
 }
 
-// refreshLocalHostsIfStale refreshes localHosts when it is older than localHostsMaxAge.
-func (b *Bus) refreshLocalHostsIfStale(ctx context.Context) {
-	if time.Since(b.localHostsAt) > localHostsMaxAge {
-		b.refreshLocalHosts(ctx)
-	}
-}
-
-// refreshLocalHosts re-reads the attached interfaces and hands each host-prefix key over between
-// the dataplane's self-route and the bus:
-//   - an interface that ARRIVED has already had its self-route programmed over the key
-//     (program_interface), so whatever bus route held it is dropped from the bookkeeping WITHOUT a
-//     WithdrawRoute, which would delete that self-route;
-//   - an interface that LEFT (its VM moved away) hands the key back: the bus route held for it is
-//     programmed now, or this node would black-hole traffic to where the VM went.
-//
-// A failed read keeps the previous view. Run goroutine only, like installed.
+// refreshLocalHosts re-reads the attached interfaces and, for every host prefix whose interface
+// LEFT since the last read (its VM moved away), re-asserts the bus route held for it — the fallback
+// described at localHosts. An interface that arrived needs nothing: flowplane now holds its key and
+// keeps whatever mesh route was there in its shadow. A failed read keeps the previous view. Run
+// goroutine only, like installed.
 func (b *Bus) refreshLocalHosts(ctx context.Context) {
-	b.localHostsAt = time.Now()
 	ifaces, err := b.dp.ListInterfaces(ctx)
 	if err != nil {
 		log.Printf("ListInterfaces (local host prefixes): %v — keeping the previous view", err)
 		return
 	}
 	next := map[uint32]map[string]bool{}
+	own := map[string]bool{b.underlay: true}
 	for _, iface := range ifaces {
+		if iface.Underlay != "" {
+			own[iface.Underlay] = true
+		}
 		if iface.Vni == 0 {
 			continue
 		}
@@ -1279,15 +1241,7 @@ func (b *Bus) refreshLocalHosts(ctx context.Context) {
 		}
 	}
 	prev := b.localHosts
-	b.localHosts = next
-	for vni, prefixes := range next {
-		for prefix := range prefixes {
-			if !prev[vni][prefix] {
-				b.markWithdrawn(vni, prefix)
-				b.clearOrigin(vni, prefix)
-			}
-		}
-	}
+	b.localHosts, b.ownUnderlays = next, own
 	for vni, prefixes := range prev {
 		for prefix := range prefixes {
 			if !next[vni][prefix] {
@@ -1297,18 +1251,30 @@ func (b *Bus) refreshLocalHosts(ctx context.Context) {
 	}
 }
 
-// releaseLocalHost programs what the bus holds for a key whose local interface just left: the own
-// route if one is learned, else a peer import (own routes win, as in apply). It is recorded as
-// installed but NOT as seen: it comes from what an earlier session may have learned, so a replay
-// in progress must still be able to prune it.
+// releaseLocalHost re-asserts what the bus holds for a key whose local interface just left: the own
+// route if one is learned, else a peer import (own routes win, as in apply). The nexthop is the first
+// one in the held set that is not this node — this node may have announced the /32 too (mid-move),
+// and a route to itself for a guest it no longer has is a loop; with no other nexthop left, nothing
+// is programmed. It is recorded as installed but NOT as seen: it may come from what an earlier
+// session learned, so a replay in progress must still be able to prune it.
 func (b *Bus) releaseLocalHost(ctx context.Context, vni uint32, prefix string) {
 	r, ok := b.learnedOwn[vni][prefix]
 	if !ok {
 		b.restoreImport(ctx, vni, prefix)
 		return
 	}
-	if err := b.dp.AddRoute(ctx, vni, prefix, r.nexthop, r.external, vni); err != nil {
-		log.Printf("AddRoute vni=%d %s -> %s (local interface left): %v", vni, prefix, r.nexthop, err)
+	nh := ""
+	for _, cand := range r.nexthops {
+		if !b.ownUnderlays[cand] {
+			nh = cand
+			break
+		}
+	}
+	if nh == "" {
+		return
+	}
+	if err := b.dp.AddRoute(ctx, vni, prefix, nh, r.external, vni); err != nil {
+		log.Printf("AddRoute vni=%d %s -> %s (local interface left): %v", vni, prefix, nh, err)
 		return
 	}
 	if b.installed[vni] == nil {
@@ -1317,8 +1283,6 @@ func (b *Bus) releaseLocalHost(ctx context.Context, vni uint32, prefix string) {
 	b.installed[vni][prefix] = true
 	b.setOrigin(vni, prefix, "own")
 }
-
-func (b *Bus) isLocalHost(vni uint32, prefix string) bool { return b.localHosts[vni][prefix] }
 
 func (b *Bus) setLearnedOwn(vni uint32, prefix string, r ownRoute) {
 	if b.learnedOwn[vni] == nil {
@@ -1334,15 +1298,4 @@ func (b *Bus) delLearnedOwn(vni uint32, prefix string) {
 			delete(b.learnedOwn, vni)
 		}
 	}
-}
-
-// isHostPrefix reports whether prefix is a single address (/32 or /128) — the only shape a local
-// interface's key has.
-func isHostPrefix(prefix string) bool {
-	_, ipnet, err := net.ParseCIDR(prefix)
-	if err != nil {
-		return false
-	}
-	ones, bits := ipnet.Mask.Size()
-	return ones == bits
 }

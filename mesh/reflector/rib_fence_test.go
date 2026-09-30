@@ -269,6 +269,24 @@ func TestRIB_Fence_OverlappingFencesReleaseTogether(t *testing.T) {
 	wantAdd(t, sub, "10.0.0.5/32", fencedNH)
 }
 
+// A fence is keyed by the network it covers, not by how the caller spelled it: a /64 set with a
+// host part or leading zeros is released by its canonical spelling, and setting it twice under two
+// spellings is still one fence.
+func TestRIB_Fence_KeyIsTheNetworkNotItsSpelling(t *testing.T) {
+	r := NewRIB()
+	sub := &fakeSink{id: "nodeB"}
+	r.Subscribe(100, sub)
+	r.Announce("nodeA", 100, "10.0.0.5/32", []string{fencedNH}, false)
+
+	r.SetFence("2001:db8:0:1::a/64")
+	r.SetFence("2001:0db8:0000:0001::/64")
+	r.ClearFence(fencedNet)
+	wantAdd(t, sub, "10.0.0.5/32", fencedNH)
+	if !r.HasRoute(100, "10.0.0.5/32") {
+		t.Fatal("clearing the /64 under its canonical spelling must release it however it was set")
+	}
+}
+
 // updatesFor returns the RouteUpdates the sink saw for prefix.
 func updatesFor(f *fakeSink, prefix string) []*pb.RouteUpdate {
 	var out []*pb.RouteUpdate
