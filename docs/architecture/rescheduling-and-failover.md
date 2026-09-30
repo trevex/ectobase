@@ -232,11 +232,22 @@ placed. Placement itself is the same pure logic the normal scheduler uses:
   availability leaves no clean option.
 
 For each VM that places, the reconciler sets `Spec.ClusterName` to the new pool
-and marks it `Scheduled`. The rest of the pipeline — the scheduler binding, the
-compute-side vm-materializer turning the bound `CompiledVM` into a KubeVirt
-`VirtualMachine` with its RBD `DataVolume` — then boots the VM on the new pool,
-attached to fenced-off storage that the dead pool can no longer touch. A VM with
-no viable target is marked `FailoverBlocked` and left where it is.
+and marks it `Scheduled`. Setting the field alone does not move the VM: on the
+lost pool the compiler retires its twin — deleted, but held by the
+`compiled.ectobase.dev/source-released` finalizer — and nothing is compiled
+into the new pool until that twin is gone (see
+[A move is break-before-make](storage-csi-integration.md#a-move-is-break-before-make)).
+There is no broker left on a lost pool to report that release itself, so
+failover does it: on every pass while the pool is lost with complete fence
+coverage, it marks the pool's retired twins `status.released` directly (a
+later pass than the rebind, since the twin is only retired once the rebind is
+compiled; a watch on retired twins triggers it at once); a mesh reconciler then drops the
+finalizer. Only once the twin is gone does the rest of the pipeline run — the
+scheduler binding, the compute-side vm-materializer turning the bound
+`CompiledVM` into a KubeVirt `VirtualMachine` with its RBD `DataVolume` — and
+boot the VM on the new pool, attached to fenced-off storage that the dead pool
+can no longer touch. A VM with no viable target is marked `FailoverBlocked`
+and left where it is.
 
 ### Recovery and un-fencing
 

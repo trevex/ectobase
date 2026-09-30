@@ -53,6 +53,50 @@ Wait for the aggregated API to serve before proceeding — the apiserver pod mus
 kubectl get clusterpools.platform.ectobase.dev
 ```
 
+### Upgrading from a chart version before Recreate
+
+The `postgres` and `reflector` Deployments now roll out with `Recreate`. A Deployment first
+created under the default `RollingUpdate` carries an apiserver-defaulted
+`spec.strategy.rollingUpdate` that Helm 4's server-side apply does not own and so never removes,
+and the API rejects `Recreate` next to it. Upgrading such a release fails with:
+
+```text
+Error: UPGRADE FAILED: server-side apply failed for object system/postgres apps/v1, Kind=Deployment: Deployment.apps "postgres" is invalid: spec.strategy.rollingUpdate: Forbidden: may not be specified when strategy `type` is 'Recreate'
+```
+
+Before that first upgrade, switch both Deployments once (the namespaces are the defaults of
+`namespace` and `agentNamespace`; use yours if you override them):
+
+```sh
+kubectl -n system patch deploy postgres --type=merge \
+  -p '{"spec":{"strategy":{"type":"Recreate","rollingUpdate":null}}}'
+kubectl -n ectobase-system patch deploy reflector --type=merge \
+  -p '{"spec":{"strategy":{"type":"Recreate","rollingUpdate":null}}}'
+```
+
+This is a one-time step. The strategy is not part of the pod template, so the patch starts no
+rollout, and it sets the value the chart applies, so it never conflicts with Helm afterwards. The
+lab runs it on every deploy (`migrateRecreateDeployments` in `test/lab/internal/deploy/ectobase.go`).
+
+Moving `postgres.persistence.type` from `emptyDir` to `pvc` (or `hostPath`) is a separate one-time
+transition with its own cost, seen live on 2026-09-30: nothing carries the old emptyDir's data
+across, so the first upgrade starts postgres on an empty data directory.
+
+1. All dispatch state from before that upgrade is lost — once, on this transition only.
+2. kine keeps failing with `relation "kine" does not exist`, because it creates its schema only
+   at startup and had already done so against the emptyDir before postgres came back empty.
+   Restart it: `kubectl -n system rollout restart deploy/kine`.
+3. The dispatch apiserver keeps serving pre-upgrade objects from its watch cache (for example a
+   `ClusterPool` with the old `creationTimestamp`), and nothing converges until it and the
+   controllers reading the same objects are restarted too:
+   `kubectl -n system rollout restart deploy/dispatch-apiserver deploy/dispatch-controller` and
+   `kubectl -n ectobase-system rollout restart deploy/mesh-controller`. Then re-run the
+   install/upgrade so the objects are recreated against the now-empty store.
+
+This sequence is only needed on the emptyDir-to-persistent transition. After that, postgres
+restarting on its own keeps all state: deleting the postgres pod live left every `ClusterPool` in
+place with its lease still renewing, with no manual step.
+
 ### Dispatch values
 
 Source of truth: `charts/ectobase-dispatch/values.yaml` (schema: `values.schema.json`).
@@ -71,6 +115,7 @@ Source of truth: `charts/ectobase-dispatch/values.yaml` (schema: `values.schema.
 | `images.mesh` | `…/mesh:dev` | Shared image for the mesh compiler + reflector. |
 | `images.kine` | `rancher/kine:v0.13.0` | etcd-v3 shim over postgres. |
 | `images.postgres` | `postgres:16` | Backing store for kine (dev/smoke; not HA). |
+| `postgres.persistence.type` | `pvc` | Where postgres keeps all dispatch state: `pvc` (ReadWriteOnce, `storageClass` empty = cluster default, `size` 1Gi), `hostPath` (`path`, single-node clusters only), or `emptyDir` (lost on every postgres pod restart). A `pvc` needs a StorageClass before the install, or postgres stays Pending. |
 
 ## 2. Each compute/pool cluster
 
@@ -166,8 +211,12 @@ two Secrets pre-provisioned out-of-band (in `ectobase-system`) *before* the brok
 On the dispatch side, enrollment also creates seven per-pool objects alongside the `ClusterPool`
 (the lab generates them; see `clusterPoolsManifest` in `test/lab/internal/deploy/ectobase.go`):
 the **`pool-<pool>` Namespace** the compiler writes this pool's twins into, a **`dispatch-broker`
-Role + RoleBinding** in it (read-only on the compiled kinds plus `compiledvms/status`, bound to
-`ectobase:cluster:<pool>`), a pre-created **`RouteBusIdentity`** named `<pool>`, the
+Role + RoleBinding** in it — `get`/`list`/`watch` on `compilednics`, `compiledvms`,
+`compiledvolumeattachments`, `compiledcontainers`, and `get`/`update`/`patch` on
+`compiledvms/status` and `compiledvolumeattachments/status` (the `patch` on `compiledvms/status`
+is what lets the broker report a retired twin's release; see
+[Broker sync](../architecture/multi-cluster-control-plane.md#broker-sync)) — bound to
+`ectobase:cluster:<pool>`, a pre-created **`RouteBusIdentity`** named `<pool>`, the
 **`dispatch-broker-bootstrap-<pool>`** ServiceAccount, and a **`dispatch-broker-pool-<pool>`**
 ClusterRole + Binding scoped with `resourceNames: [<pool>]` and bound to both that SA and the
 pool's cert identity `ectobase:cluster:<pool>`.
@@ -211,6 +260,26 @@ Source of truth: `charts/ectobase-pool/values.yaml` (schema: `values.schema.json
 The Tier-1 knobs live under `tier1Failover.*` (`snrNamespace`, `nodeSelector`, `unhealthyThreshold`,
 `minHealthy`, `remediationStrategy`, `watchdog.*`). See the
 [Helm values reference](../reference/helm-values.md) for the complete list.
+
+## Upgrade order
+
+A planned move or a VM delete relies on both sides of the fleet speaking the release protocol
+(see [Broker sync](../architecture/multi-cluster-control-plane.md#broker-sync)), so upgrade every
+pool chart before the dispatch chart.
+
+An un-upgraded pool's broker still treats a `CompiledVM` twin with a deletion timestamp as
+desired — it keeps recreating the twin's VM and disks downstream instead of letting them go — and
+it has no `ReportReleases` call (`dispatch/pkg/broker/release.go`) to make the report the dispatch
+side is waiting on. Nothing is destroyed and nothing runs on two pools — the design fails closed —
+but every move off that pool, and every delete of a VM on it, hangs until `helm upgrade` lands the
+pool chart's new broker image.
+
+The dispatch chart's `dispatch-apiserver`, `dispatch-controller` and `mesh-controller`
+Deployments come from one Helm release and move together; don't patch one of their images ahead
+of the others. An old `dispatch-controller` never runs `releaseFencedTwins`
+(`dispatch/pkg/failover/failover.go`), so a Tier-2 failover fences a lost pool correctly but never
+releases its retired twins, and the VMs it tries to rebind stay stuck waiting on a release that
+will never be reported.
 
 ## Trying it end to end
 

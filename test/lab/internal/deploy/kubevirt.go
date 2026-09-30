@@ -144,14 +144,20 @@ func labelNamespacePrivileged(ctx context.Context, r Runner, kubeconfig, ns stri
 // system/dispatch-controller ... conflict with \"kubectl-patch\"". Setting a value keeps helm the
 // single owner of the Deployment, and matches EnableVMMaterializer below.
 //
-// --reuse-values keeps everything the original install set (image refs, PKI, kine), so this adds the
-// fsid without needing to reconstruct the release's values.
+// --reset-then-reuse-values keeps everything the original install set (image refs, PKI, kine), so this
+// adds the fsid without needing to reconstruct the release's values. Not --reuse-values: that renders
+// against the old release's chart defaults too, so a value the chart gained since the last full deploy
+// is missing, and the render fails or silently drops it.
 func SetDispatchCSIClusterID(ctx context.Context, r Runner, kubeconfig, dispatchChartPath, fsid string) error {
 	r = runnerOf(r)
+	// This upgrades the dispatch release too, so it needs the same migration `lab deploy` runs.
+	if err := migrateRecreateDeployments(ctx, r, kubeconfig); err != nil {
+		return fmt.Errorf("migrate dispatch Deployments to Recreate: %w", err)
+	}
 	slog.Info("wiring the ceph fsid into dispatch-controller", "fsid", fsid)
 	if err := r.Run(ctx, "helm", "upgrade", "ectobase-dispatch", dispatchChartPath,
 		"--kubeconfig", kubeconfig, "--namespace", "system",
-		"--reuse-values", "--set", "ceph.clusterID="+fsid, "--wait", "--timeout", "5m"); err != nil {
+		"--reset-then-reuse-values", "--set", "ceph.clusterID="+fsid, "--wait", "--timeout", "5m"); err != nil {
 		return fmt.Errorf("set dispatch-controller ceph.clusterID: %w", err)
 	}
 	slog.Info("dispatch-controller csi-cluster-id set", "fsid", fsid)
@@ -162,13 +168,14 @@ func SetDispatchCSIClusterID(ctx context.Context, r Runner, kubeconfig, dispatch
 // on a compute cluster by upgrading the ectobase-pool release with vmMaterializer.enabled=true.
 // The materializer turns a broker-synced CompiledVM into a KubeVirt VirtualMachine (+ RBD
 // DataVolume) — the compute-side half of the Tier-2 VM pipeline. It ships gated-off in the pool
-// chart, so `lab tier2` flips it on here. --reuse-values keeps the release's existing values.
+// chart, so `lab tier2` flips it on here. --reset-then-reuse-values keeps the release's existing values
+// over the new chart's defaults (see SetDispatchCSIClusterID for why not --reuse-values).
 func EnableVMMaterializer(ctx context.Context, r Runner, kubeconfig, poolChartPath string) error {
 	r = runnerOf(r)
 	slog.Info("enabling vm-materializer via ectobase-pool upgrade")
 	if err := r.Run(ctx, "helm", "upgrade", "ectobase-pool", poolChartPath,
 		"--kubeconfig", kubeconfig, "--namespace", "ectobase-system",
-		"--reuse-values", "--set", "vmMaterializer.enabled=true", "--wait", "--timeout", "5m"); err != nil {
+		"--reset-then-reuse-values", "--set", "vmMaterializer.enabled=true", "--wait", "--timeout", "5m"); err != nil {
 		return fmt.Errorf("enable vm-materializer: %w", err)
 	}
 	return nil

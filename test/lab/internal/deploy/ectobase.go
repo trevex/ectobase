@@ -130,6 +130,9 @@ func Ectobase(ctx context.Context, s EctobaseSpec) error {
 		}
 	}
 
+	if err := migrateRecreateDeployments(ctx, nil, s.DispatchKubeconfig); err != nil {
+		return fmt.Errorf("migrate dispatch Deployments to Recreate: %w", err)
+	}
 	slog.Info("installing ectobase-dispatch chart", "chart", s.DispatchChartPath)
 	if err := helmInstallDispatch(ctx, s.DispatchKubeconfig, s.DispatchChartPath, s.DispatchIdentity, s.RouteBusMTLS, s.ReflectorIP, s.ImageRegistry, s.CephClusterID); err != nil {
 		return fmt.Errorf("helm install ectobase-dispatch: %w", err)
@@ -393,13 +396,24 @@ func imageSetArgs(registry string, images map[string]string) []string {
 
 // helmInstallDispatch installs/upgrades the ectobase-dispatch chart on the dispatch cluster. The reflector runs
 // on the dispatch's fabric identity, so the dispatch-controller's -reflector-admin (a chart value) points
-// there. --create-namespace makes the baseline-safe `system` release namespace; the chart creates
-// the PSA-privileged ectobase-system namespace itself.
+// there. --create-namespace makes the `system` release namespace unless Ectobase already pre-created it
+// PSA-privileged (mtls); the chart creates the PSA-privileged ectobase-system namespace itself.
 func helmInstallDispatch(ctx context.Context, kubeconfig, chartPath, dispatchIdentity string, mtls bool, reflectorIP, imageRegistry, cephClusterID string) error {
+	return exec.Run(ctx, "helm", dispatchHelmArgs(kubeconfig, chartPath, dispatchIdentity, mtls, reflectorIP, imageRegistry, cephClusterID)...)
+}
+
+// dispatchHelmArgs is helmInstallDispatch's helm argv, split out so it can be asserted without a cluster.
+func dispatchHelmArgs(kubeconfig, chartPath, dispatchIdentity string, mtls bool, reflectorIP, imageRegistry, cephClusterID string) []string {
 	args := []string{"upgrade", "--install", "ectobase-dispatch", chartPath,
 		"--kubeconfig", kubeconfig,
 		"--namespace", "system", "--create-namespace",
 		"--set", "reflectorAdmin=[" + dispatchIdentity + "]:" + reflectorAdminPort,
+		// hostPath, not the chart's default PVC: the dispatch cluster's only StorageClass is
+		// ceph-rbd, which `lab ceph` installs AFTER `lab up` deploys ectobase, so a PVC would sit
+		// Pending and the dispatch would never come up. The cluster is one node, so the data
+		// cannot be stranded on another, and Ectobase pre-creates `system` PSA-privileged, which
+		// admits a hostPath volume.
+		"--set", "postgres.persistence.type=hostPath",
 	}
 	args = append(args, imageSetArgs(imageRegistry, dispatchImages)...)
 	// Carried through every deploy so a redeploy re-arms rather than silently disarms the storage
@@ -418,7 +432,68 @@ func helmInstallDispatch(ctx context.Context, kubeconfig, chartPath, dispatchIde
 			"--set", "dispatchApiserver.serviceIP="+dispatchIdentity,
 		)
 	}
-	return exec.Run(ctx, "helm", args...)
+	return args
+}
+
+// recreateDeployment is a dispatch chart Deployment whose rollout strategy changed to Recreate.
+type recreateDeployment struct {
+	Namespace, Name string
+}
+
+// recreateDeployments are the dispatch chart's Deployments that switched from the default
+// RollingUpdate to Recreate, in the chart's default namespaces (the lab leaves both in place). A
+// future switch adds one line here.
+var recreateDeployments = []recreateDeployment{
+	{Namespace: "system", Name: "postgres"},
+	{Namespace: "ectobase-system", Name: "reflector"},
+}
+
+// recreatePatch sets Recreate and deletes rollingUpdate in one JSON merge patch: null removes the
+// field when it is present and is a no-op when it is not.
+const recreatePatch = `{"spec":{"strategy":{"type":"Recreate","rollingUpdate":null}}}`
+
+// migrateRecreateDeployments moves an existing Deployment onto Recreate before the dispatch chart is
+// upgraded to ask for it. A Deployment created under RollingUpdate carries an apiserver-defaulted
+// spec.strategy.rollingUpdate that Helm 4's server-side apply does not own and so never removes, and
+// the API rejects Recreate alongside rollingUpdate, so the upgrade fails. Idempotent: an absent
+// Deployment (a fresh install) or one already on Recreate is left alone. Neither field is in the pod
+// template, so the patch starts no rollout, and it sets the same value the chart applies, so the
+// kubectl field manager it leaves behind never conflicts with Helm.
+func migrateRecreateDeployments(ctx context.Context, r Runner, kubeconfig string) error {
+	r = runnerOf(r)
+	for _, d := range recreateDeployments {
+		out, err := r.Output(ctx, "kubectl", strategyTypeArgs(kubeconfig, d)...)
+		if err != nil {
+			return fmt.Errorf("read %s/%s strategy: %w", d.Namespace, d.Name, err)
+		}
+		if !needsRecreateMigration(string(out)) {
+			continue
+		}
+		slog.Info("migrating Deployment to the Recreate strategy", "namespace", d.Namespace, "name", d.Name)
+		if err := r.Run(ctx, "kubectl", recreatePatchArgs(kubeconfig, d)...); err != nil {
+			return fmt.Errorf("patch %s/%s to Recreate: %w", d.Namespace, d.Name, err)
+		}
+	}
+	return nil
+}
+
+// needsRecreateMigration reports whether a Deployment whose spec.strategy.type reads strategyType
+// must be patched: it exists (non-empty; --ignore-not-found prints nothing) and is not yet Recreate.
+func needsRecreateMigration(strategyType string) bool {
+	t := strings.TrimSpace(strategyType)
+	return t != "" && t != "Recreate"
+}
+
+// strategyTypeArgs reads a Deployment's spec.strategy.type, printing nothing if it does not exist.
+func strategyTypeArgs(kubeconfig string, d recreateDeployment) []string {
+	return []string{"--kubeconfig", kubeconfig, "get", "deploy", d.Name, "-n", d.Namespace,
+		"-o", "jsonpath={.spec.strategy.type}", "--ignore-not-found"}
+}
+
+// recreatePatchArgs switches a Deployment to Recreate (see recreatePatch).
+func recreatePatchArgs(kubeconfig string, d recreateDeployment) []string {
+	return []string{"--kubeconfig", kubeconfig, "patch", "deploy", d.Name, "-n", d.Namespace,
+		"--type=merge", "-p", recreatePatch}
 }
 
 // helmInstallPool installs/upgrades the ectobase-pool chart with a broker on one compute cluster.

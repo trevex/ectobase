@@ -34,7 +34,7 @@ pki:
 
 # imagePullPolicy applies to all containers in the chart.
 # External Ceph the dispatch controller fences against. clusterID is the cluster's fsid,
-# which only the deploy knows, so `lab tier2 up` sets it with `helm upgrade --reuse-values`.
+# which only the deploy knows, so `lab tier2 up` sets it with `helm upgrade --reset-then-reuse-values`.
 ceph:
   clusterID: ""
 
@@ -54,8 +54,28 @@ dispatchApiserver:
 # kine is the etcd-v3-over-Postgres storage for the aggregated apiserver.
 kine:
   # password backs both Postgres and the kine DSN, delivered via the kine-db Secret. Dev-grade
-  # default; override for anything beyond a throwaway smoke cluster.
+  # default; override for anything beyond a throwaway smoke cluster. Postgres takes it only when it
+  # initializes an empty data directory, so changing it later on persistent storage locks kine out.
   password: kine
+
+# postgres is kine's backing database: its data directory holds ALL dispatch cluster state.
+postgres:
+  persistence:
+    # type is where that data directory lives:
+    #   pvc      - a ReadWriteOnce PersistentVolumeClaim (storageClass, size). The claim outlives
+    #              the release: `helm uninstall` keeps it, so delete it by hand to drop the state.
+    #   hostPath - a directory on the node (path). Node-local, so only safe where postgres cannot
+    #              reschedule onto another node (a single-node cluster). Baseline PSA forbids
+    #              hostPath; `namespace` is already PSA-privileged when pki.enabled.
+    #   emptyDir - scratch space that dies with the pod: EVERY postgres pod restart or template
+    #              change loses ALL dispatch state. Explicit opt-in for throwaway smoke clusters only.
+    type: pvc
+    # storageClass for the pvc; empty uses the cluster's default StorageClass.
+    storageClass: ""
+    # size of the pvc.
+    size: 1Gi
+    # path is the node directory for hostPath, created if missing.
+    path: /var/lib/ectobase/postgres
 
 images:
   # dispatchApiserver is the dispatch aggregated apiserver image.

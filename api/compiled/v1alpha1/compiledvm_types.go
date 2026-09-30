@@ -32,6 +32,13 @@ type CompiledVMSpec struct {
 	// CloudInit, if set, is guest bootstrap delivered as a cloud-init NoCloud datasource.
 	// +optional
 	CloudInit *CloudInit `json:"cloudInit,omitempty"`
+	// Volumes are the names of the CompiledVolumeAttachments this VM attaches. Their order here does
+	// not set the guest's disk order: the VM lists the boot disk first, then the rest by name. The
+	// materializer does not create the VM until every one of them exists on the pool: a VM created
+	// before its disks would start from a template without them, and KubeVirt does not re-read the
+	// template for an already-created VMI.
+	// +optional
+	Volumes []string `json:"volumes,omitempty" protobuf:"bytes,7,rep,name=volumes"`
 }
 
 // CloudInit is guest bootstrap config for a compiled VM, delivered by the materializer
@@ -66,6 +73,12 @@ type CompiledVMStatus struct {
 	// scoped to its own pool namespace; a mesh controller mirrors it onto the VirtualMachine.
 	// +optional
 	Placement *VMPlacement `json:"placement,omitempty" protobuf:"bytes,2,opt,name=placement"`
+	// Released is set once the pool this twin was compiled for has let go of the VM — no KubeVirt
+	// VM, VMI or virt-launcher left, and no claim on its disks — or, for a lost pool, once failover
+	// has fenced it. A retired twin is held on the dispatch until this is true, and nothing is
+	// compiled into another pool for the same VM until the retired twin is gone.
+	// +optional
+	Released bool `json:"released,omitempty" protobuf:"varint,3,opt,name=released"`
 }
 
 // VMPlacement is a VM's actual running location, as observed by the pool that runs it.

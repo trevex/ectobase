@@ -16,6 +16,11 @@ type CompiledVMStatusApplyConfiguration struct {
 	// here rather than directly on the source VirtualMachine because the broker's writes are
 	// scoped to its own pool namespace; a mesh controller mirrors it onto the VirtualMachine.
 	Placement *VMPlacementApplyConfiguration `json:"placement,omitempty"`
+	// Released is set once the pool this twin was compiled for has let go of the VM — no KubeVirt
+	// VM, VMI or virt-launcher left, and no claim on its disks — or, for a lost pool, once failover
+	// has fenced it. A retired twin is held on the dispatch until this is true, and nothing is
+	// compiled into another pool for the same VM until the retired twin is gone.
+	Released *bool `json:"released,omitempty"`
 }
 
 // CompiledVMStatusApplyConfiguration constructs a declarative configuration of the CompiledVMStatus type for use with
@@ -37,5 +42,13 @@ func (b *CompiledVMStatusApplyConfiguration) WithState(value string) *CompiledVM
 // If called multiple times, the Placement field is set to the value of the last call.
 func (b *CompiledVMStatusApplyConfiguration) WithPlacement(value *VMPlacementApplyConfiguration) *CompiledVMStatusApplyConfiguration {
 	b.Placement = value
+	return b
+}
+
+// WithReleased sets the Released field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the Released field is set to the value of the last call.
+func (b *CompiledVMStatusApplyConfiguration) WithReleased(value bool) *CompiledVMStatusApplyConfiguration {
+	b.Released = &value
 	return b
 }

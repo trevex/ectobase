@@ -1,6 +1,7 @@
 package deploy
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -84,5 +85,112 @@ func TestClusterPoolsManifestScopesRouteBusPerPool(t *testing.T) {
 func TestClusterPoolsManifestEmpty(t *testing.T) {
 	if got := clusterPoolsManifest(nil); got != "" {
 		t.Fatalf("expected empty manifest for no clusters, got %q", got)
+	}
+}
+
+// The dispatch cluster has no StorageClass until `lab ceph` runs, so the chart's default PVC would
+// sit Pending and `lab up` would never see the dispatch come up.
+func TestDispatchHelmArgsPersistPostgresOnHostPath(t *testing.T) {
+	args := dispatchHelmArgs("/kc", "/chart", "fd00:db8:0:1::1", true, "fd00:db8:0:1::1", "registry:5000", "")
+	if !containsSubseq(args, []string{"--set", "postgres.persistence.type=hostPath"}) {
+		t.Fatalf("dispatch install does not put postgres on a hostPath:\n%v", args)
+	}
+}
+
+// A Deployment first created under RollingUpdate carries an apiserver-defaulted rollingUpdate that
+// Helm 4's server-side apply does not own and so never removes; switching it to Recreate then fails.
+func TestNeedsRecreateMigration(t *testing.T) {
+	for _, tc := range []struct {
+		strategyType string // kubectl get -o jsonpath={.spec.strategy.type} output
+		want         bool
+	}{
+		{"", false}, // absent (--ignore-not-found): a fresh install, nothing to migrate
+		{"Recreate", false},
+		{"Recreate\n", false},
+		{"RollingUpdate", true},
+	} {
+		if got := needsRecreateMigration(tc.strategyType); got != tc.want {
+			t.Errorf("needsRecreateMigration(%q) = %v, want %v", tc.strategyType, got, tc.want)
+		}
+	}
+}
+
+func TestRecreateMigrationArgs(t *testing.T) {
+	d := recreateDeployment{Namespace: "system", Name: "postgres"}
+	get := strategyTypeArgs("/kc", d)
+	for _, want := range [][]string{
+		{"--kubeconfig", "/kc"},
+		{"get", "deploy", "postgres", "-n", "system"},
+		{"-o", "jsonpath={.spec.strategy.type}"},
+		{"--ignore-not-found"},
+	} {
+		if !containsSubseq(get, want) {
+			t.Errorf("strategy read argv missing %v:\n%v", want, get)
+		}
+	}
+	// One merge patch covers both cases: null deletes rollingUpdate when it is present and is a
+	// no-op when it is not.
+	patch := recreatePatchArgs("/kc", d)
+	want := []string{"--kubeconfig", "/kc", "patch", "deploy", "postgres", "-n", "system",
+		"--type=merge", "-p", `{"spec":{"strategy":{"type":"Recreate","rollingUpdate":null}}}`}
+	if strings.Join(patch, " ") != strings.Join(want, " ") {
+		t.Fatalf("patch argv:\n got %v\nwant %v", patch, want)
+	}
+}
+
+// The dispatch chart's Deployments that moved to Recreate, in the namespaces the lab installs them into.
+func TestRecreateDeploymentsCoverTheChart(t *testing.T) {
+	want := map[recreateDeployment]bool{
+		{Namespace: "system", Name: "postgres"}:           true,
+		{Namespace: "ectobase-system", Name: "reflector"}: true,
+	}
+	if len(recreateDeployments) != len(want) {
+		t.Fatalf("recreateDeployments = %v, want %v", recreateDeployments, want)
+	}
+	for _, d := range recreateDeployments {
+		if !want[d] {
+			t.Errorf("unexpected migration target %v", d)
+		}
+	}
+}
+
+// strategyRunner answers each `kubectl get deploy <name>` with a canned strategy type.
+type strategyRunner struct {
+	fakeRunner
+	strategy map[string]string // deployment name -> jsonpath output
+}
+
+func (r *strategyRunner) Output(_ context.Context, name string, args ...string) ([]byte, error) {
+	r.record(name, args...)
+	for dep, out := range r.strategy {
+		if containsSubseq(args, []string{"get", "deploy", dep}) {
+			return []byte(out), nil
+		}
+	}
+	return nil, nil
+}
+
+func TestMigrateRecreateDeployments(t *testing.T) {
+	r := &strategyRunner{strategy: map[string]string{
+		"postgres":  "RollingUpdate", // a release from before the switch
+		"reflector": "Recreate",      // already migrated: the step is idempotent
+	}}
+	if err := migrateRecreateDeployments(context.Background(), r, "/kc"); err != nil {
+		t.Fatalf("migrateRecreateDeployments: %v", err)
+	}
+	if r.findCall("kubectl", "patch", "deploy", "postgres") == nil {
+		t.Errorf("postgres (RollingUpdate) was not patched:\n%v", r.calls)
+	}
+	if r.findCall("kubectl", "patch", "deploy", "reflector") != nil {
+		t.Errorf("reflector (already Recreate) was patched:\n%v", r.calls)
+	}
+
+	// A fresh install: nothing exists yet, so nothing is patched.
+	fresh := &strategyRunner{}
+	if err := migrateRecreateDeployments(context.Background(), fresh, "/kc"); err != nil {
+		t.Fatalf("migrateRecreateDeployments (fresh): %v", err)
+	}
+	if fresh.findCall("kubectl", "patch") != nil {
+		t.Errorf("fresh install was patched:\n%v", fresh.calls)
 	}
 }

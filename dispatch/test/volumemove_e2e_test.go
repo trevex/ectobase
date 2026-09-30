@@ -57,7 +57,7 @@ func TestVolumeMove_IdentityFollowsAClusterRebind_E2E(t *testing.T) {
 		t.Fatalf("create vm: %v", err)
 	}
 
-	att := &controllers.CompiledVolumeAttachmentReconciler{Client: c}
+	att := &controllers.CompiledVolumeAttachmentReconciler{Client: c, APIReader: c}
 	vmKey := client.ObjectKey{Namespace: ns, Name: "vm1"}
 
 	// 1. First compile: nothing has been provisioned, so there is nothing to adopt.

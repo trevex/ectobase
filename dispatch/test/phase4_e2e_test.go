@@ -226,7 +226,7 @@ func TestPhase4_ScheduleCompileSyncMaterialize_E2E(t *testing.T) {
 	// (3) COMPILE: the mesh CompiledVMReconciler lowers vm1 -> default-vm1
 	//     bound to c1 (image + resolved MAC on the flowplane-overlay network).
 	// ================================================================
-	cr := &controllers.CompiledVMReconciler{Client: dispatchClient, NetworkName: "flowplane-overlay"}
+	cr := &controllers.CompiledVMReconciler{Client: dispatchClient, APIReader: dispatchClient, NetworkName: "flowplane-overlay"}
 	if _, err := cr.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKey{Namespace: ns, Name: "vm1"}}); err != nil {
 		t.Fatalf("compile Reconcile vm1: %v", err)
 	}

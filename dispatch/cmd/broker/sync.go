@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"k8s.io/apimachinery/pkg/types"
@@ -23,6 +24,11 @@ import (
 // say so: a delete that happened while the broker was down, a watch event lost to a reconnect, or a
 // twin removed or edited downstream by hand.
 const resyncPeriod = time.Minute
+
+// releasePollInterval is how soon a pass looks again while a retired twin is still held. The
+// downstream teardown it waits for (VM -> VMI -> virt-launcher -> claim) raises no dispatch event,
+// and a move is stalled until it finishes, so the minute-long resync would be the move's latency.
+const releasePollInterval = 5 * time.Second
 
 // syncRequest is the one work item every trigger enqueues. The sync ignores its request and
 // reconciles every type at once, so one shared key both coalesces a burst of events into a single
@@ -78,17 +84,23 @@ func (r *brokerReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ctrl.
 		Downstream:  r.downstream,
 		ClusterName: r.clusterName,
 	}
-	if err := b.SyncOnce(ctx); err != nil {
+	// Every sync runs even when an earlier one fails, and so does ReportReleases: a failing NIC or
+	// container sync must not starve VM releases, which a move is stalled on. The errors are
+	// returned together, so a failed pass still requeues with backoff.
+	errs := []error{
+		b.SyncOnce(ctx),
+		// Before ReportReleases: SyncCompiledVMs is what stops a retired twin's VM, ReportReleases
+		// reports when it has.
+		b.SyncCompiledVMs(ctx),
+		b.SyncCompiledVolumeAttachments(ctx),
+		b.SyncCompiledContainers(ctx),
+	}
+	pending, err := b.ReportReleases(ctx)
+	if err := errors.Join(append(errs, err)...); err != nil {
 		return ctrl.Result{}, err
 	}
-	if err := b.SyncCompiledVMs(ctx); err != nil {
-		return ctrl.Result{}, err
-	}
-	if err := b.SyncCompiledVolumeAttachments(ctx); err != nil {
-		return ctrl.Result{}, err
-	}
-	if err := b.SyncCompiledContainers(ctx); err != nil {
-		return ctrl.Result{}, err
+	if pending {
+		return ctrl.Result{RequeueAfter: releasePollInterval}, nil
 	}
 	return ctrl.Result{RequeueAfter: resyncPeriod}, nil
 }

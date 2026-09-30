@@ -1412,6 +1412,21 @@ func schema_ectobase_api_compiled_v1alpha1_CompiledVMSpec(ref common.ReferenceCa
 							Ref:         ref(v1alpha1.CloudInit{}.OpenAPIModelName()),
 						},
 					},
+					"volumes": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Volumes are the names of the CompiledVolumeAttachments this VM attaches. Their order here does not set the guest's disk order: the VM lists the boot disk first, then the rest by name. The materializer does not create the VM until every one of them exists on the pool: a VM created before its disks would start from a template without them, and KubeVirt does not re-read the template for an already-created VMI.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: "",
+										Type:    []string{"string"},
+										Format:  "",
+									},
+								},
+							},
+						},
+					},
 				},
 			},
 		},
@@ -1438,6 +1453,13 @@ func schema_ectobase_api_compiled_v1alpha1_CompiledVMStatus(ref common.Reference
 						SchemaProps: spec.SchemaProps{
 							Description: "Placement is where this VM actually runs, reported upward by the pool's broker. It lands here rather than directly on the source VirtualMachine because the broker's writes are scoped to its own pool namespace; a mesh controller mirrors it onto the VirtualMachine.",
 							Ref:         ref(v1alpha1.VMPlacement{}.OpenAPIModelName()),
+						},
+					},
+					"released": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Released is set once the pool this twin was compiled for has let go of the VM — no KubeVirt VM, VMI or virt-launcher left, and no claim on its disks — or, for a lost pool, once failover has fenced it. A retired twin is held on the dispatch until this is true, and nothing is compiled into another pool for the same VM until the retired twin is gone.",
+							Type:        []string{"boolean"},
+							Format:      "",
 						},
 					},
 				},

@@ -7,17 +7,22 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"slices"
+	"strings"
 
 	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	computev1 "github.com/trevex/ectobase/api/compute/v1alpha1"
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	storagev1 "github.com/trevex/ectobase/api/storage/v1alpha1"
 	"github.com/trevex/ectobase/api/validate"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -28,9 +33,10 @@ import (
 const defaultRunStrategy = "RerunOnFailure"
 
 // CompileVM lowers a VirtualMachine into a CompiledVM: containerDisk image, compute
-// resources, run strategy (defaulted), the cluster binding (from placement), and
-// one resolved overlay interface (MAC + networkName) per owned NetworkInterface.
-func CompileVM(vm *computev1.VirtualMachine, nics []netv1.NetworkInterface, placement Placement, networkName string) compiledv1.CompiledVM {
+// resources, run strategy (defaulted), the cluster binding (from placement), one
+// resolved overlay interface (MAC + networkName) per owned NetworkInterface, and the
+// names of the attachments compiled for its existing Volumes.
+func CompileVM(vm *computev1.VirtualMachine, nics []netv1.NetworkInterface, volumes []storagev1.Volume, placement Placement, networkName string) compiledv1.CompiledVM {
 	runStrategy := vm.Spec.RunStrategy
 	if runStrategy == "" {
 		runStrategy = defaultRunStrategy
@@ -43,6 +49,18 @@ func CompileVM(vm *computev1.VirtualMachine, nics []netv1.NetworkInterface, plac
 	for _, ref := range vm.Spec.InterfaceRefs {
 		ifaces = append(ifaces, compiledv1.CompiledVMInterface{MAC: macByNIC[ref.Name], NetworkName: networkName})
 	}
+	// Only the Volumes that exist, as CompileVolumeAttachments does: a missing one has no
+	// attachment, and the pool would hold the VM back waiting for it.
+	exists := map[string]bool{}
+	for i := range volumes {
+		exists[volumes[i].Name] = true
+	}
+	var attachments []string
+	for _, ref := range vm.Spec.VolumeRefs {
+		if exists[ref.Name] {
+			attachments = append(attachments, attachmentTwinName(vm.Namespace, vm.Name, ref.Name))
+		}
+	}
 	compiled := compiledv1.CompiledVM{
 		TypeMeta:   metav1.TypeMeta{APIVersion: "compiled.ectobase.dev/v1alpha1", Kind: "CompiledVM"},
 		ObjectMeta: metav1.ObjectMeta{Name: compiledTwinName(vm.Namespace, vm.Name), Namespace: validate.PoolNamespace(placement.ClusterName)},
@@ -53,6 +71,7 @@ func CompileVM(vm *computev1.VirtualMachine, nics []netv1.NetworkInterface, plac
 			RunStrategy: runStrategy,
 			Interfaces:  ifaces,
 			CloudInit:   compiledCloudInit(vm.Spec.CloudInit),
+			Volumes:     attachments,
 		},
 	}
 	if placement.WorkloadID != "" {
@@ -72,7 +91,10 @@ func compiledCloudInit(ci *computev1.CloudInit) *compiledv1.CloudInit {
 
 // CompiledVMReconciler watches VirtualMachines and upserts their CompiledVM.
 type CompiledVMReconciler struct {
-	Client      client.Client
+	Client client.Client
+	// APIReader is an UNCACHED reader for the move gate: a twin the informer has not seen yet must
+	// still close it.
+	APIReader   client.Reader
 	NetworkName string // the multus NAD name for the flowplane overlay binding
 }
 
@@ -82,8 +104,18 @@ func (r *CompiledVMReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	if !vm.DeletionTimestamp.IsZero() {
-		if err := deleteTwinsOfSource(ctx, r.Client, &compiledv1.CompiledVMList{}, vm.Namespace, vm.Name); err != nil {
+		// Retired, not deleted outright: the twin stays until its pool has stopped the VM, so a
+		// delete cannot race its own running VMI. The VM itself need not wait for that.
+		twins, err := twinsOfSource(ctx, r.Client, &compiledv1.CompiledVMList{}, vm.Namespace, vm.Name)
+		if err != nil {
 			return ctrl.Result{}, fmt.Errorf("teardown compiledvm: %w", err)
+		}
+		for _, o := range twins {
+			if twin, ok := o.(*compiledv1.CompiledVM); ok {
+				if err := retireTwin(ctx, r.Client, twin); err != nil {
+					return ctrl.Result{}, fmt.Errorf("teardown compiledvm %s/%s: %w", twin.Namespace, twin.Name, err)
+				}
+			}
 		}
 		return ctrl.Result{}, releaseFinalizer(ctx, r.Client, &vm, finalizerCompiledVM)
 	}
@@ -94,27 +126,63 @@ func (r *CompiledVMReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	if vm.Spec.ClusterName == "" {
 		return ctrl.Result{}, nil
 	}
+	// Break before make: retire every twin outside this pool, and compile nothing here until each
+	// of them is gone.
+	poolNS := validate.PoolNamespace(vm.Spec.ClusterName)
+	twins, err := gateTwins(ctx, r.APIReader, vm.Namespace, vm.Name)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if held := awaitingRelease(poolNS, twins); len(held) > 0 {
+		for _, twin := range held {
+			if twin.Namespace == poolNS {
+				continue // a reversed move: this pool's own twin is already on its way out
+			}
+			if err := retireTwin(ctx, r.Client, twin); err != nil {
+				return ctrl.Result{}, fmt.Errorf("retire compiledvm %s/%s: %w", twin.Namespace, twin.Name, err)
+			}
+		}
+		var pools []string
+		for _, twin := range held {
+			pools = append(pools, twin.Spec.ClusterName)
+		}
+		return ctrl.Result{}, r.setMoving(ctx, &vm, metav1.ConditionTrue, "WaitingForSourceRelease",
+			"waiting for pool(s) "+strings.Join(slices.Compact(pools), ", ")+
+				" to release the VM before it starts on "+vm.Spec.ClusterName)
+	}
 	var nicList netv1.NetworkInterfaceList
 	if err := r.Client.List(ctx, &nicList, client.InNamespace(vm.Namespace)); err != nil {
 		return ctrl.Result{}, fmt.Errorf("list nics: %w", err)
 	}
+	// Listed only when referenced: a containerDisk VM needs none of them.
+	var volList storagev1.VolumeList
+	if len(vm.Spec.VolumeRefs) > 0 {
+		if err := r.Client.List(ctx, &volList, client.InNamespace(vm.Namespace)); err != nil {
+			return ctrl.Result{}, fmt.Errorf("list volumes: %w", err)
+		}
+	}
 	placement := Placement{ClusterName: vm.Spec.ClusterName, WorkloadID: vm.Name}
-	compiled := CompileVM(&vm, nicList.Items, placement, r.NetworkName)
+	compiled := CompileVM(&vm, nicList.Items, volList.Items, placement, r.NetworkName)
 	key := types.NamespacedName{Namespace: compiled.Namespace, Name: compiled.Name}
 	var existing compiledv1.CompiledVM
-	err := r.Client.Get(ctx, key, &existing)
+	err = r.Client.Get(ctx, key, &existing)
 	switch {
 	case apierrors.IsNotFound(err):
 		stampSource(&compiled, vm.Namespace, vm.Name)
+		controllerutil.AddFinalizer(&compiled, finalizerSourceReleased)
 		if err := r.Client.Create(ctx, &compiled); err != nil {
 			return ctrl.Result{}, fmt.Errorf("create compiledvm: %w", err)
 		}
 	case err != nil:
 		return ctrl.Result{}, err
 	default:
-		if reflect.DeepEqual(existing.Spec, compiled.Spec) && existing.Labels["workload"] == compiled.Labels["workload"] {
-			return ctrl.Result{}, nil
+		if reflect.DeepEqual(existing.Spec, compiled.Spec) && existing.Labels["workload"] == compiled.Labels["workload"] &&
+			controllerutil.ContainsFinalizer(&existing, finalizerSourceReleased) {
+			return ctrl.Result{}, r.setMoving(ctx, &vm, metav1.ConditionFalse, "Moved", "running on pool "+vm.Spec.ClusterName)
 		}
+		// A twin compiled before the release finalizer existed gets it here, so a later move of it
+		// is gated like any other.
+		controllerutil.AddFinalizer(&existing, finalizerSourceReleased)
 		existing.Spec = compiled.Spec
 		if existing.Labels == nil {
 			existing.Labels = map[string]string{}
@@ -124,17 +192,34 @@ func (r *CompiledVMReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			return ctrl.Result{}, fmt.Errorf("update compiledvm: %w", err)
 		}
 	}
-	// Drop any other twin still stamped with this source — one left in a namespace the compiler no
-	// longer writes to (a re-bound pool, or an earlier layout).
-	if err := pruneTwinsOfSource(ctx, r.Client, &compiledv1.CompiledVMList{}, vm.Namespace, vm.Name,
-		map[types.NamespacedName]bool{key: true}); err != nil {
-		return ctrl.Result{}, fmt.Errorf("prune stale compiledvms: %w", err)
+	// No prune here: the gate above already retired every twin outside this pool, and nothing
+	// reaches this point while one remains.
+	return ctrl.Result{}, r.setMoving(ctx, &vm, metav1.ConditionFalse, "Moved", "running on pool "+vm.Spec.ClusterName)
+}
+
+// condMoving reports a move's progress on the VirtualMachine.
+const condMoving = "Moving"
+
+// setMoving records a move's progress. A VM that never moved carries no Moving condition at all:
+// the False side is written only to close one that was opened.
+func (r *CompiledVMReconciler) setMoving(ctx context.Context, vm *computev1.VirtualMachine, status metav1.ConditionStatus, reason, msg string) error {
+	cur := meta.FindStatusCondition(vm.Status.Conditions, condMoving)
+	if status == metav1.ConditionFalse && (cur == nil || cur.Status == metav1.ConditionFalse) {
+		return nil
 	}
-	return ctrl.Result{}, nil
+	orig := vm.DeepCopy()
+	if !meta.SetStatusCondition(&vm.Status.Conditions, metav1.Condition{
+		Type: condMoving, Status: status, Reason: reason, Message: msg, ObservedGeneration: vm.Generation,
+	}) {
+		return nil
+	}
+	// Optimistic lock: failover and the placement mirror write this status too, and a merge patch
+	// replaces the whole conditions list — a conflict is retried rather than clobbering theirs.
+	return r.Client.Status().Patch(ctx, vm, client.MergeFromWithOptions(orig, client.MergeFromWithOptimisticLock{}))
 }
 
 // SetupWithManager watches VirtualMachines (Owns their CompiledVMs) and re-enqueues
-// a VM when one of its NetworkInterfaces changes (MAC).
+// a VM when one of its NetworkInterfaces changes (MAC) or one of its Volumes appears.
 func (r *CompiledVMReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		// Distinct name: CompiledVolumeAttachmentReconciler also For(VirtualMachine), and
@@ -149,6 +234,10 @@ func (r *CompiledVMReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// GenerationChangedPredicate avoids recompiling every VM on unrelated NIC
 		// status writes (e.g. port allocation).
 		Watches(&netv1.NetworkInterface{}, handler.EnqueueRequestsFromMapFunc(r.vmsForNIC),
+			builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+		// A Volume that appears after its VM adds an attachment the CompiledVM must name. Only
+		// existence matters here, and the predicate passes creates and deletes through.
+		Watches(&storagev1.Volume{}, handler.EnqueueRequestsFromMapFunc(vmsForVolume(r.Client)),
 			builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Complete(r)
 }

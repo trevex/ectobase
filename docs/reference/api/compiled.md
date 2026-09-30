@@ -423,6 +423,7 @@ _Appears in:_
 | `runStrategy` _string_ | RunStrategy is the KubeVirt run strategy (defaulted upstream by the compiler). |  | Optional: \{\} <br /> |
 | `interfaces` _[CompiledVMInterface](#compiledvminterface) array_ | Interfaces are the VM's overlay interfaces (one per owned NetworkInterface). |  | Optional: \{\} <br /> |
 | `cloudInit` _[CloudInit](#cloudinit)_ | CloudInit, if set, is guest bootstrap delivered as a cloud-init NoCloud datasource. |  | Optional: \{\} <br /> |
+| `volumes` _string array_ | Volumes are the names of the CompiledVolumeAttachments this VM attaches. Their order here does<br />not set the guest's disk order: the VM lists the boot disk first, then the rest by name. The<br />materializer does not create the VM until every one of them exists on the pool: a VM created<br />before its disks would start from a template without them, and KubeVirt does not re-read the<br />template for an already-created VMI. |  | Optional: \{\} <br /> |
 
 
 #### CompiledVMStatus
@@ -443,6 +444,7 @@ _Appears in:_
 | --- | --- | --- | --- |
 | `state` _string_ | State is the materialization state (e.g. Applied, Pending). |  | Optional: \{\} <br /> |
 | `placement` _[VMPlacement](#vmplacement)_ | Placement is where this VM actually runs, reported upward by the pool's broker. It lands<br />here rather than directly on the source VirtualMachine because the broker's writes are<br />scoped to its own pool namespace; a mesh controller mirrors it onto the VirtualMachine. |  | Optional: \{\} <br /> |
+| `released` _boolean_ | Released is set once the pool this twin was compiled for has let go of the VM — no KubeVirt<br />VM, VMI or virt-launcher left, and no claim on its disks — or, for a lost pool, once failover<br />has fenced it. A retired twin is held on the dispatch until this is true, and nothing is<br />compiled into another pool for the same VM until the retired twin is gone. |  | Optional: \{\} <br /> |
 
 
 #### CompiledVolumeAttachment

@@ -76,13 +76,59 @@ func TestSetDispatchCSIClusterID(t *testing.T) {
 		t.Fatalf("no dispatch helm upgrade:\n%v", f.calls)
 	}
 	joined := strings.Join(c, " ")
-	for _, want := range []string{"--reuse-values", "ceph.clusterID=fsid-9", "--namespace system"} {
+	for _, want := range []string{"--reset-then-reuse-values", "ceph.clusterID=fsid-9", "--namespace system"} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("helm argv missing %q:\n%s", want, joined)
 		}
 	}
+	assertNoBareReuseValues(t, c)
 	// It must NOT go back to patching the Deployment.
 	if f.findCall("kubectl", "patch", "deploy", "dispatch-controller") != nil {
 		t.Fatalf("still patching the Deployment; that is what broke `lab deploy`:\n%v", f.calls)
+	}
+}
+
+// TestEnableVMMaterializerResetsThenReusesValues pins the pool upgrade to the new chart's defaults.
+func TestEnableVMMaterializerResetsThenReusesValues(t *testing.T) {
+	f := &fakeRunner{}
+	if err := EnableVMMaterializer(context.Background(), f, "/kc/k02.kubeconfig", "/charts/ectobase-pool"); err != nil {
+		t.Fatalf("EnableVMMaterializer: %v", err)
+	}
+	c := f.findCall("helm", "upgrade", "ectobase-pool")
+	if !containsSubseq(c, []string{"--reset-then-reuse-values", "--set", "vmMaterializer.enabled=true"}) {
+		t.Fatalf("pool upgrade does not reset-then-reuse values:\n%v", c)
+	}
+	assertNoBareReuseValues(t, c)
+}
+
+// assertNoBareReuseValues fails on a plain --reuse-values: it renders against the old release's chart
+// defaults, so a value the chart gained since the last full deploy is missing.
+func assertNoBareReuseValues(t *testing.T, argv []string) {
+	t.Helper()
+	for _, a := range argv {
+		if a == "--reuse-values" {
+			t.Fatalf("helm argv uses --reuse-values, not --reset-then-reuse-values:\n%v", argv)
+		}
+	}
+}
+
+// `lab tier2 up` upgrades the dispatch release too, so it migrates the Recreate Deployments first,
+// or a release from before the switch fails the same way `lab deploy` would.
+func TestSetDispatchCSIClusterIDMigratesRecreateFirst(t *testing.T) {
+	r := &strategyRunner{strategy: map[string]string{"reflector": "RollingUpdate"}}
+	if err := SetDispatchCSIClusterID(context.Background(), r, "/kc/dispatch.kubeconfig", "/charts/ectobase-dispatch", "fsid-9"); err != nil {
+		t.Fatalf("SetDispatchCSIClusterID: %v", err)
+	}
+	patch, upgrade := -1, -1
+	for i, c := range r.calls {
+		if patch < 0 && containsSubseq(c, []string{"kubectl", "patch", "deploy", "reflector"}) {
+			patch = i
+		}
+		if upgrade < 0 && containsSubseq(c, []string{"helm", "upgrade", "ectobase-dispatch"}) {
+			upgrade = i
+		}
+	}
+	if patch < 0 || upgrade < 0 || patch > upgrade {
+		t.Fatalf("want the reflector patched before the dispatch upgrade (patch=%d upgrade=%d):\n%v", patch, upgrade, r.calls)
 	}
 }

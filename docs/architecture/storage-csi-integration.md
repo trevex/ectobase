@@ -38,6 +38,16 @@ The [vm-materializer](kubevirt-integration.md) then references these DataVolumes
 the VM's disks (boot attachment first), so the KubeVirt VM boots from persistent
 RBD storage.
 
+The broker delivers a `CompiledVM` and its `CompiledVolumeAttachment`s independently, so either
+can arrive first, and the vm-materializer will not create the KubeVirt `VirtualMachine` until
+every attachment `CompiledVM.spec.volumes` names is present — and, for a VM with no image, until
+one of the attachments it has is marked boot. This is not a cosmetic ordering: a VM created ahead
+of its disks starts from a template that does not yet reference them (for a disk-booted VM, that
+means an empty `containerDisk`), and KubeVirt never re-reads a template for a VMI that already
+exists. Fixing the template afterwards would not fix that VMI or its virt-launcher pod — both
+would stay invalid forever. Waiting until the disks are all there avoids ever creating that VMI in
+the first place (`mesh/controllers/vmmaterializer.go`, `readyToMaterialize`).
+
 ## Disk lifetime across clusters
 
 A VM's `spec.clusterName` can change — a planned move, or a Tier-2 failover
@@ -79,6 +89,49 @@ once its identity has been recorded, so a move in the seconds between the claim
 binding and that first reconcile leaves the target to provision a blank disk. The
 original is *orphaned* in Ceph rather than destroyed, and the compiler logs the VM,
 the volume and both pools when it sees a move that early.
+
+### A move is break-before-make
+
+Changing `spec.clusterName` never runs a VM on two pools at once. The compiler retires the VM's
+twin in the old pool — deleted, but held by the `compiled.ectobase.dev/source-released` finalizer —
+and compiles neither the VM nor its disks into the new pool until that twin is gone. It goes when
+the old pool's broker reports `status.released` (nothing left that could run the VM or hold its
+disks), or, if the old pool is lost, when failover has fenced it. The VM's `Moving` condition says
+which pool it is waiting on.
+
+Two writers on one image is otherwise possible: `ReadWriteOnce` is enforced per cluster, and the
+RBD images carry only `layering`, so Ceph does not refuse a second mapper. There is no force flag
+on the machinery itself; what exists instead are two real procedures, for two different problems:
+
+- **The pool is actually gone.** Once its lease has gone stale past the failover threshold, the
+  `ClusterPool` goes `Unknown` (`poolLost`, `dispatch/pkg/failover/failover.go`), and once fence
+  coverage over every node it last reported is provably complete, failover fences the pool and
+  marks its retired twins `status.released` itself (`releaseFencedTwins`) — there is no broker
+  left on that pool to report it. It does so on every pass while the pool stays lost, because a
+  twin is only retired once the rebind has been compiled. This also rebinds every *other* VM still bound to
+  the pool, not just the one waiting on the retired twin.
+- **The pool is up but will not release.** Fencing does not help here: fencing a healthy pool —
+  one whose lease is still renewing — releases nothing, because `releaseFencedTwins` only runs
+  once `poolLost` is already true. Instead, after checking by hand, on the pool, that nothing can
+  still run the VM or write its disks (no KubeVirt `VirtualMachine`, VMI, or virt-launcher pod, and
+  no claim carrying the twin's `workload` label — exactly what the broker's own `letGo` checks,
+  `dispatch/pkg/broker/release.go`), an operator with write access to `compiledvms/status` can
+  make the same report the broker would have made:
+
+  ```sh
+  kubectl patch compiledvms <ns>-<vm> -n pool-<cluster> --subresource=status --type=merge \
+    -p '{"status":{"released":true}}'
+  ```
+
+  This is the operator taking personal responsibility for the no-two-writers proof the machinery
+  would otherwise have made itself; get the manual check wrong and the VM runs in two places.
+
+A retired twin can also be stuck for reasons neither procedure reaches, so only that same manual
+patch (or removing whatever is actually wrong) gets it moving: the pool's `ClusterPool` was
+deleted outright, leaving failover's reconciler nothing to act on; the pool never had a lease to
+begin with, so `poolLost` fails safe rather than trust an absent timestamp; or the twin sits in a
+namespace outside the `pool-<cluster>` convention, left over from an older layout — neither the
+broker's `ReportReleases` nor failover's `releaseFencedTwins` lists outside that namespace.
 
 ## Node fencing for safe reschedule
 

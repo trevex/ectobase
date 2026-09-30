@@ -49,6 +49,18 @@ installed in the cluster. `pki.enabled` MUST match the pool chart's.
 | `pki.reflectorIP` | `fd00:db8:0:1::1` | Fabric-loopback IP agents dial, added as a SAN on the reflector server cert. MUST match the host part of `reflectorAddress`/`reflectorAdmin`. |
 | `dispatchApiserver.serviceIP` | `fd00:db8:0:1::1` | IPv6 fabric address the broker dials the aggregated apiserver at; must be an IP SAN on the serving cert, and must equal the host in the pool chart's `dispatchServer`. |
 
+### Postgres storage
+
+Postgres, behind kine, holds all dispatch cluster state. It runs as one pod with the `Recreate`
+strategy, since two pods cannot share its data directory.
+
+| Value | Default | Meaning |
+| --- | --- | --- |
+| `postgres.persistence.type` | `pvc` | `pvc`: a ReadWriteOnce PersistentVolumeClaim (`postgres-data`), which outlives the release: `helm uninstall` keeps it, so delete it by hand to drop the state. `hostPath`: a node directory, safe only on a single-node cluster. `emptyDir`: lost on every postgres pod restart or template change, for throwaway clusters only. |
+| `postgres.persistence.storageClass` | `""` | StorageClass for `pvc`; empty uses the cluster default. |
+| `postgres.persistence.size` | `1Gi` | Size of the `pvc`. |
+| `postgres.persistence.path` | `/var/lib/ectobase/postgres` | Node directory for `hostPath`, created if missing. |
+
 ---
 
 ## ectobase-pool

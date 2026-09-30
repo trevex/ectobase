@@ -996,6 +996,16 @@ renders (ebpf clab):
                     runStrategy:
                       description: RunStrategy is the KubeVirt run strategy (defaulted upstream by the compiler).
                       type: string
+                    volumes:
+                      description: |-
+                        Volumes are the names of the CompiledVolumeAttachments this VM attaches. Their order here does
+                        not set the guest's disk order: the VM lists the boot disk first, then the rest by name. The
+                        materializer does not create the VM until every one of them exists on the pool: a VM created
+                        before its disks would start from a template without them, and KubeVirt does not re-read the
+                        template for an already-created VMI.
+                      items:
+                        type: string
+                      type: array
                   type: object
                 status:
                   description: |-
@@ -1020,6 +1030,13 @@ renders (ebpf clab):
                           description: NodePrefix is that node's /64 underlay prefix (the fence coordinate).
                           type: string
                       type: object
+                    released:
+                      description: |-
+                        Released is set once the pool this twin was compiled for has let go of the VM — no KubeVirt
+                        VM, VMI or virt-launcher left, and no claim on its disks — or, for a lost pool, once failover
+                        has fenced it. A retired twin is held on the dispatch until this is true, and nothing is
+                        compiled into another pool for the same VM until the retired twin is gone.
+                      type: boolean
                     state:
                       description: State is the materialization state (e.g. Applied, Pending).
                       type: string
@@ -2983,6 +3000,13 @@ renders (ebpf clab):
       - apiGroups:
           - ""
         resources:
+          - persistentvolumeclaims
+          - pods
+        verbs:
+          - list
+      - apiGroups:
+          - ""
+        resources:
           - secrets
         verbs:
           - create
@@ -3014,6 +3038,12 @@ renders (ebpf clab):
           - get
           - list
           - watch
+      - apiGroups:
+          - kubevirt.io
+        resources:
+          - virtualmachines
+        verbs:
+          - get
   31: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
@@ -4117,6 +4147,16 @@ renders (ebpf hw):
                     runStrategy:
                       description: RunStrategy is the KubeVirt run strategy (defaulted upstream by the compiler).
                       type: string
+                    volumes:
+                      description: |-
+                        Volumes are the names of the CompiledVolumeAttachments this VM attaches. Their order here does
+                        not set the guest's disk order: the VM lists the boot disk first, then the rest by name. The
+                        materializer does not create the VM until every one of them exists on the pool: a VM created
+                        before its disks would start from a template without them, and KubeVirt does not re-read the
+                        template for an already-created VMI.
+                      items:
+                        type: string
+                      type: array
                   type: object
                 status:
                   description: |-
@@ -4141,6 +4181,13 @@ renders (ebpf hw):
                           description: NodePrefix is that node's /64 underlay prefix (the fence coordinate).
                           type: string
                       type: object
+                    released:
+                      description: |-
+                        Released is set once the pool this twin was compiled for has let go of the VM — no KubeVirt
+                        VM, VMI or virt-launcher left, and no claim on its disks — or, for a lost pool, once failover
+                        has fenced it. A retired twin is held on the dispatch until this is true, and nothing is
+                        compiled into another pool for the same VM until the retired twin is gone.
+                      type: boolean
                     state:
                       description: State is the materialization state (e.g. Applied, Pending).
                       type: string
@@ -6101,6 +6148,13 @@ renders (ebpf hw):
       - apiGroups:
           - ""
         resources:
+          - persistentvolumeclaims
+          - pods
+        verbs:
+          - list
+      - apiGroups:
+          - ""
+        resources:
           - secrets
         verbs:
           - create
@@ -6132,6 +6186,12 @@ renders (ebpf hw):
           - get
           - list
           - watch
+      - apiGroups:
+          - kubevirt.io
+        resources:
+          - virtualmachines
+        verbs:
+          - get
   31: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
@@ -7235,6 +7295,16 @@ renders (tier1 on):
                     runStrategy:
                       description: RunStrategy is the KubeVirt run strategy (defaulted upstream by the compiler).
                       type: string
+                    volumes:
+                      description: |-
+                        Volumes are the names of the CompiledVolumeAttachments this VM attaches. Their order here does
+                        not set the guest's disk order: the VM lists the boot disk first, then the rest by name. The
+                        materializer does not create the VM until every one of them exists on the pool: a VM created
+                        before its disks would start from a template without them, and KubeVirt does not re-read the
+                        template for an already-created VMI.
+                      items:
+                        type: string
+                      type: array
                   type: object
                 status:
                   description: |-
@@ -7259,6 +7329,13 @@ renders (tier1 on):
                           description: NodePrefix is that node's /64 underlay prefix (the fence coordinate).
                           type: string
                       type: object
+                    released:
+                      description: |-
+                        Released is set once the pool this twin was compiled for has let go of the VM — no KubeVirt
+                        VM, VMI or virt-launcher left, and no claim on its disks — or, for a lost pool, once failover
+                        has fenced it. A retired twin is held on the dispatch until this is true, and nothing is
+                        compiled into another pool for the same VM until the retired twin is gone.
+                      type: boolean
                     state:
                       description: State is the materialization state (e.g. Applied, Pending).
                       type: string
@@ -9222,6 +9299,13 @@ renders (tier1 on):
       - apiGroups:
           - ""
         resources:
+          - persistentvolumeclaims
+          - pods
+        verbs:
+          - list
+      - apiGroups:
+          - ""
+        resources:
           - secrets
         verbs:
           - create
@@ -9253,6 +9337,12 @@ renders (tier1 on):
           - get
           - list
           - watch
+      - apiGroups:
+          - kubevirt.io
+        resources:
+          - virtualmachines
+        verbs:
+          - get
   31: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
@@ -10393,6 +10483,16 @@ renders (tier1 watchdog):
                     runStrategy:
                       description: RunStrategy is the KubeVirt run strategy (defaulted upstream by the compiler).
                       type: string
+                    volumes:
+                      description: |-
+                        Volumes are the names of the CompiledVolumeAttachments this VM attaches. Their order here does
+                        not set the guest's disk order: the VM lists the boot disk first, then the rest by name. The
+                        materializer does not create the VM until every one of them exists on the pool: a VM created
+                        before its disks would start from a template without them, and KubeVirt does not re-read the
+                        template for an already-created VMI.
+                      items:
+                        type: string
+                      type: array
                   type: object
                 status:
                   description: |-
@@ -10417,6 +10517,13 @@ renders (tier1 watchdog):
                           description: NodePrefix is that node's /64 underlay prefix (the fence coordinate).
                           type: string
                       type: object
+                    released:
+                      description: |-
+                        Released is set once the pool this twin was compiled for has let go of the VM — no KubeVirt
+                        VM, VMI or virt-launcher left, and no claim on its disks — or, for a lost pool, once failover
+                        has fenced it. A retired twin is held on the dispatch until this is true, and nothing is
+                        compiled into another pool for the same VM until the retired twin is gone.
+                      type: boolean
                     state:
                       description: State is the materialization state (e.g. Applied, Pending).
                       type: string
@@ -12380,6 +12487,13 @@ renders (tier1 watchdog):
       - apiGroups:
           - ""
         resources:
+          - persistentvolumeclaims
+          - pods
+        verbs:
+          - list
+      - apiGroups:
+          - ""
+        resources:
           - secrets
         verbs:
           - create
@@ -12411,6 +12525,12 @@ renders (tier1 watchdog):
           - get
           - list
           - watch
+      - apiGroups:
+          - kubevirt.io
+        resources:
+          - virtualmachines
+        verbs:
+          - get
   31: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
@@ -13561,6 +13681,16 @@ renders with vm-materializer enabled:
                     runStrategy:
                       description: RunStrategy is the KubeVirt run strategy (defaulted upstream by the compiler).
                       type: string
+                    volumes:
+                      description: |-
+                        Volumes are the names of the CompiledVolumeAttachments this VM attaches. Their order here does
+                        not set the guest's disk order: the VM lists the boot disk first, then the rest by name. The
+                        materializer does not create the VM until every one of them exists on the pool: a VM created
+                        before its disks would start from a template without them, and KubeVirt does not re-read the
+                        template for an already-created VMI.
+                      items:
+                        type: string
+                      type: array
                   type: object
                 status:
                   description: |-
@@ -13585,6 +13715,13 @@ renders with vm-materializer enabled:
                           description: NodePrefix is that node's /64 underlay prefix (the fence coordinate).
                           type: string
                       type: object
+                    released:
+                      description: |-
+                        Released is set once the pool this twin was compiled for has let go of the VM — no KubeVirt
+                        VM, VMI or virt-launcher left, and no claim on its disks — or, for a lost pool, once failover
+                        has fenced it. A retired twin is held on the dispatch until this is true, and nothing is
+                        compiled into another pool for the same VM until the retired twin is gone.
+                      type: boolean
                     state:
                       description: State is the materialization state (e.g. Applied, Pending).
                       type: string
@@ -15548,6 +15685,13 @@ renders with vm-materializer enabled:
       - apiGroups:
           - ""
         resources:
+          - persistentvolumeclaims
+          - pods
+        verbs:
+          - list
+      - apiGroups:
+          - ""
+        resources:
           - secrets
         verbs:
           - create
@@ -15579,6 +15723,12 @@ renders with vm-materializer enabled:
           - get
           - list
           - watch
+      - apiGroups:
+          - kubevirt.io
+        resources:
+          - virtualmachines
+        verbs:
+          - get
   31: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding

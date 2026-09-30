@@ -24,6 +24,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
+// attachmentTwinName is the name of the CompiledVolumeAttachment compiled for one of a VM's
+// volumes. The CompiledVM lists its disks by this name, so both compilers must share it.
+func attachmentTwinName(vmNamespace, vmName, volume string) string {
+	return compiledTwinName(vmNamespace, vmName) + "-" + volume
+}
+
 // CompileVolumeAttachments lowers a VirtualMachine + its referenced Volumes into one
 // CompiledVolumeAttachment per VolumeRef, each cluster-bound (from placement) and
 // workload-labelled. A Volume with a BootImage yields Boot=true. Pure.
@@ -43,7 +49,7 @@ func CompileVolumeAttachments(vm *computev1.VirtualMachine, volumes []storagev1.
 			// Namespace-qualified: two VMs of the same name in different tenant namespaces would
 			// otherwise collide on this name once they share one pool namespace.
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      compiledTwinName(vm.Namespace, vm.Name) + "-" + ref.Name,
+				Name:      attachmentTwinName(vm.Namespace, vm.Name, ref.Name),
 				Namespace: validate.PoolNamespace(placement.ClusterName),
 			},
 			Spec: compiledv1.CompiledVolumeAttachmentSpec{
@@ -143,7 +149,12 @@ func unprotectedRebinds(desired, have []compiledv1.CompiledVolumeAttachment, vol
 
 // CompiledVolumeAttachmentReconciler upserts a VM's CompiledVolumeAttachments (one per
 // VolumeRef) and GCs attachments for VolumeRefs that were removed.
-type CompiledVolumeAttachmentReconciler struct{ Client client.Client }
+type CompiledVolumeAttachmentReconciler struct {
+	Client client.Client
+	// APIReader is an UNCACHED reader for the move gate: a twin the informer has not seen yet must
+	// still close it.
+	APIReader client.Reader
+}
 
 func (r *CompiledVolumeAttachmentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	var vm computev1.VirtualMachine
@@ -172,6 +183,15 @@ func (r *CompiledVolumeAttachmentReconciler) Reconcile(ctx context.Context, req 
 	}
 	placement := Placement{ClusterName: vm.Spec.ClusterName, WorkloadID: vm.Name}
 	desired := CompileVolumeAttachments(&vm, volList.Items, placement)
+	// The same gate as the CompiledVM compiler (movegate.go): while any other CompiledVM twin of
+	// this VM exists, its pool may still be running the VM, so no disk is compiled into this pool.
+	// Stale attachments elsewhere are still removed below — a disk leaves at once; only arriving
+	// waits.
+	vmTwins, err := gateTwins(ctx, r.APIReader, vm.Namespace, vm.Name)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	gateOpen := len(awaitingRelease(validate.PoolNamespace(vm.Spec.ClusterName), vmTwins)) == 0
 	want := map[types.NamespacedName]compiledv1.CompiledVolumeAttachment{}
 	keep := map[types.NamespacedName]bool{}
 	for _, a := range desired {
@@ -219,7 +239,7 @@ func (r *CompiledVolumeAttachmentReconciler) Reconcile(ctx context.Context, req 
 		// literals would churn Updates. Also refresh the workload label defensively
 		// (immutable in practice — it's vm.Name, the list key — but keeps parity with
 		// the 1:1 CompiledNIC/CompiledVM compilers).
-		if !equality.Semantic.DeepEqual(cur.Spec, w.Spec) || cur.Labels["workload"] != w.Labels["workload"] {
+		if gateOpen && (!equality.Semantic.DeepEqual(cur.Spec, w.Spec) || cur.Labels["workload"] != w.Labels["workload"]) {
 			cur.Spec = w.Spec
 			if cur.Labels == nil {
 				cur.Labels = map[string]string{}
@@ -231,6 +251,9 @@ func (r *CompiledVolumeAttachmentReconciler) Reconcile(ctx context.Context, req 
 		}
 	}
 	for key, w := range want {
+		if !gateOpen {
+			break
+		}
 		if haveKeys[key] {
 			continue
 		}
@@ -254,31 +277,37 @@ func (r *CompiledVolumeAttachmentReconciler) SetupWithManager(mgr ctrl.Manager) 
 		// Not Owns(): the twin lives in the pool namespace, and EnqueueRequestForOwner derives the
 		// request from the DEPENDENT's namespace, which would enqueue a VM key that does not exist.
 		Watches(&compiledv1.CompiledVolumeAttachment{}, handler.EnqueueRequestsFromMapFunc(requestForSource)).
+		// The gate opens when a retired CompiledVM twin disappears, which is not an attachment
+		// event — so watch the VM twins too, or the target's disks wait for an unrelated resync.
+		Watches(&compiledv1.CompiledVM{}, handler.EnqueueRequestsFromMapFunc(requestForSource)).
 		// Only Volume spec changes (Size/StorageClass/BootImage) affect the compiled
 		// attachment; GenerationChangedPredicate skips re-compiling on Volume status writes.
-		Watches(&storagev1.Volume{}, handler.EnqueueRequestsFromMapFunc(r.vmsForVolume),
+		Watches(&storagev1.Volume{}, handler.EnqueueRequestsFromMapFunc(vmsForVolume(r.Client)),
 			builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Complete(r)
 }
 
 // vmsForVolume maps a Volume event to reconcile requests for VMs (same namespace) that reference it.
-func (r *CompiledVolumeAttachmentReconciler) vmsForVolume(ctx context.Context, obj client.Object) []reconcile.Request {
-	vol, ok := obj.(*storagev1.Volume)
-	if !ok {
-		return nil
-	}
-	var vms computev1.VirtualMachineList
-	if err := r.Client.List(ctx, &vms, client.InNamespace(vol.Namespace)); err != nil {
-		return nil
-	}
-	var reqs []reconcile.Request
-	for i := range vms.Items {
-		for _, ref := range vms.Items[i].Spec.VolumeRefs {
-			if ref.Name == vol.Name {
-				reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: vms.Items[i].Namespace, Name: vms.Items[i].Name}})
-				break
+// Shared by both VM compilers: each lowers something from the VM's Volumes.
+func vmsForVolume(c client.Client) handler.MapFunc {
+	return func(ctx context.Context, obj client.Object) []reconcile.Request {
+		vol, ok := obj.(*storagev1.Volume)
+		if !ok {
+			return nil
+		}
+		var vms computev1.VirtualMachineList
+		if err := c.List(ctx, &vms, client.InNamespace(vol.Namespace)); err != nil {
+			return nil
+		}
+		var reqs []reconcile.Request
+		for i := range vms.Items {
+			for _, ref := range vms.Items[i].Spec.VolumeRefs {
+				if ref.Name == vol.Name {
+					reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: vms.Items[i].Namespace, Name: vms.Items[i].Name}})
+					break
+				}
 			}
 		}
+		return reqs
 	}
-	return reqs
 }

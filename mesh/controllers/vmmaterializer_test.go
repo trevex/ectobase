@@ -12,6 +12,7 @@ import (
 	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -19,6 +20,7 @@ import (
 	kubevirtv1 "kubevirt.io/api/core/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 )
 
@@ -270,5 +272,183 @@ func TestMaterializer_CreatesVM(t *testing.T) {
 	// Idempotent: a second reconcile must not error and must not duplicate.
 	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKey{Namespace: "default", Name: "default-vm1"}}); err != nil {
 		t.Fatalf("second reconcile: %v", err)
+	}
+}
+
+func TestReadyToMaterialize(t *testing.T) {
+	att := func(name string, boot bool) compiledv1.CompiledVolumeAttachment {
+		return compiledv1.CompiledVolumeAttachment{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: name}, Spec: compiledv1.CompiledVolumeAttachmentSpec{Boot: boot}}
+	}
+	type atts = []compiledv1.CompiledVolumeAttachment
+	for _, tc := range []struct {
+		name  string
+		image string
+		vols  []string
+		atts  atts
+		ready bool
+	}{
+		{name: "every named disk present", vols: []string{"ns-vm1-boot", "ns-vm1-data"}, atts: atts{att("ns-vm1-data", false), att("ns-vm1-boot", true)}, ready: true},
+		{name: "one of two disks present", vols: []string{"ns-vm1-boot", "ns-vm1-data"}, atts: atts{att("ns-vm1-boot", true)}},
+		{name: "no disk present yet", vols: []string{"ns-vm1-boot"}},
+		// The image is no substitute for a named disk: booting from it would be the empty-template
+		// failure all over again for a disk-booted VM, and the wrong disk for any other.
+		{name: "named disk missing, image set", image: "quay.io/containerdisks/fedora:41", vols: []string{"ns-vm1-boot"}},
+		{name: "an unnamed extra attachment is not a named one", vols: []string{"ns-vm1-boot"}, atts: atts{att("ns-vm1-other", true)}},
+		// The boot Volume compiled late, so only the data disk is named: every named disk is here,
+		// but with no image nothing of it is bootable, and a VMI started from it runs forever
+		// without booting — KubeVirt never recreates it.
+		{name: "only a data disk named, no image", vols: []string{"ns-vm1-data"}, atts: atts{att("ns-vm1-data", false)}},
+		{name: "a named boot disk present, no image", vols: []string{"ns-vm1-boot"}, atts: atts{att("ns-vm1-boot", true)}, ready: true},
+		// A boot disk that is present but not named does not count: it is not going into the VM.
+		{name: "boot disk present but not named", vols: []string{"ns-vm1-data"}, atts: atts{att("ns-vm1-data", false), att("ns-vm1-boot", true)}},
+		{name: "a data disk alongside an image", image: "quay.io/containerdisks/fedora:41", vols: []string{"ns-vm1-data"}, atts: atts{att("ns-vm1-data", false)}, ready: true},
+		{name: "containerDisk VM", image: "quay.io/containerdisks/fedora:41", ready: true},
+		{name: "nothing to boot from", ready: false},
+		// Compiled before spec.volumes existed (or before its Volumes did): whatever attachments are
+		// here is all it knows — but it still needs one of them to boot from.
+		{name: "legacy twin with a boot attachment", atts: atts{att("ns-vm1-data", false), att("ns-vm1-boot", true)}, ready: true},
+		{name: "legacy twin with only a data attachment", atts: atts{att("ns-vm1-data", false)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cvm := &compiledv1.CompiledVM{
+				ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "ns-vm1"},
+				Spec:       compiledv1.CompiledVMSpec{Image: tc.image, Volumes: tc.vols},
+			}
+			ok, why := readyToMaterialize(cvm, tc.atts)
+			if ok != tc.ready {
+				t.Fatalf("ready = %v (%q), want %v", ok, why, tc.ready)
+			}
+			if !ok && why == "" {
+				t.Fatalf("not ready but no reason given")
+			}
+		})
+	}
+}
+
+// TestMaterializer_WaitsForItsDisks is the live failure: the broker delivered a disk-booted
+// CompiledVM before its attachments, and the materializer created the KubeVirt VM from a template
+// with an empty containerDisk — whose VMI then stayed Pending for good. The VM must not be
+// created until the disks it names are here, and a VM created before this rule (an upgrade) is
+// left exactly as it is.
+func TestMaterializer_WaitsForItsDisks(t *testing.T) {
+	scheme := runtime.NewScheme()
+	for _, add := range []func(*runtime.Scheme) error{compiledv1.AddToScheme, kubevirtv1.AddToScheme} {
+		if err := add(scheme); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cvm := &compiledv1.CompiledVM{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "default-vm1", Labels: map[string]string{"workload": "vm1"}},
+		Spec:       compiledv1.CompiledVMSpec{RunStrategy: "Always", Volumes: []string{"default-vm1-boot", "default-vm1-data"}},
+	}
+	boot := &compiledv1.CompiledVolumeAttachment{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "default-vm1-boot", Labels: map[string]string{"workload": "vm1"}},
+		Spec:       compiledv1.CompiledVolumeAttachmentSpec{Boot: true},
+	}
+	ctx := context.Background()
+	req := ctrl.Request{NamespacedName: client.ObjectKey{Namespace: "default", Name: "default-vm1"}}
+
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cvm, boot).Build()
+	if _, err := (&VMMaterializerReconciler{Client: c}).Reconcile(ctx, req); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if err := c.Get(ctx, req.NamespacedName, &kubevirtv1.VirtualMachine{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("a VM was materialized with one of its two disks still missing (get err = %v)", err)
+	}
+
+	// Upgrade: the KubeVirt VM already exists. Waiting must not rewrite it either.
+	existing := &kubevirtv1.VirtualMachine{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "default-vm1"}}
+	c = fake.NewClientBuilder().WithScheme(scheme).WithObjects(cvm, boot, existing).Build()
+	var before kubevirtv1.VirtualMachine
+	if err := c.Get(ctx, req.NamespacedName, &before); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (&VMMaterializerReconciler{Client: c}).Reconcile(ctx, req); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	var after kubevirtv1.VirtualMachine
+	if err := c.Get(ctx, req.NamespacedName, &after); err != nil {
+		t.Fatal(err)
+	}
+	if after.ResourceVersion != before.ResourceVersion {
+		t.Fatalf("an existing VM was rewritten while its disks were still missing")
+	}
+}
+
+// TestMaterializer_CreatesVMOnceItsDisksArrive runs the same arrival order against a real
+// apiserver (so the CRD must also carry spec.volumes, or it is pruned and nothing waits): nothing
+// while the attachment is missing, then a VM booting from it — never from a containerDisk.
+func TestMaterializer_CreatesVMOnceItsDisksArrive(t *testing.T) {
+	if os.Getenv("KUBEBUILDER_ASSETS") == "" {
+		t.Skip("KUBEBUILDER_ASSETS unset; run inside `nix develop` for the envtest apiserver assets")
+	}
+	scheme := runtime.NewScheme()
+	for _, add := range []func(*runtime.Scheme) error{compiledv1.AddToScheme, kubevirtv1.AddToScheme} {
+		if err := add(scheme); err != nil {
+			t.Fatal(err)
+		}
+	}
+	metav1.AddToGroupVersion(scheme, schema.GroupVersion{Version: "v1"})
+	env := &envtest.Environment{
+		CRDDirectoryPaths:     []string{filepath.Join("..", "..", "charts", "ectobase-pool", "crd-bases"), kubeVirtCRDPath()},
+		ErrorIfCRDPathMissing: true,
+	}
+	cfg, err := env.Start()
+	if err != nil {
+		t.Fatalf("start envtest: %v", err)
+	}
+	defer func() { _ = env.Stop() }()
+	c, err := client.New(cfg, client.Options{Scheme: scheme})
+	if err != nil {
+		t.Fatalf("client: %v", err)
+	}
+	ctx := context.Background()
+	req := ctrl.Request{NamespacedName: client.ObjectKey{Namespace: "default", Name: "default-vm1"}}
+	r := &VMMaterializerReconciler{Client: c}
+
+	cvm := &compiledv1.CompiledVM{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "default-vm1", Labels: map[string]string{"workload": "vm1"}},
+		Spec:       compiledv1.CompiledVMSpec{ClusterName: "cluster-a", RunStrategy: "Always", Volumes: []string{"default-vm1-boot"}},
+	}
+	if err := c.Create(ctx, cvm); err != nil {
+		t.Fatalf("create compiledvm: %v", err)
+	}
+	// A disk whose volumeRef was removed but which the dispatch has not collected yet: it still
+	// carries the workload label, and must neither satisfy the wait nor enter the template.
+	stale := &compiledv1.CompiledVolumeAttachment{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "default-vm1-old", Labels: map[string]string{"workload": "vm1"}},
+		Spec:       compiledv1.CompiledVolumeAttachmentSpec{ClusterName: "cluster-a", Size: resource.MustParse("1Gi")},
+	}
+	if err := c.Create(ctx, stale); err != nil {
+		t.Fatalf("create stale attachment: %v", err)
+	}
+	if _, err := r.Reconcile(ctx, req); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if err := c.Get(ctx, req.NamespacedName, &kubevirtv1.VirtualMachine{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("VM materialized before its disk arrived (get err = %v)", err)
+	}
+
+	att := &compiledv1.CompiledVolumeAttachment{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "default-vm1-boot", Labels: map[string]string{"workload": "vm1"}},
+		Spec:       compiledv1.CompiledVolumeAttachmentSpec{ClusterName: "cluster-a", Size: resource.MustParse("1Gi"), Boot: true},
+	}
+	if err := c.Create(ctx, att); err != nil {
+		t.Fatalf("create attachment: %v", err)
+	}
+	// The attachment's arrival is what re-enqueues the VM; the mapping must name it.
+	if got := r.cvmsForAttachment(ctx, att); len(got) != 1 || got[0].NamespacedName != req.NamespacedName {
+		t.Fatalf("attachment maps to %v, want %v", got, req.NamespacedName)
+	}
+	if _, err := r.Reconcile(ctx, req); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	var vm kubevirtv1.VirtualMachine
+	if err := c.Get(ctx, req.NamespacedName, &vm); err != nil {
+		t.Fatalf("get materialized vm: %v", err)
+	}
+	vols := vm.Spec.Template.Spec.Volumes
+	if len(vols) != 1 || vols[0].DataVolume == nil || vols[0].DataVolume.Name != "default-vm1-boot" {
+		t.Fatalf("want the VM to boot from its DataVolume and nothing else, got volumes %+v", vols)
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	storagev1 "github.com/trevex/ectobase/api/storage/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -73,11 +75,14 @@ func TestCompiledTeardownFinalizerEnvtest(t *testing.T) {
 		t.Fatalf("setup nic reconciler: %v", err)
 	}
 	// Both of these root on VirtualMachine — the dual-finalizer case below depends on it.
-	if err := (&CompiledVMReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
+	if err := (&CompiledVMReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader()}).SetupWithManager(mgr); err != nil {
 		t.Fatalf("setup vm reconciler: %v", err)
 	}
-	if err := (&CompiledVolumeAttachmentReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
+	if err := (&CompiledVolumeAttachmentReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader()}).SetupWithManager(mgr); err != nil {
 		t.Fatalf("setup attachment reconciler: %v", err)
+	}
+	if err := (&CompiledVMReleaseReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
+		t.Fatalf("setup release reconciler: %v", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -94,6 +99,7 @@ func TestCompiledTeardownFinalizerEnvtest(t *testing.T) {
 	// so the twins all land in this one per-pool namespace. The apiserver enforces
 	// NamespaceLifecycle, so it must exist before any compiler can create a twin in it.
 	mustCreate(ctx, t, direct, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "pool-c1"}})
+	mustCreate(ctx, t, direct, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "pool-c2"}})
 
 	t.Run("NICTeardown", func(t *testing.T) {
 		nic := &netv1.NetworkInterface{}
@@ -166,9 +172,122 @@ func TestCompiledTeardownFinalizerEnvtest(t *testing.T) {
 		mustExistEventually(ctx, t, direct, attTwin, &compiledv1.CompiledVolumeAttachment{})
 
 		mustDelete(ctx, t, direct, vm)
+		// Deleting a VM retires its twin like any move does; it goes once its pool reports release.
+		releaseAsBroker(ctx, t, direct, vmTwin)
 		mustBeGoneEventually(ctx, t, direct, vmTwin, &compiledv1.CompiledVM{})
 		mustBeGoneEventually(ctx, t, direct, attTwin, &compiledv1.CompiledVolumeAttachment{})
 		mustBeGoneEventually(ctx, t, direct, client.ObjectKeyFromObject(vm), &computev1.VirtualMachine{})
+	})
+
+	t.Run("VolumeAfterVM", func(t *testing.T) {
+		// A Volume created after its VM must still reach the CompiledVM's spec.volumes, or the pool
+		// materializes the VM without waiting for that disk.
+		vm := &computev1.VirtualMachine{}
+		vm.Name = "vm-late-vol"
+		vm.Namespace = "default"
+		vm.Spec.ClusterName = "c1"
+		vm.Spec.VolumeRefs = []computev1.LocalObjectReference{{Name: "vol-late"}}
+		mustCreate(ctx, t, direct, vm)
+
+		vmTwin := client.ObjectKey{Namespace: "pool-c1", Name: "default-vm-late-vol"}
+		var twin compiledv1.CompiledVM
+		mustExistEventually(ctx, t, direct, vmTwin, &twin)
+		if len(twin.Spec.Volumes) != 0 {
+			t.Fatalf("spec.volumes names a Volume that does not exist yet: %v", twin.Spec.Volumes)
+		}
+
+		vol := &storagev1.Volume{}
+		vol.Name = "vol-late"
+		vol.Namespace = "default"
+		vol.Spec.Size = resource.MustParse("1Gi")
+		vol.Spec.BootImage = "quay.io/containerdisks/fedora:41"
+		mustCreate(ctx, t, direct, vol)
+
+		want := []string{"default-vm-late-vol-vol-late"}
+		eventually(t, 20*time.Second, func() error {
+			if err := direct.Get(ctx, vmTwin, &twin); err != nil {
+				return err
+			}
+			if !slices.Equal(twin.Spec.Volumes, want) {
+				return fmt.Errorf("spec.volumes = %v, want %v", twin.Spec.Volumes, want)
+			}
+			return nil
+		})
+	})
+
+	t.Run("MoveWaitsForSourceRelease", func(t *testing.T) {
+		vol := &storagev1.Volume{}
+		vol.Name = "vol-move"
+		vol.Namespace = "default"
+		vol.Spec.Size = resource.MustParse("1Gi")
+		mustCreate(ctx, t, direct, vol)
+
+		vm := &computev1.VirtualMachine{}
+		vm.Name = "vm-move"
+		vm.Namespace = "default"
+		vm.Spec.ClusterName = "c1"
+		vm.Spec.VolumeRefs = []computev1.LocalObjectReference{{Name: "vol-move"}}
+		mustCreate(ctx, t, direct, vm)
+
+		srcVM := client.ObjectKey{Namespace: "pool-c1", Name: "default-vm-move"}
+		srcAtt := client.ObjectKey{Namespace: "pool-c1", Name: "default-vm-move-vol-move"}
+		dstVM := client.ObjectKey{Namespace: "pool-c2", Name: "default-vm-move"}
+		dstAtt := client.ObjectKey{Namespace: "pool-c2", Name: "default-vm-move-vol-move"}
+		mustExistEventually(ctx, t, direct, srcVM, &compiledv1.CompiledVM{})
+		mustExistEventually(ctx, t, direct, srcAtt, &compiledv1.CompiledVolumeAttachment{})
+
+		var cur computev1.VirtualMachine
+		if err := direct.Get(ctx, client.ObjectKeyFromObject(vm), &cur); err != nil {
+			t.Fatal(err)
+		}
+		cur.Spec.ClusterName = "c2"
+		if err := direct.Update(ctx, &cur); err != nil {
+			t.Fatal(err)
+		}
+
+		// The source's attachment goes at once; the source VM twin is retired and held.
+		mustBeGoneEventually(ctx, t, direct, srcAtt, &compiledv1.CompiledVolumeAttachment{})
+		// Nothing lands in the target while the source has not released — hold for a few seconds
+		// of reconcile churn to make "never" meaningful.
+		for i := 0; i < 15; i++ {
+			for _, k := range []struct {
+				key client.ObjectKey
+				obj client.Object
+			}{{dstVM, &compiledv1.CompiledVM{}}, {dstAtt, &compiledv1.CompiledVolumeAttachment{}}} {
+				if err := direct.Get(ctx, k.key, k.obj); err == nil {
+					t.Fatalf("%s compiled into the target before the source released the VM", k.key)
+				}
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+		var moving computev1.VirtualMachine
+		if err := direct.Get(ctx, client.ObjectKeyFromObject(vm), &moving); err != nil {
+			t.Fatal(err)
+		}
+		if c := meta.FindStatusCondition(moving.Status.Conditions, "Moving"); c == nil ||
+			c.Status != metav1.ConditionTrue || c.Reason != "WaitingForSourceRelease" {
+			t.Fatalf("want Moving=True/WaitingForSourceRelease while held, got %+v", c)
+		}
+
+		releaseAsBroker(ctx, t, direct, srcVM)
+		mustBeGoneEventually(ctx, t, direct, srcVM, &compiledv1.CompiledVM{})
+		mustExistEventually(ctx, t, direct, dstVM, &compiledv1.CompiledVM{})
+		mustExistEventually(ctx, t, direct, dstAtt, &compiledv1.CompiledVolumeAttachment{})
+
+		deadline := time.Now().Add(30 * time.Second)
+		for {
+			if err := direct.Get(ctx, client.ObjectKeyFromObject(vm), &moving); err != nil {
+				t.Fatal(err)
+			}
+			if c := meta.FindStatusCondition(moving.Status.Conditions, "Moving"); c != nil &&
+				c.Status == metav1.ConditionFalse && c.Reason == "Moved" {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("Moving never closed: %+v", moving.Status.Conditions)
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
 	})
 }
 
@@ -202,5 +321,28 @@ func mustDelete(ctx context.Context, t *testing.T, c client.Client, obj client.O
 	t.Helper()
 	if err := c.Delete(ctx, obj); err != nil {
 		t.Fatalf("delete %s: %v", client.ObjectKeyFromObject(obj), err)
+	}
+}
+
+// releaseAsBroker plays the source pool's broker: it waits for the twin to be retired
+// (Terminating), then reports the pool has let go of it.
+func releaseAsBroker(ctx context.Context, t *testing.T, c client.Client, key client.ObjectKey) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		var twin compiledv1.CompiledVM
+		err := c.Get(ctx, key, &twin)
+		if err == nil && !twin.DeletionTimestamp.IsZero() {
+			orig := twin.DeepCopy()
+			twin.Status.Released = true
+			if err := c.Status().Patch(ctx, &twin, client.MergeFrom(orig)); err != nil {
+				t.Fatalf("report release of %s: %v", key, err)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("twin %s was never retired (last err=%v)", key, err)
+		}
+		time.Sleep(200 * time.Millisecond)
 	}
 }

@@ -121,15 +121,18 @@ func main() {
 		log.Fatalf("setup compilednic controller: %v", err)
 	}
 
-	if err := (&controllers.CompiledVMReconciler{Client: mgr.GetClient(), NetworkName: vmNetworkName}).SetupWithManager(mgr); err != nil {
+	if err := (&controllers.CompiledVMReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(), NetworkName: vmNetworkName}).SetupWithManager(mgr); err != nil {
 		log.Fatalf("setup compiledvm controller: %v", err)
+	}
+	if err := (&controllers.CompiledVMReleaseReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
+		log.Fatalf("setup compiledvm release controller: %v", err)
 	}
 
 	if err := (&controllers.CompiledContainerReconciler{Client: mgr.GetClient(), NetworkName: networkName}).SetupWithManager(mgr); err != nil {
 		log.Fatalf("setup compiledcontainer controller: %v", err)
 	}
 
-	if err := (&controllers.CompiledVolumeAttachmentReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
+	if err := (&controllers.CompiledVolumeAttachmentReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader()}).SetupWithManager(mgr); err != nil {
 		log.Fatalf("setup compiledvolumeattachment controller: %v", err)
 	}
 

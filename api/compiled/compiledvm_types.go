@@ -22,6 +22,12 @@ type CompiledVMSpec struct {
 	Interfaces []CompiledVMInterface
 	// CloudInit, if set, is guest bootstrap delivered as a cloud-init NoCloud datasource.
 	CloudInit *CloudInit
+	// Volumes are the names of the CompiledVolumeAttachments this VM attaches. Their order here does
+	// not set the guest's disk order: the VM lists the boot disk first, then the rest by name. The
+	// materializer does not create the VM until every one of them exists on the pool: a VM created
+	// before its disks would start from a template without them, and KubeVirt does not re-read the
+	// template for an already-created VMI.
+	Volumes []string
 }
 
 // CompiledVMInterface is a resolved overlay interface for a VM.
@@ -47,6 +53,11 @@ type CompiledVMStatus struct {
 	// here rather than directly on the source VirtualMachine because the broker's writes are
 	// scoped to its own pool namespace; a mesh controller mirrors it onto the VirtualMachine.
 	Placement *VMPlacement
+	// Released is set once the pool this twin was compiled for has let go of the VM — no KubeVirt
+	// VM, VMI or virt-launcher left, and no claim on its disks — or, for a lost pool, once failover
+	// has fenced it. A retired twin is held on the dispatch until this is true, and nothing is
+	// compiled into another pool for the same VM until the retired twin is gone.
+	Released bool
 }
 
 // VMPlacement is a VM's actual running location, as observed by the pool that runs it.

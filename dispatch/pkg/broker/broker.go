@@ -155,6 +155,11 @@ func (b *Broker) SyncCompiledVMs(ctx context.Context) error {
 	}
 	want := make(map[string]compiledv1.CompiledVM, len(desired.Items))
 	for _, o := range desired.Items {
+		// A twin being deleted is not wanted, even while a finalizer keeps it visible: it is a VM
+		// this pool must STOP, and ReportReleases then says when it has.
+		if !o.DeletionTimestamp.IsZero() {
+			continue
+		}
 		want[downstreamKey(&o)] = o
 	}
 	have := &compiledv1.CompiledVMList{}

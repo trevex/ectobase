@@ -12,6 +12,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	computev1 "github.com/trevex/ectobase/api/compute/v1alpha1"
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
 	platformv1 "github.com/trevex/ectobase/api/platform/v1alpha1"
@@ -28,6 +29,9 @@ func testScheme(t *testing.T) *runtime.Scheme {
 		t.Fatal(err)
 	}
 	if err := platformv1.AddToScheme(s); err != nil {
+		t.Fatal(err)
+	}
+	if err := compiledv1.AddToScheme(s); err != nil {
 		t.Fatal(err)
 	}
 	return s

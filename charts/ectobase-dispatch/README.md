@@ -7,7 +7,7 @@ Helm chart for the ectobase fleet control-plane ("dispatch") cluster. Deploys:
 - **dispatch-controller** — controller-runtime manager running the ClusterPool reconciler +
   VM scheduler/failover against the aggregated apiserver.
 - **kine** — etcd-v3 shim over postgres, providing storage for the aggregated apiserver.
-- **postgres** — ephemeral postgres instance (dev/smoke; not HA).
+- **postgres** — single postgres instance backing kine; its data persists on a PVC by default (not HA).
 - **mesh-controller** (compiler) — compiles NIC/VM/Container objects into CompiledNIC/VM/Container.
 - **reflector** — routebus gRPC rendezvous server for the per-pool mesh agents.
 
@@ -27,3 +27,60 @@ is generated from `files/<role>/role.yaml` (committed via `make generate`).
 | `images.mesh` | `ghcr.io/trevex/ectobase/mesh:dev` | Compiler + reflector image |
 | `images.kine` | `rancher/kine:v0.13.0` | Kine image |
 | `images.postgres` | `postgres:16` | Postgres image |
+| `postgres.persistence.type` | `pvc` | Where postgres keeps ALL dispatch state: `pvc`, `hostPath`, or `emptyDir` (lost on every postgres pod restart) |
+| `postgres.persistence.storageClass` | `""` | StorageClass for `pvc`; empty uses the cluster default |
+| `postgres.persistence.size` | `1Gi` | Size of the `pvc` |
+| `postgres.persistence.path` | `/var/lib/ectobase/postgres` | Node directory for `hostPath` (single-node clusters only) |
+
+## Upgrading from a chart version before Recreate
+
+The `postgres` and `reflector` Deployments now roll out with `Recreate`. A Deployment first
+created under the default `RollingUpdate` carries an apiserver-defaulted
+`spec.strategy.rollingUpdate` that Helm 4's server-side apply does not own and so never removes,
+and the API rejects `Recreate` next to it. Upgrading such a release fails with:
+
+```text
+Error: UPGRADE FAILED: server-side apply failed for object system/postgres apps/v1, Kind=Deployment: Deployment.apps "postgres" is invalid: spec.strategy.rollingUpdate: Forbidden: may not be specified when strategy `type` is 'Recreate'
+```
+
+Before that first upgrade, switch both Deployments once (the namespaces are the defaults of
+`namespace` and `agentNamespace`; use yours if you override them):
+
+```sh
+kubectl -n system patch deploy postgres --type=merge \
+  -p '{"spec":{"strategy":{"type":"Recreate","rollingUpdate":null}}}'
+kubectl -n ectobase-system patch deploy reflector --type=merge \
+  -p '{"spec":{"strategy":{"type":"Recreate","rollingUpdate":null}}}'
+```
+
+This is a one-time step. The strategy is not part of the pod template, so the patch starts no
+rollout, and it sets the value the chart applies, so it never conflicts with Helm afterwards. The
+lab runs it on every deploy (`migrateRecreateDeployments` in `test/lab/internal/deploy/ectobase.go`).
+
+Moving `postgres.persistence.type` from `emptyDir` to `pvc` (or `hostPath`) is a separate one-time
+transition with its own cost, seen live on 2026-09-30: nothing carries the old emptyDir's data
+across, so the first upgrade starts postgres on an empty data directory.
+
+1. All dispatch state from before that upgrade is lost — once, on this transition only.
+2. kine keeps failing with `relation "kine" does not exist`, because it creates its schema only
+   at startup and had already done so against the emptyDir before postgres came back empty.
+   Restart it: `kubectl -n system rollout restart deploy/kine`.
+3. The dispatch apiserver keeps serving pre-upgrade objects from its watch cache (for example a
+   `ClusterPool` with the old `creationTimestamp`), and nothing converges until it and the
+   controllers reading the same objects are restarted too:
+   `kubectl -n system rollout restart deploy/dispatch-apiserver deploy/dispatch-controller` and
+   `kubectl -n ectobase-system rollout restart deploy/mesh-controller`. Then re-run the
+   install/upgrade so the objects are recreated against the now-empty store.
+
+This sequence is only needed on the emptyDir-to-persistent transition. After that, postgres
+restarting on its own keeps all state: deleting the postgres pod live left every `ClusterPool` in
+place with its lease still renewing, with no manual step.
+
+Upgrade order matters too. Upgrade every pool chart (its `dispatch-broker` Deployment) before this
+one: an un-upgraded broker keeps recreating a retiring `CompiledVM` twin's VM and disks instead of
+letting them go, and has no release report to send, so a move off that pool or a delete of a VM on
+it hangs until the pool chart is upgraded. And land this chart's own three Deployments —
+`dispatch-apiserver`, `dispatch-controller`, `mesh-controller` — from the same `helm upgrade`
+rather than patching one image ahead of the others: an old `dispatch-controller` never releases a
+fenced pool's retired twins, so a Tier-2 failover would hang. See
+[Upgrade order](../../docs/operations/deploy-helm.md#upgrade-order) for the full explanation.

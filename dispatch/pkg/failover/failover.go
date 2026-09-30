@@ -13,13 +13,21 @@ import (
 	"fmt"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	computev1 "github.com/trevex/ectobase/api/compute/v1alpha1"
 	platformv1 "github.com/trevex/ectobase/api/platform/v1alpha1"
+	"github.com/trevex/ectobase/api/validate"
 	"github.com/trevex/ectobase/dispatch/pkg/clusterpool"
 	"github.com/trevex/ectobase/dispatch/pkg/scheduler"
 )
@@ -94,7 +102,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, rq ctrl.Request) (ctrl.Resul
 		return ctrl.Result{RequeueAfter: r.FailoverThreshold}, r.blockPoolVMs(ctx, pool.Name, why)
 	}
 	// Fence coverage provably complete -> schedule + sticky re-bind the whole batch.
-	return ctrl.Result{RequeueAfter: r.FailoverThreshold}, r.rebindPoolVMs(ctx, pool.Name)
+	// The fence is also the proof a planned move gets from a live pool's broker: nothing on this
+	// pool can reach storage any more, so its retired twins are released. Every pass, not once — a
+	// twin is retired only after the rebind below has been compiled. Neither waits on the other's
+	// success: a release patch that fails must not hold back the rebind, nor the reverse.
+	releaseErr := r.releaseFencedTwins(ctx, pool.Name)
+	rebindErr := r.rebindPoolVMs(ctx, pool.Name)
+	return ctrl.Result{RequeueAfter: r.FailoverThreshold}, errors.Join(releaseErr, rebindErr)
 }
 
 // rebindPoolVMs schedules ALL VMs on lostPool as a batch (capacity + anti-affinity
@@ -149,6 +163,33 @@ func (r *Reconciler) rebindPoolVMs(ctx context.Context, lostPool string) error {
 		// so this status write targets the current object rather than a stale one.
 		if err := r.Client.Status().Update(ctx, vm); err != nil {
 			errs = append(errs, fmt.Errorf("status vm %s: %w", vm.Name, err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// releaseFencedTwins marks every retired CompiledVM twin on a fenced, lost pool released. Its broker
+// is down and cannot say so itself; the fence makes it true regardless.
+func (r *Reconciler) releaseFencedTwins(ctx context.Context, lostPool string) error {
+	var twins compiledv1.CompiledVMList
+	if err := r.Client.List(ctx, &twins, client.InNamespace(validate.PoolNamespace(lostPool))); err != nil {
+		return fmt.Errorf("list compiledvms of %s: %w", lostPool, err)
+	}
+	var errs []error
+	for i := range twins.Items {
+		twin := &twins.Items[i]
+		if twin.DeletionTimestamp.IsZero() || twin.Status.Released {
+			continue
+		}
+		// Optimistic-locked, because the list above is cached and a twin's name is not unique over
+		// time: a reversed move recreates a LIVE twin under the same name. A plain patch built from a
+		// stale read of the old, retired twin would mark the new one released, and nothing resets
+		// it. A conflict is collected like any error, so the pass requeues and reads again.
+		orig := twin.DeepCopy()
+		twin.Status.Released = true
+		if err := r.Client.Status().Patch(ctx, twin,
+			client.MergeFromWithOptions(orig, client.MergeFromWithOptimisticLock{})); err != nil && !apierrors.IsNotFound(err) {
+			errs = append(errs, fmt.Errorf("release %s/%s: %w", twin.Namespace, twin.Name, err))
 		}
 	}
 	return errors.Join(errs...)
@@ -291,5 +332,25 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	// controller-runtime derives the controller name from the watched kind, so both would default
 	// to "clusterpool" and the manager rejects the duplicate ("controller with name clusterpool
 	// already exists"). Name this one "failover".
-	return ctrl.NewControllerManagedBy(mgr).Named("failover").For(&platformv1.ClusterPool{}).Complete(r)
+	return ctrl.NewControllerManagedBy(mgr).Named("failover").For(&platformv1.ClusterPool{}).
+		// A twin retired by a rebind should be released on the next pass, not after the
+		// FailoverThreshold requeue — every VM of a lost pool waits on it.
+		Watches(&compiledv1.CompiledVM{}, handler.EnqueueRequestsFromMapFunc(poolOfTwin),
+			builder.WithPredicates(retiredTwin)).
+		Complete(r)
+}
+
+// retiredTwin admits only twins being deleted: a live twin never needs a release, and letting every
+// twin event wake failover would re-run the fence pass for each VM churn on every pool.
+var retiredTwin = predicate.NewPredicateFuncs(func(o client.Object) bool {
+	return o.GetDeletionTimestamp() != nil
+})
+
+// poolOfTwin maps a CompiledVM twin to the ClusterPool it was compiled for.
+func poolOfTwin(_ context.Context, obj client.Object) []reconcile.Request {
+	twin, ok := obj.(*compiledv1.CompiledVM)
+	if !ok || twin.Spec.ClusterName == "" {
+		return nil
+	}
+	return []reconcile.Request{{NamespacedName: types.NamespacedName{Name: twin.Spec.ClusterName}}}
 }

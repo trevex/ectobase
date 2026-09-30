@@ -15,6 +15,10 @@ metadata:
     {{- include "ectobase-dispatch.labels" . | nindent 4 }}
 spec:
   replicas: 1
+  # hostNetwork singleton: a surged 2nd pod can never bind the host ports the old one holds on the
+  # same node, so a rolling update deadlocks. Recreate tears the old pod down first.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app.kubernetes.io/name: reflector

@@ -149,6 +149,16 @@ Alongside the sync, the broker reports upward:
   annotation) patched into the ClusterPool status, and each running VM's node patched onto
   that VM's `CompiledVM.status.placement`, so the dispatch can fence precisely on failover.
 
+A `CompiledVM` twin that is being deleted is not in the desired set, even while a finalizer keeps
+it visible: it names a VM this pool must stop. After each pass the broker checks every such twin
+and marks it `status.released` once nothing downstream can still run the VM or write its disks —
+no `CompiledVM`, KubeVirt `VirtualMachine`, VMI, or virt-launcher pod (matched by the fixed label
+`kubevirt.io=virt-launcher` plus an ownerReference to the VMI, since a VMI name can exceed a label
+value's 63-character limit), and no claim carrying the twin's `workload` label. The write is
+optimistic-locked, because a twin's name is not unique over time — a reversed move can recreate a
+live twin under the same name before a stale patch would land. While one is still held, the next
+pass comes after 5 seconds rather than a minute.
+
 ### The broker's dispatch credential
 
 The broker's identity to the dispatch is a cert-manager client certificate, not a shared
