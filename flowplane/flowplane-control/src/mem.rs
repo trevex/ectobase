@@ -82,6 +82,18 @@ impl MapWriter for MemMapWriter {
         self.routes6.remove(&(vni, ipv6, p));
         Ok(())
     }
+    fn route_entries(&self) -> Vec<(u32, [u8; 4], u32, RouteValue)> {
+        self.routes
+            .iter()
+            .map(|(&(v, p, l), r)| (v, p, l, *r))
+            .collect()
+    }
+    fn route6_entries(&self) -> Vec<(u32, [u8; 16], u32, RouteValue)> {
+        self.routes6
+            .iter()
+            .map(|(&(v, p, l), r)| (v, p, l, *r))
+            .collect()
+    }
     fn nat_upsert(&mut self, k: NatKey, v: NatValue) -> anyhow::Result<()> {
         self.nat.insert(k, v);
         Ok(())

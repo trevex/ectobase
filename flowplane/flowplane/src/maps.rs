@@ -403,6 +403,12 @@ impl Routes {
         self.map.remove(&key).context("remove route")
     }
 
+    /// Every `(vni, prefix, prefix_len, route)` in the trie (adopt). A read error is logged, not
+    /// returned: what was read is still worth adopting.
+    pub fn entries(&self) -> Vec<(u32, [u8; 4], u32, RouteValue)> {
+        route_entries(self.map.iter(), "ROUTES", |d: RouteLpmData| (d.vni, d.ipv4))
+    }
+
     /// Longest-prefix-match lookup for `ipv4` within `vni`'s routing table. A fully-specified
     /// (max prefix_len) lookup key makes the kernel LPM_TRIE do the longest-match search itself.
     /// Used by the E/W offload manager to resolve an established flow's remote VTEP + VNI.
@@ -416,6 +422,35 @@ impl Routes {
         );
         self.map.get(&key, 0).ok()
     }
+}
+
+/// Decode a `ROUTES{,6}` walk: each key is the VNI's 32 bits followed by the prefix, so the route's
+/// own prefix length is the key's minus 32. A key shorter than the VNI was not written by `upsert`
+/// and is skipped.
+fn route_entries<D: aya::Pod, A>(
+    walk: impl Iterator<Item = Result<(Key<D>, RouteValue), MapError>>,
+    name: &str,
+    split: impl Fn(D) -> ([u8; 4], A),
+) -> Vec<(u32, A, u32, RouteValue)> {
+    let mut out = Vec::new();
+    for r in walk {
+        match r {
+            Ok((k, v)) => {
+                let Some(len) = k.prefix_len().checked_sub(32) else {
+                    continue;
+                };
+                let (vni, prefix) = split(k.data());
+                out.push((u32::from_be_bytes(vni), prefix, len, v));
+            }
+            // A key-walk error ends aya's iteration: the routes past it go unlisted.
+            Err(e) => eprintln!(
+                "adopt: WARNING reading {name} failed ({:#}); routes it skipped stay programmed but \
+                 cannot be withdrawn until re-announced",
+                anyhow::Error::from(e)
+            ),
+        }
+    }
+    out
 }
 
 /// Typed handle over the `ROUTES6` BPF LPM trie map (IPv6 overlay routes).
@@ -455,6 +490,13 @@ impl Routes6 {
             },
         );
         self.map.remove(&key).context("remove route6")
+    }
+
+    /// v6 sibling of [`Routes::entries`].
+    pub fn entries(&self) -> Vec<(u32, [u8; 16], u32, RouteValue)> {
+        route_entries(self.map.iter(), "ROUTES6", |d: RouteLpmData6| {
+            (d.vni, d.ipv6)
+        })
     }
 
     /// v6 sibling of [`Routes::get`]: longest-prefix-match lookup for `ipv6` within `vni`'s
@@ -655,5 +697,37 @@ mod tests {
         };
         ifaces.upsert(k, v).expect("upsert");
         assert_eq!(ifaces.get(&k), Some(v));
+    }
+
+    // The adopt walk undoes `Routes::upsert`'s key: the VNI back from big-endian and the route's
+    // prefix length back from the key's. A walk error is skipped, not fatal.
+    #[test]
+    fn route_entries_decode_the_upsert_key() {
+        let v = RouteValue {
+            nexthop_vni: 9,
+            ..Default::default()
+        };
+        let key = |len, vni: u32, ipv4| {
+            Key::new(
+                len,
+                RouteLpmData {
+                    vni: vni.to_be_bytes(),
+                    ipv4,
+                },
+            )
+        };
+        let walk = vec![
+            Ok((key(32 + 24, 100, [10, 0, 0, 0]), v)),
+            Err(MapError::KeyNotFound),
+            Ok((key(32, 0x01_02_03, [0; 4]), v)),
+            Ok((key(16, 100, [0; 4]), v)),
+        ];
+        let got = route_entries(walk.into_iter(), "ROUTES", |d: RouteLpmData| {
+            (d.vni, d.ipv4)
+        });
+        assert_eq!(
+            got,
+            vec![(100, [10, 0, 0, 0], 24, v), (0x01_02_03, [0; 4], 0, v)]
+        );
     }
 }

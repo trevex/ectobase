@@ -47,6 +47,10 @@ pub trait MapWriter {
         val: RouteValue,
     ) -> anyhow::Result<()>;
     fn route6_remove(&mut self, vni: u32, ipv6: [u8; 16], prefix_len: u32) -> anyhow::Result<()>;
+    /// Adopt: every `(vni, prefix, prefix_len, route)` that survived a restart in the pinned
+    /// `ROUTES` trie, self-routes included.
+    fn route_entries(&self) -> Vec<(u32, [u8; 4], u32, RouteValue)>;
+    fn route6_entries(&self) -> Vec<(u32, [u8; 16], u32, RouteValue)>;
     fn nat_upsert(&mut self, key: NatKey, val: NatValue) -> anyhow::Result<()>;
     fn nat_remove(&mut self, key: &NatKey) -> anyhow::Result<()>;
     fn nat_get(&self, key: &NatKey) -> Option<NatValue>;
