@@ -50,21 +50,22 @@ pub fn add_route<W: MapWriter>(
     Ok(pb::AddRouteResponse {})
 }
 
+/// Withdraw a route, and whether it was there to withdraw. Withdrawing an absent route succeeds
+/// (the response has no field for it); the flag is for the caller's log.
 pub fn withdraw_route<W: MapWriter>(
     core: &mut ControlCore<W>,
     req: &pb::WithdrawRouteRequest,
-) -> Result<pb::WithdrawRouteResponse, ServiceError> {
+) -> Result<(pb::WithdrawRouteResponse, bool), ServiceError> {
     let (is_v6, bytes, len) = parse_prefix(&req.prefix).map_err(invalid)?;
     let vni = req.vni;
-    let res: anyhow::Result<()> = if is_v6 {
-        core.delete_route6(vni, bytes, len).map(|_| ())
+    let removed = if is_v6 {
+        core.delete_route6(vni, bytes, len)?
     } else {
         let mut v4 = [0u8; 4];
         v4.copy_from_slice(&bytes[..4]);
-        core.delete_route(vni, v4, len).map(|_| ())
+        core.delete_route(vni, v4, len)?
     };
-    res?;
-    Ok(pb::WithdrawRouteResponse {})
+    Ok((pb::WithdrawRouteResponse {}, removed))
 }
 
 pub fn add_nat_source<W: MapWriter>(
@@ -596,15 +597,27 @@ mod tests {
     #[test]
     fn withdraw_route_v4_is_idempotent() {
         let mut c = core();
-        // Withdrawing a non-existent route must succeed (delete_route returns Ok(false)).
-        let r = withdraw_route(
+        // Withdrawing a non-existent route must succeed (delete_route returns Ok(false)), and say
+        // it removed nothing, so the caller does not log a removal that never happened.
+        let req = pb::WithdrawRouteRequest {
+            vni: 100,
+            prefix: "10.0.0.0/24".into(),
+        };
+        let r = withdraw_route(&mut c, &req);
+        assert!(matches!(r, Ok((_, false))), "withdraw non-existent: {r:?}");
+        add_route(
             &mut c,
-            &pb::WithdrawRouteRequest {
+            &pb::AddRouteRequest {
                 vni: 100,
                 prefix: "10.0.0.0/24".into(),
+                nexthop_underlay: "fd00::1".into(),
+                ..Default::default()
             },
-        );
-        assert!(r.is_ok(), "withdraw non-existent: {r:?}");
+        )
+        .unwrap();
+        let r = withdraw_route(&mut c, &req);
+        assert!(matches!(r, Ok((_, true))), "withdraw present: {r:?}");
+        assert!(!c.writer().routes.contains_key(&(100, [10, 0, 0, 0], 24)));
     }
 
     /// Both families compile into the interface's classifier scopes.

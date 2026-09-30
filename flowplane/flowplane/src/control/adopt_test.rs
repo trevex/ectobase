@@ -20,7 +20,9 @@ use std::process::Command;
 use aya::maps::lpm_trie::{Key, LpmTrie};
 use aya::maps::{of_maps::HashOfMaps, Array, HashMap as AyaHashMap, MapData};
 use aya::programs::{SchedClassifier, TcAttachType};
-use flowplane_common::{FwBind, FwPolKey, NatOwner, NatOwnerKey, NatOwnerKey6};
+use flowplane_common::{
+    FwBind, FwPolKey, NatOwner, NatOwnerKey, NatOwnerKey6, RouteLpmData, RouteLpmData6, RouteValue,
+};
 
 use super::{hex_encode, Control, IfaceParams};
 use crate::legacy_nat::{LegacyNeighborNat, LegacyNeighborNat6};
@@ -64,6 +66,39 @@ fn scopes_pinned(pin: &Path) -> Vec<u64> {
     let mut ids: Vec<u64> = map.keys().filter_map(Result::ok).collect();
     ids.sort_unstable();
     ids
+}
+
+/// The pinned `ROUTES{,6}` tries' keys as `(vni, prefix, route prefix_len)`, sorted.
+fn routes_pinned(pin: &Path) -> Vec<(u32, [u8; 4], u32)> {
+    let map = MapData::from_pin(pin.join("ROUTES")).expect("reopen pinned ROUTES");
+    let trie: LpmTrie<_, RouteLpmData, RouteValue> =
+        LpmTrie::try_from(aya::maps::Map::LpmTrie(map)).expect("ROUTES is an LPM trie");
+    let mut v: Vec<_> = trie
+        .keys()
+        .map(|k| {
+            let k = k.expect("walk ROUTES");
+            let d = k.data();
+            (u32::from_be_bytes(d.vni), d.ipv4, k.prefix_len() - 32)
+        })
+        .collect();
+    v.sort_unstable();
+    v
+}
+
+fn routes6_pinned(pin: &Path) -> Vec<(u32, [u8; 16], u32)> {
+    let map = MapData::from_pin(pin.join("ROUTES6")).expect("reopen pinned ROUTES6");
+    let trie: LpmTrie<_, RouteLpmData6, RouteValue> =
+        LpmTrie::try_from(aya::maps::Map::LpmTrie(map)).expect("ROUTES6 is an LPM trie");
+    let mut v: Vec<_> = trie
+        .keys()
+        .map(|k| {
+            let k = k.expect("walk ROUTES6");
+            let d = k.data();
+            (u32::from_be_bytes(d.vni), d.ipv6, k.prefix_len() - 32)
+        })
+        .collect();
+    v.sort_unstable();
+    v
 }
 
 fn nat_owners_trie<K: aya::Pod>(pin: &Path, name: &str) -> LpmTrie<MapData, K, NatOwner> {
@@ -263,6 +298,34 @@ fn restart_adopts_pinned_state_and_relinks_guests() {
         .expect("add v6 neighbor NAT");
     let owners6 = nat_owners6_pinned(pin.path());
     assert!(!owners6.is_empty(), "the v6 block is programmed");
+
+    // Two mesh routes beside the interface's own self-route (10.0.0.5/32).
+    let route = pb::AddRouteRequest {
+        vni: 7,
+        prefix: "10.0.0.61/32".into(),
+        nexthop_underlay: "fd00::99".into(),
+        ..Default::default()
+    };
+    let route6 = pb::AddRouteRequest {
+        prefix: "2001:db8:61::/64".into(),
+        ..route.clone()
+    };
+    for r in [&route, &route6] {
+        ctl.with_core(|c| handlers::add_route(c, r))
+            .expect("add route");
+    }
+    let r61 = (7, [10, 0, 0, 61], 32);
+    let self_route = (vni, ip, 32);
+    let r6: (u32, [u8; 16], u32) = (
+        7,
+        "2001:db8:61::"
+            .parse::<std::net::Ipv6Addr>()
+            .unwrap()
+            .octets(),
+        64,
+    );
+    assert_eq!(routes_pinned(pin.path()), vec![self_route, r61]);
+    assert_eq!(routes6_pinned(pin.path()), vec![r6]);
 
     // The process "exits": every fd and in-memory structure goes, only pins remain.
     drop(ctl);
@@ -464,6 +527,35 @@ fn restart_adopts_pinned_state_and_relinks_guests() {
         nat_owners6_pinned(pin.path()).is_empty(),
         "the withdraw removes the adopted v6 block"
     );
+
+    // The routes came back through adopt: a withdraw after the restart removes them from the pinned
+    // tries. Without adopt the empty shadow made each withdraw a silent no-op and the route kept
+    // forwarding. The self-route was never a withdrawable route and still is not.
+    let withdraw_of = |r: &pb::AddRouteRequest| pb::WithdrawRouteRequest {
+        vni: r.vni,
+        prefix: r.prefix.clone(),
+    };
+    for r in [&route, &route6] {
+        let (_, removed) = ctl
+            .with_core(|c| handlers::withdraw_route(c, &withdraw_of(r)))
+            .expect("withdraw an adopted route");
+        assert!(removed, "{} was adopted", r.prefix);
+    }
+    assert_eq!(routes_pinned(pin.path()), vec![self_route]);
+    assert!(routes6_pinned(pin.path()).is_empty());
+    let (_, removed) = ctl
+        .with_core(|c| {
+            handlers::withdraw_route(
+                c,
+                &pb::WithdrawRouteRequest {
+                    vni,
+                    prefix: "10.0.0.5/32".into(),
+                },
+            )
+        })
+        .expect("withdraw the self-route's key");
+    assert!(!removed, "a self-route is not adopted as a route");
+    assert_eq!(routes_pinned(pin.path()), vec![self_route]);
 
     // Increment 1's gap, closed. Adopt cannot tell whether a block it found in the trie is still
     // wanted: if the agent restarted too it withdraws only what it installed itself, so a block
