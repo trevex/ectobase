@@ -378,3 +378,37 @@ func TestRetiredTwinPredicate(t *testing.T) {
 		t.Fatal("a twin becoming retired did not enqueue failover")
 	}
 }
+
+// A declared aggregate is complete only if it really contains every node. A node /64 reported
+// outside it means the declaration is wrong, and that node would stay writable: fence what is known,
+// the stray /64 included, and block the rebind.
+func TestFailover_NodePrefixOutsideTheAggregate_BlocksTheRebind(t *testing.T) {
+	scheme := testScheme(t)
+	lost := lostPoolObj("A", "2001:db8:0:1::/64", "2001:db9:0:1::/64")
+	lost.Spec.UnderlayPrefix = "2001:db8::/48"
+	vm := vmOn("vm1", "A")
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(lost, readyPoolObj("B"), vm).WithStatusSubresource(vm, lost).Build()
+	rec := &recordingFencer{}
+	r := &Reconciler{Client: c, StorageFencer: rec, NetworkFencer: okFencer{}, FailoverThreshold: time.Minute}
+
+	if _, err := r.Reconcile(context.Background(), req("A")); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	got := &computev1.VirtualMachine{}
+	_ = c.Get(context.Background(), key("vm1"), got)
+	if got.Spec.ClusterName != "A" || !isBlocked(got) {
+		t.Fatalf("a node outside the declared aggregate must block the rebind; cluster=%q blocked=%v", got.Spec.ClusterName, isBlocked(got))
+	}
+	if len(rec.fenced) != 2 || rec.fenced[0] != "2001:db8::/48" || rec.fenced[1] != "2001:db9:0:1::/64" {
+		t.Fatalf("want the aggregate and the stray /64 fenced, got %v", rec.fenced)
+	}
+}
+
+func TestFenceCoverage_AggregateContainingEveryNodeIsComplete(t *testing.T) {
+	pool := lostPoolObj("A", "2001:db8:0:1::/64", "2001:db8:0:2::/64")
+	pool.Spec.UnderlayPrefix = "2001:db8::/48"
+	targets, complete, why := fenceCoverage(pool)
+	if !complete || len(targets) != 1 || why != "" {
+		t.Fatalf("got targets=%v complete=%v why=%q", targets, complete, why)
+	}
+}

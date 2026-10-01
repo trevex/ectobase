@@ -197,6 +197,10 @@ operator, never from the pool:
   requested range outside the prefix is only named in the `Signed` condition.
 - A `ClusterPool` without `spec.underlayPrefix` gets no intermediate: the signer sets `Signed=False`
   and says why. Setting the prefix later wakes the signer.
+- A pool prefix that overlaps another `ClusterPool`'s, or a fleet identity's ranges, is denied: two
+  holders could otherwise mint leaves for the same VTEPs. Between two pools the one enrolled later
+  is denied, so a mistake on a new pool cannot take a running one off the route bus at renewal.
+  Admission already refuses a non-canonical prefix and one shorter than /32 (IPv6) or /16 (IPv4).
 - An identity that is neither is denied: `no ClusterPool <name> and not a fleet identity`. A missing
   `ClusterPool` never makes an identity trusted, so one left behind by a deleted pool, still
   writable by that pool's broker, gets nothing.

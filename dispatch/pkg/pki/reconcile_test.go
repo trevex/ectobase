@@ -253,3 +253,47 @@ func TestSignIntermediate_RefusesNoIPConstraint(t *testing.T) {
 		t.Fatal("an intermediate with no IP constraint must be refused")
 	}
 }
+
+func poolAt(name, prefix string, created time.Time) *platformv1.ClusterPool {
+	p := clusterPool(name, prefix)
+	p.CreationTimestamp = metav1.NewTime(created)
+	return p
+}
+
+// Two pools whose prefixes overlap could each mint a leaf for the other's VTEPs. The pool enrolled
+// later is denied; the one already running keeps signing, so an operator's mistake on a new pool
+// cannot take an existing pool off the route bus at its next renewal.
+func TestSigner_PoolPrefixOverlappingAnOlderPoolIsDenied(t *testing.T) {
+	now := time.Now()
+	older := poolAt("k02", "fd00:cafe:1914::/48", now.Add(-time.Hour))
+	newer := poolAt("k03", "fd00:cafe:1914:8000::/49", now)
+	s, c := testSigner(t, older, newer, identity(t, "k02"), identity(t, "k03"))
+
+	requireDenied(t, reconcileIdentity(t, s, c, "k03"), "overlaps ClusterPool k02")
+	signedCert(t, reconcileIdentity(t, s, c, "k02"))
+}
+
+// The same creation time falls back to the name, so exactly one of the two is denied.
+func TestSigner_OverlapTieBreaksOnName(t *testing.T) {
+	at := time.Now().Add(-time.Hour)
+	s, c := testSigner(t, poolAt("k02", "fd00:cafe:1914::/48", at), poolAt("k03", "fd00:cafe:1914::/48", at),
+		identity(t, "k02"), identity(t, "k03"))
+	signedCert(t, reconcileIdentity(t, s, c, "k02"))
+	requireDenied(t, reconcileIdentity(t, s, c, "k03"), "overlaps ClusterPool k02")
+}
+
+// A pool may not take a range a fleet identity (the edge loopbacks) is constrained to.
+func TestSigner_PoolPrefixOverlappingAFleetIdentityIsDenied(t *testing.T) {
+	s, c := testSigner(t, clusterPool("k02", "fd00:ffff::/48"), identity(t, "k02"), identity(t, "edge", "fd00:ffff::/32"))
+	s.FleetIdentities = []string{"edge"}
+	requireDenied(t, reconcileIdentity(t, s, c, "k02"), "overlaps fleet identity edge")
+}
+
+// Disjoint prefixes, the normal case, are signed.
+func TestSigner_DisjointPoolPrefixesAreSigned(t *testing.T) {
+	s, c := testSigner(t, clusterPool("k02", "fd00:cafe:1914::/48"), clusterPool("k03", "fd00:cafe:2a3b::/48"),
+		identity(t, "k02"), identity(t, "k03"), identity(t, "edge", "fd00:ffff::/32"))
+	s.FleetIdentities = []string{"edge"}
+	signedCert(t, reconcileIdentity(t, s, c, "k02"))
+	signedCert(t, reconcileIdentity(t, s, c, "k03"))
+}

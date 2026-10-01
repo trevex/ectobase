@@ -117,6 +117,7 @@ decides explicitly.
 | Situation | What is fenced | Coverage | Outcome |
 |---|---|---|---|
 | `spec.underlayPrefix` set | that one aggregate, e.g. `fd00:cafe:1a2b::/48` | complete by construction | proceeds |
+| set, but a reported node /64 lies outside it | the aggregate and each stray /64 | not provable: the declaration misses a node | fences, then blocks the rebind |
 | unset, reported prefixes collapse to one distinct /64 | that /64 | complete: every node's VTEP is a /128 inside it | proceeds |
 | unset, several distinct /64s | every reported /64 | not provable | fences, then blocks the rebind |
 | unset, nothing reported | nothing | none | blocks |
@@ -161,6 +162,7 @@ spec is never touched.
 | `storage fence unconfirmed for <prefix>: NetworkFence <name> was unfenced; replacing it with a fresh Fenced one` or `... is being deleted; awaiting it to re-fence` | Normal for one pass while a spent CR is replaced. |
 | `network fence unconfirmed for <prefix>` | The reflector admin API is unreachable or not configured. |
 | `fenced the N reported node /64s ... coverage is not provably complete` | Several /64s and no `spec.underlayPrefix`. |
+| `fenced spec.underlayPrefix ... outside it ... coverage is not provably complete` | A reported node /64 lies outside the declared aggregate. Correct `spec.underlayPrefix`. |
 | `no pool to fail over to: ...` | Fenced and complete, but no `Ready` pool fits this VM. |
 
 ### Rebind

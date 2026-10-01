@@ -21,6 +21,11 @@ type ClusterPoolSpecApplyConfiguration struct {
 	// IP SAN lies inside it, and the reflector only trusts nexthops equal to such a SAN. A pool must
 	// declare it to join the route bus: with it empty, the signer denies the pool's intermediate.
 	//
+	// It must be a CIDR in canonical form (no host bits, no IPv4-mapped IPv6), at least /32 for
+	// IPv6 or /16 for IPv4. The signer also denies a prefix that overlaps another ClusterPool's
+	// (the pool enrolled later is denied) or a fleet identity's permitted ranges. If a reported node
+	// /64 lies outside it, failover treats its coverage as incomplete and blocks the rebind.
+	//
 	// It is dispatch configuration, set when the pool is registered, deliberately NOT reported by
 	// the broker: neither a fence coordinate nor a certificate constraint may be derived from the
 	// entity it bounds. A fenced pool is by definition the one you have lost contact with, and a

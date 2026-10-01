@@ -57,6 +57,9 @@ func NodeDNSName(node, pool string) string { return node + "." + PoolDNSDomain(p
 // the per-node leaves the pool mints beneath it (which rotate on the pool's cadence).
 const intermediateTTL = 90 * 24 * time.Hour
 
+// deniedRecheck is how soon a denied identity is reconciled again without an event.
+const deniedRecheck = 10 * time.Minute
+
 // SignIntermediate signs the CSR as a pool-scoped, path-len-0 intermediate CA from the root.
 // The returned cert IsCA with MaxPathLen 0 (cannot sign further CAs) and is name-constrained to
 // the pool's DNS domain AND its underlay IP ranges, so it can only issue leaves for its own pool
@@ -165,7 +168,9 @@ func (s *Signer) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, 
 		return ctrl.Result{}, err
 	}
 	if denial != "" {
-		return ctrl.Result{}, s.deny(ctx, &id, denial)
+		// A denial can hinge on objects the signer does not watch (the pool it overlapped is
+		// deleted, a fleet identity's ranges change), so look again later.
+		return ctrl.Result{RequeueAfter: deniedRecheck}, s.deny(ctx, &id, denial)
 	}
 	// Idempotent: if already signed for THIS public key under THIS constraint and not near
 	// expiry, leave it. A cert carrying a different constraint (signed under an earlier rule, or
@@ -235,6 +240,9 @@ func (s *Signer) constraint(ctx context.Context, id *platformv1.RouteBusIdentity
 		return nil, "", fmt.Sprintf("ClusterPool %s spec.underlayPrefix %q is not a CIDR: %v", pool.Name, pool.Spec.UnderlayPrefix, perr), nil
 	}
 	prefix = prefix.Masked()
+	if denial, err := s.overlap(ctx, reader, &pool, prefix); denial != "" || err != nil {
+		return nil, "", denial, err
+	}
 	var outside []string
 	for _, c := range id.Spec.PermittedUnderlayCIDRs {
 		if p, err := netip.ParsePrefix(c); err != nil || !prefixWithin(p, prefix) {
@@ -246,6 +254,50 @@ func (s *Signer) constraint(ctx context.Context, id *platformv1.RouteBusIdentity
 			outside, pool.Name, prefix)
 	}
 	return []string{prefix.String()}, note, "", nil
+}
+
+// overlap denies a pool prefix that overlaps one another identity is constrained to: another
+// ClusterPool's underlayPrefix, or a fleet identity's permittedUnderlayCIDRs. Either way two holders
+// could mint leaves for the same VTEPs. Between two pools the one enrolled later is denied (by
+// creation time, then name), so a mistake on a new pool cannot deny a running one at its renewal.
+func (s *Signer) overlap(ctx context.Context, reader client.Reader, pool *platformv1.ClusterPool, prefix netip.Prefix) (denial string, err error) {
+	var pools platformv1.ClusterPoolList
+	if err := reader.List(ctx, &pools); err != nil {
+		return "", fmt.Errorf("list ClusterPools: %w", err)
+	}
+	for i := range pools.Items {
+		other := &pools.Items[i]
+		if other.Name == pool.Name || !enrolledBefore(other, pool) {
+			continue
+		}
+		if p, err := netip.ParsePrefix(other.Spec.UnderlayPrefix); err == nil && p.Masked().Overlaps(prefix) {
+			return fmt.Sprintf("ClusterPool %s spec.underlayPrefix %s overlaps ClusterPool %s's %s, enrolled earlier",
+				pool.Name, prefix, other.Name, other.Spec.UnderlayPrefix), nil
+		}
+	}
+	for _, name := range s.FleetIdentities {
+		var fleet platformv1.RouteBusIdentity
+		if err := reader.Get(ctx, client.ObjectKey{Name: name}, &fleet); errors.IsNotFound(err) {
+			continue
+		} else if err != nil {
+			return "", fmt.Errorf("get fleet identity %s: %w", name, err)
+		}
+		for _, c := range fleet.Spec.PermittedUnderlayCIDRs {
+			if p, err := netip.ParsePrefix(c); err == nil && p.Masked().Overlaps(prefix) {
+				return fmt.Sprintf("ClusterPool %s spec.underlayPrefix %s overlaps fleet identity %s's %s",
+					pool.Name, prefix, name, c), nil
+			}
+		}
+	}
+	return "", nil
+}
+
+// enrolledBefore orders ClusterPools by creation time, then by name.
+func enrolledBefore(a, b *platformv1.ClusterPool) bool {
+	if !a.CreationTimestamp.Equal(&b.CreationTimestamp) {
+		return a.CreationTimestamp.Before(&b.CreationTimestamp)
+	}
+	return a.Name < b.Name
 }
 
 // prefixWithin reports whether inner lies entirely inside outer (same family).

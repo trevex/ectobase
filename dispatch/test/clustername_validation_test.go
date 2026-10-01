@@ -98,6 +98,32 @@ func TestClusterNameValidation_AggregatedAPIServer(t *testing.T) {
 		t.Cleanup(func() { _ = admin.Delete(ctx, pool) })
 	})
 
+	// spec.underlayPrefix is the pool's certificate constraint and fence, so a malformed one is
+	// refused at admission, on create and on a spec update; a status write leaves it alone.
+	t.Run("ClusterPoolUnderlayPrefixValidated", func(t *testing.T) {
+		bad := &platformv1.ClusterPool{ObjectMeta: metav1.ObjectMeta{Name: "pool-bad-prefix"},
+			Spec: platformv1.ClusterPoolSpec{UnderlayPrefix: "fd00:cafe:1914::1/48"}}
+		if err := admin.Create(ctx, bad); err == nil {
+			_ = admin.Delete(ctx, bad)
+			t.Fatal("aggregated apiserver accepted an underlayPrefix with host bits set")
+		} else if !strings.Contains(err.Error(), "spec.underlayPrefix") {
+			t.Fatalf("rejection did not name the offending field: %v", err)
+		}
+
+		pool := &platformv1.ClusterPool{ObjectMeta: metav1.ObjectMeta{Name: "pool-prefix"},
+			Spec: platformv1.ClusterPoolSpec{UnderlayPrefix: "fd00:cafe:1914::/48"}}
+		if err := admin.Create(ctx, pool); err != nil {
+			t.Fatalf("valid underlayPrefix rejected: %v", err)
+		}
+		t.Cleanup(func() { _ = admin.Delete(ctx, pool) })
+		pool.Spec.UnderlayPrefix = "fd00::/8"
+		if err := admin.Update(ctx, pool); err == nil {
+			t.Fatal("aggregated apiserver accepted an update to a too-short underlayPrefix")
+		} else if !strings.Contains(err.Error(), "at least /32") {
+			t.Fatalf("update rejection did not say why: %v", err)
+		}
+	})
+
 	t.Run("VirtualMachineClusterNameRejected", func(t *testing.T) {
 		// A dot would split the derived namespace into something Kubernetes will not accept.
 		vm := &computev1.VirtualMachine{ObjectMeta: metav1.ObjectMeta{Name: "vm-bad", Namespace: "default"}}

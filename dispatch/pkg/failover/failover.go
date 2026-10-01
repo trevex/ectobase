@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/netip"
 	"slices"
 	"strings"
 	"time"
@@ -388,7 +389,8 @@ func (r *Reconciler) block(ctx context.Context, vm *computev1.VirtualMachine, ms
 //
 //   - `spec.underlayPrefix` declared — one aggregate, complete BY CONSTRUCTION: it contains every
 //     node's underlay whether or not central ever saw the node. The correct coordinate, and central
-//     configuration rather than reported state.
+//     configuration rather than reported state. Unless a reported node /64 lies outside it: then
+//     the declaration is wrong, the stray /64s are fenced too, and coverage is incomplete.
 //   - not declared, reported prefixes collapse to ONE distinct /64 — complete for the same reason:
 //     in the single-/64-per-cluster topology every node's identity is a /128 inside that /64, so
 //     fencing it covers unobserved nodes too. Each node reports the /64 itself, so the raw list
@@ -401,7 +403,7 @@ func (r *Reconciler) block(ctx context.Context, vm *computev1.VirtualMachine, ms
 // (targets, complete=false) — the first cannot protect anything, the second protects what it can.
 func fenceCoverage(pool *platformv1.ClusterPool) (targets []string, complete bool, why string) {
 	if p := pool.Spec.UnderlayPrefix; p != "" {
-		return []string{p}, true, ""
+		return aggregateCoverage(pool, p)
 	}
 	seen := map[string]bool{}
 	var distinct []string
@@ -424,6 +426,35 @@ func fenceCoverage(pool *platformv1.ClusterPool) (targets []string, complete boo
 			"spec.underlayPrefix (an aggregate containing every node underlay) to make fencing complete",
 			len(distinct), distinct)
 	}
+}
+
+// aggregateCoverage is fenceCoverage for a declared aggregate. It is complete by construction only if
+// the declaration is right: a reported node /64 outside it is a node the aggregate does not cover,
+// which stays writable. Then the stray /64s are fenced too (containment is free), and the coverage is
+// incomplete, which blocks the rebind. An aggregate that does not parse covers nothing provably.
+func aggregateCoverage(pool *platformv1.ClusterPool, aggregate string) (targets []string, complete bool, why string) {
+	agg, err := netip.ParsePrefix(aggregate)
+	if err != nil {
+		return []string{aggregate}, false, fmt.Sprintf("spec.underlayPrefix %q is not a CIDR, so its coverage cannot be shown", aggregate)
+	}
+	agg = agg.Masked()
+	targets = []string{aggregate}
+	var outside []string
+	for _, p := range pool.Status.NodePrefixes {
+		np, err := netip.ParsePrefix(p)
+		if err == nil && np.Bits() >= agg.Bits() && agg.Contains(np.Addr()) {
+			continue
+		}
+		if p != "" && !slices.Contains(outside, p) {
+			outside = append(outside, p)
+		}
+	}
+	if len(outside) == 0 {
+		return targets, true, ""
+	}
+	return append(targets, outside...), false, fmt.Sprintf("fenced spec.underlayPrefix %s and the reported node prefixes "+
+		"outside it (%v), but coverage is not provably complete: those nodes sit outside the declared aggregate, so it "+
+		"does not contain every node. Correct spec.underlayPrefix", aggregate, outside)
 }
 
 // poolLost reports whether pool is Unknown and its lease has been stale longer than threshold.
