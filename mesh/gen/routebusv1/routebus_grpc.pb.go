@@ -137,8 +137,8 @@ type RouteBusAdminClient interface {
 	ClearFence(ctx context.Context, in *FenceRequest, opts ...grpc.CallOption) (*FenceReply, error)
 	// AnnouncedFrom reports which of the asked keys some origin currently announces with a nexthop
 	// inside the prefix. It reads what the reflector STORES, so a key a fence hides still counts:
-	// that is the route ClearFence would re-advertise. Failover asks it about the addresses of the
-	// VMs it moved off a pool, and holds the pool's fence while any is still announced from there.
+	// that is the route ClearFence would re-advertise. Failover asks it about every overlay address
+	// placed on another pool, and holds a recovered pool's fence while any is announced from there.
 	AnnouncedFrom(ctx context.Context, in *AnnouncedFromRequest, opts ...grpc.CallOption) (*AnnouncedFromReply, error)
 }
 
@@ -191,8 +191,8 @@ type RouteBusAdminServer interface {
 	ClearFence(context.Context, *FenceRequest) (*FenceReply, error)
 	// AnnouncedFrom reports which of the asked keys some origin currently announces with a nexthop
 	// inside the prefix. It reads what the reflector STORES, so a key a fence hides still counts:
-	// that is the route ClearFence would re-advertise. Failover asks it about the addresses of the
-	// VMs it moved off a pool, and holds the pool's fence while any is still announced from there.
+	// that is the route ClearFence would re-advertise. Failover asks it about every overlay address
+	// placed on another pool, and holds a recovered pool's fence while any is announced from there.
 	AnnouncedFrom(context.Context, *AnnouncedFromRequest) (*AnnouncedFromReply, error)
 	mustEmbedUnimplementedRouteBusAdminServer()
 }

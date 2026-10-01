@@ -17,8 +17,8 @@ service RouteBusAdmin {
   rpc ClearFence(FenceRequest) returns (FenceReply);
   // AnnouncedFrom reports which of the asked keys some origin currently announces with a nexthop
   // inside the prefix. It reads what the reflector STORES, so a key a fence hides still counts:
-  // that is the route ClearFence would re-advertise. Failover asks it about the addresses of the
-  // VMs it moved off a pool, and holds the pool's fence while any is still announced from there.
+  // that is the route ClearFence would re-advertise. Failover asks it about every overlay address
+  // placed on another pool, and holds a recovered pool's fence while any is announced from there.
   rpc AnnouncedFrom(AnnouncedFromRequest) returns (AnnouncedFromReply);
 }
 
@@ -44,6 +44,17 @@ message AnnouncedFromRequest {
 
 message AnnouncedFromReply {
   repeated RouteKey keys = 1; // the asked keys announced from inside the prefix; empty = none
+  // Who holds each of those keys: one entry per (key, origin, nexthop inside the prefix). A shared
+  // /64 or a pool aggregate covers many nodes, and one zombie among them holds the whole fence, so
+  // the operator needs the node, not just the address.
+  repeated RouteHolding holdings = 2;
+}
+
+// RouteHolding is one origin announcing a key with one nexthop inside the asked prefix.
+message RouteHolding {
+  RouteKey key = 1;
+  string origin = 2;  // the announcing session's Hello node_id
+  string nexthop = 3; // the underlay nexthop it announced, inside the prefix
 }
 
 enum RouteOp {

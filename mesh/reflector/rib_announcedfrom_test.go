@@ -22,8 +22,8 @@ func announcedFrom(t *testing.T, r *RIB, within string, keys ...*pb.RouteKey) ma
 		t.Fatalf("AnnouncedFrom(%s): %v", within, err)
 	}
 	out := map[string]bool{}
-	for _, k := range held {
-		out[k.Prefix] = true
+	for _, h := range held {
+		out[h.GetKey().GetPrefix()] = true
 	}
 	return out
 }
@@ -54,8 +54,15 @@ func TestRIB_AnnouncedFrom_MultiOrigin(t *testing.T) {
 	r.SetFence(fencedNet)
 	r.Announce("target", 100, "10.0.0.5/32", []string{healthyNH}, false)
 	r.Announce("source", 100, "10.0.0.5/32", []string{fencedNH}, false)
-	if got := announcedFrom(t, r, fencedNet, key(100, "10.0.0.5/32")); !got["10.0.0.5/32"] {
-		t.Fatalf("a key the fenced source still announces must be reported despite another origin, got %v", got)
+	held, err := r.AnnouncedFrom(fencedNet, []*pb.RouteKey{key(100, "10.0.0.5/32")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Named down to the node and nexthop: the target's announcement is outside the prefix and is
+	// not one of the holders.
+	if len(held) != 1 || held[0].GetOrigin() != "source" || held[0].GetNexthop() != fencedNH ||
+		held[0].GetKey().GetVni() != 100 || held[0].GetKey().GetPrefix() != "10.0.0.5/32" {
+		t.Fatalf("want exactly {10.0.0.5/32 by source via %s}, got %v", fencedNH, held)
 	}
 	// Asked about the target's /64 instead, the same key is held from there too.
 	if got := announcedFrom(t, r, "2001:db8:0:2::/64", key(100, "10.0.0.5/32")); !got["10.0.0.5/32"] {
@@ -108,7 +115,7 @@ func TestRIB_AnnouncedFrom_MatchesCanonicalSpelling(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(held) != 1 || held[0].Prefix != "fd00:0:0:0::5/128" {
+	if len(held) != 1 || held[0].GetKey().GetPrefix() != "fd00:0:0:0::5/128" {
 		t.Fatalf("want the key reported as asked, got %v", held)
 	}
 }
@@ -116,5 +123,25 @@ func TestRIB_AnnouncedFrom_MatchesCanonicalSpelling(t *testing.T) {
 func TestRIB_AnnouncedFrom_RejectsInvalidPrefix(t *testing.T) {
 	if _, err := NewRIB().AnnouncedFrom("not-a-cidr", nil); err == nil {
 		t.Fatal("AnnouncedFrom must reject an invalid prefix")
+	}
+}
+
+// Every node inside the prefix that holds the key is named, each with the nexthop it announced
+// there — on a shared /64 or a pool aggregate the operator has to find the zombie among many.
+func TestRIB_AnnouncedFrom_NamesEveryHolderInside(t *testing.T) {
+	r := NewRIB()
+	r.Announce("nodeB", 100, "10.0.0.5/32", []string{"2001:db8:0:1::b", healthyNH}, false)
+	r.Announce("nodeA", 100, "10.0.0.5/32", []string{fencedNH}, false)
+	held, err := r.AnnouncedFrom(fencedNet, []*pb.RouteKey{key(100, "10.0.0.5/32")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, h := range held {
+		got = append(got, h.GetOrigin()+"@"+h.GetNexthop())
+	}
+	want := []string{"nodeA@" + fencedNH, "nodeB@2001:db8:0:1::b"}
+	if !equalStrs(got, want) {
+		t.Fatalf("want holders %v (sorted, only nexthops inside the prefix), got %v", want, got)
 	}
 }
