@@ -582,7 +582,7 @@ impl Control {
         // implicitly reset on last-iface removal.
         // The reconciliation itself lives in `ControlCore::purge_vni`; Control keeps only
         // the "is the VNI still in use?" decision (it reads `by_id`, which stays authoritative here).
-        let vni_still_in_use = g.by_id.values().any(|r| r.vni == vni) || g.core.vni_has_lb(vni);
+        let vni_still_in_use = g.by_id.values().any(|r| r.vni == vni) || g.core.keeps_vni(vni);
         if !vni_still_in_use {
             g.core.purge_vni(vni, rec.ipv4)?;
         }

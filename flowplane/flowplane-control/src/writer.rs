@@ -28,6 +28,15 @@ pub struct CtFlushScope6 {
     pub port_max: u16,
 }
 
+/// A whole-map walk for adopt: the entries read, and the error that cut the walk short if one
+/// did. After a cut walk an entry missing from `entries` may still be in the map, so adopt must
+/// not act on its absence (delete a table no row seemed to point at, rewrite one that seemed to
+/// be missing slots).
+pub struct Walk<T> {
+    pub entries: Vec<T>,
+    pub error: Option<anyhow::Error>,
+}
+
 /// Uniform config-map write surface. All methods return `anyhow::Result<()>` except the reads
 /// used by conflict checks. Method names are `<map>_<op>`.
 pub trait MapWriter {
@@ -52,8 +61,8 @@ pub trait MapWriter {
     fn route6_remove(&mut self, vni: u32, ipv6: [u8; 16], prefix_len: u32) -> anyhow::Result<()>;
     /// Adopt: every `(vni, prefix, prefix_len, route)` that survived a restart in the pinned
     /// `ROUTES` trie, self-routes included.
-    fn route_entries(&self) -> Vec<(u32, [u8; 4], u32, RouteValue)>;
-    fn route6_entries(&self) -> Vec<(u32, [u8; 16], u32, RouteValue)>;
+    fn route_entries(&self) -> Walk<(u32, [u8; 4], u32, RouteValue)>;
+    fn route6_entries(&self) -> Walk<(u32, [u8; 16], u32, RouteValue)>;
     fn nat_upsert(&mut self, key: NatKey, val: NatValue) -> anyhow::Result<()>;
     fn nat_remove(&mut self, key: &NatKey) -> anyhow::Result<()>;
     fn nat_get(&self, key: &NatKey) -> Option<NatValue>;
@@ -71,7 +80,7 @@ pub trait MapWriter {
     /// every prefix of its block again.
     fn nat_owner_remove(&mut self, prefix_len: u32, key: &NatOwnerKey) -> anyhow::Result<()>;
     /// Adopt: every `(prefix_len, key, owner)` that survived a restart in the pinned trie.
-    fn nat_owner_entries(&self) -> Vec<(u32, NatOwnerKey, NatOwner)>;
+    fn nat_owner_entries(&self) -> Walk<(u32, NatOwnerKey, NatOwner)>;
     // NAT66 (v6) write surface — sibling of the v4 nat methods above. No defaults: a silently
     // no-op'd v6 NAT would fail OPEN (leak the guest source v6), so every backend implements these.
     fn nat6_upsert(&mut self, key: NatKey6, val: NatValue6) -> anyhow::Result<()>;
@@ -87,7 +96,7 @@ pub trait MapWriter {
     ) -> anyhow::Result<()>;
     /// Same contract as `nat_owner_remove`: removing an absent prefix must succeed.
     fn nat_owner6_remove(&mut self, prefix_len: u32, key: &NatOwnerKey6) -> anyhow::Result<()>;
-    fn nat_owner6_entries(&self) -> Vec<(u32, NatOwnerKey6, NatOwner)>;
+    fn nat_owner6_entries(&self) -> Walk<(u32, NatOwnerKey6, NatOwner)>;
     fn lb_upsert(&mut self, key: LbKey, val: LbValue) -> anyhow::Result<()>;
     fn lb_remove(&mut self, key: &LbKey) -> anyhow::Result<()>;
     /// IPv6 LB service row (`LB6`), keyed on the full v6 address — see [`LbKey6`].
@@ -95,6 +104,13 @@ pub trait MapWriter {
     fn lb6_remove(&mut self, key: &LbKey6) -> anyhow::Result<()>;
     fn maglev_upsert(&mut self, key: MaglevKey, val: LbBackend) -> anyhow::Result<()>;
     fn maglev_remove(&mut self, key: &MaglevKey) -> anyhow::Result<()>;
+    /// One Maglev slot, `None` if absent: adopt reads a table by key, independent of a walk.
+    fn maglev_get(&self, key: &MaglevKey) -> anyhow::Result<Option<LbBackend>>;
+    /// Adopt: the service rows and Maglev slots that survived a restart in the pinned `LB`,
+    /// `LB6` and `MAGLEV` maps.
+    fn lb_entries(&self) -> Walk<(LbKey, LbValue)>;
+    fn lb6_entries(&self) -> Walk<(LbKey6, LbValue)>;
+    fn maglev_entries(&self) -> Walk<(MaglevKey, LbBackend)>;
     fn underlay_upsert(&mut self, key: [u8; 16], val: UnderlayValue) -> anyhow::Result<()>;
     fn underlay_remove(&mut self, key: &[u8; 16]) -> anyhow::Result<()>;
     fn underlay_get(&self, key: &[u8; 16]) -> Option<UnderlayValue>;
@@ -112,8 +128,8 @@ pub trait MapWriter {
     /// meet their interfaces' new policy on their next packet.
     fn fw_epoch_bump(&mut self) -> anyhow::Result<()>;
     /// Adopt: the bindings and scope ids that survived a restart in the pinned maps.
-    fn fw_bind_entries(&self) -> Vec<(u32, FwBind)>;
-    fn fw_scope_ids(&self) -> Vec<u64>;
+    fn fw_bind_entries(&self) -> Walk<(u32, FwBind)>;
+    fn fw_scope_ids(&self) -> Walk<u64>;
     fn meter_upsert(&mut self, ifindex: u32, val: MeterState) -> anyhow::Result<()>;
     fn meter_remove(&mut self, ifindex: &u32) -> anyhow::Result<()>;
     fn dhcp_config_set(&mut self, cfg: &DhcpConfig) -> anyhow::Result<()>;
@@ -130,6 +146,8 @@ pub trait MapWriter {
     fn ifaces6_get(&self, key: &IfaceKey6) -> Option<IfaceValue>;
     fn iface_meta_upsert(&mut self, key: IfaceMetaKey, val: IfaceMetaVal) -> anyhow::Result<()>;
     fn iface_meta_remove(&mut self, key: &IfaceMetaKey) -> anyhow::Result<()>;
+    /// Adopt: the `IFACE_META` restart journal that survived a restart.
+    fn iface_meta_entries(&self) -> Walk<(IfaceMetaKey, IfaceMetaVal)>;
     fn dhcp_meta_remove(&mut self, ifindex: u32) -> anyhow::Result<()>;
     fn floating_ips_upsert(&mut self, key: FloatingIPKey, val: [u8; 4]) -> anyhow::Result<()>;
     fn floating_ips_remove(&mut self, key: &FloatingIPKey) -> anyhow::Result<()>;

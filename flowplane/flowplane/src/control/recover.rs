@@ -35,7 +35,14 @@ impl Control {
     /// state. Returns `reattach`: `(interface_id, device)` whose guest program must be RE-ATTACHED by
     /// the caller (their links died with the old process; the maps survived).
     pub(super) fn rebuild_from_maps(g: &mut Inner) -> anyhow::Result<ReattachList> {
-        let journal = g.core.writer().iface_meta_entries();
+        let walk = g.core.read_iface_journal();
+        if let Some(e) = &walk.error {
+            eprintln!(
+                "adopt: WARNING reading IFACE_META failed ({e:#}); interfaces past the error are not \
+                 recovered, and no VNI is purged or orphan self-route released until a clean restart"
+            );
+        }
+        let journal = walk.entries;
         // Sanity cross-check: the journal should track the surviving INTERFACES map 1:1.
         let iface_count = g.core.writer().ifaces_count();
         if iface_count != journal.len() {
