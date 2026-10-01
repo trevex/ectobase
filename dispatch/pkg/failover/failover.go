@@ -91,6 +91,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, rq ctrl.Request) (ctrl.Resul
 		}
 		return ctrl.Result{RequeueAfter: r.FailoverThreshold}, nil
 	}
+	// A lost pool's drain report is stale by definition: forget it before fencing, so only a
+	// report its broker makes after the pool is back can release anything.
+	if err := r.forgetDrain(ctx, &pool); err != nil {
+		return ctrl.Result{}, err
+	}
 	// Whole-pool fence: every target must confirm BOTH fences active (barrier) before any re-bind.
 	targets, complete, why := fenceCoverage(&pool)
 	if len(targets) == 0 {
@@ -230,6 +235,29 @@ func (r *Reconciler) blockPoolVMs(ctx context.Context, lostPool, msg string) err
 		if err := r.block(ctx, &vms.Items[i], msg); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// forgetDrain marks every NodeDrain entry not drained on a lost pool. NodeDrain is its broker's
+// last report, and the broker writes it separately from the lease heartbeat, so a pool that comes
+// back can be Ready on a fresh lease while NodeDrain still says Drained=true from before it was
+// lost — after that loss, VMIs may well be running on those prefixes again. The broker's next
+// report, computed from its live downstream on every tick, overwrites this: ReportStatus replaces
+// the whole list whenever what it computes differs from what it read.
+func (r *Reconciler) forgetDrain(ctx context.Context, pool *platformv1.ClusterPool) error {
+	changed := false
+	for i := range pool.Status.NodeDrain {
+		if pool.Status.NodeDrain[i].Drained {
+			pool.Status.NodeDrain[i].Drained = false
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	if err := r.Client.Status().Update(ctx, pool); err != nil {
+		return fmt.Errorf("forget drain report of lost pool %s: %w", pool.Name, err)
 	}
 	return nil
 }

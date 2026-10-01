@@ -148,9 +148,12 @@ reconciler applies two fences and requires both to confirm active:
   `spec.cidrs`). It returns success only when the CR is `Fenced` and reports
   `status.result == Succeeded` for the fence op; a freshly-created or
   still-`Pending` fence returns an error, so an unconfirmed blocklist never lets a
-  reschedule proceed. A CR left `Unfenced` by a release in flight is replaced with
-  a fresh `Fenced` one rather than flipped back, since its `Succeeded` reports the
-  unfence.
+  reschedule proceed. A CR left `Unfenced` by a release in flight is not flipped
+  back, since its `Succeeded` may be the old fence op's: the fencer waits for its
+  unfence to be reported (the VMs show `FailoverBlocked` "storage fence
+  unconfirmed … unfence not yet reported" meanwhile), then replaces it with a fresh
+  `Fenced` one. See [storage](storage-csi-integration.md) for why a CR is never
+  deleted before its unfence is reported.
   Under the hood csi-addons runs `ceph osd blocklist add` for the CIDR.
 - Network fence (`fence.NetworkFencer`). Withdraws the `/64`'s overlay routes
   from every subscriber by calling the reflector's `RouteBusAdmin.SetFence`, so
@@ -266,8 +269,8 @@ announce an address placed on another pool (see below):
 
 - the storage fence is driven `Fenced → Unfenced` in place (so csi-addons
   runs `ceph osd blocklist rm` on the state transition — a bare delete would
-  leave the blocklist entry behind), and only after the un-fence reports
-  `Succeeded` is the `NetworkFence` CR deleted;
+  leave the blocklist entry behind), and only after csi-addons reports the
+  unfence op `Succeeded` (by its message) is the `NetworkFence` CR deleted;
 - the network fence is cleared with `RouteBusAdmin.ClearFence`, and the
   reflector re-advertises the routes it was hiding from what it stored. The
   agents do not re-announce them.
@@ -355,9 +358,13 @@ includes a VM deleted while its pool was lost, and a NIC whose compiled twin is
 gone or whose IPs changed after the move. Such a route is re-advertised on
 release, as before.
 
-Nothing is released while the pool is unreachable. `NodeDrain` is the broker's
-last report, and nothing clears it when the pool is lost again; a release held on
-routes can outlast that loss. A partition that also drops the pool's route-bus
+Nothing is released while the pool is unreachable, and each time a lost pool is
+re-fenced its drain report is forgotten (every `NodeDrain` entry set not drained).
+`NodeDrain` is the broker's last report, written separately from its lease
+heartbeat, so a pool that comes back can be `Ready` on a fresh lease while
+`NodeDrain` still says drained from before it was lost; only the broker's next
+report, computed from its live downstream, can release. A release held on routes
+can outlast a loss. A partition that also drops the pool's route-bus
 sessions empties the reflector, so the route gate would pass, and releasing then
 would reopen Ceph to nodes that are partitioned but alive while the same pass
 rebinds their VMs elsewhere.

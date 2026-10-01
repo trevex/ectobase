@@ -405,3 +405,56 @@ func TestReleaseDrained_NothingFencedClearsTheCondition(t *testing.T) {
 		t.Fatalf("with nothing fenced FenceReleaseBlocked must be False, got %+v", cond)
 	}
 }
+
+// The lease heartbeat and the drain report are separate broker writes, so a returning pool can be
+// Ready on a fresh lease while NodeDrain still holds its pre-loss Drained=true — the value a
+// release held on routes carries across incidents. Re-fencing a lost pool therefore forgets every
+// drain report: only one the broker computes after it is back, from its live downstream, releases.
+func TestReleaseDrained_RefenceForgetsTheDrainReport(t *testing.T) {
+	pool := lostPoolObj("A", sourceNet)
+	pool.Status.FencedPrefixes = []string{sourceNet}
+	pool.Status.NodeDrain = []platformv1.NodeDrainStatus{{Prefix: sourceNet, Drained: true}} // pre-loss
+	sf, nf := &releaseCountingFencer{}, &releaseCountingFencer{}
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(pool, readyPoolObj("B")).
+		WithStatusSubresource(pool).Build()
+	r := &Reconciler{Client: c, StorageFencer: sf, NetworkFencer: nf, Routes: &fakeRoutes{}, FailoverThreshold: time.Minute}
+	ctx := context.Background()
+
+	if _, err := r.Reconcile(ctx, req("A")); err != nil {
+		t.Fatalf("reconcile (lost): %v", err)
+	}
+	got := &platformv1.ClusterPool{}
+	_ = c.Get(ctx, key("A"), got)
+	for _, d := range got.Status.NodeDrain {
+		if d.Drained {
+			t.Fatalf("re-fencing a lost pool must forget its drain report, got %+v", got.Status.NodeDrain)
+		}
+	}
+
+	// Back: Ready on a fresh lease, but the broker has not reported drain yet.
+	renewed := metav1.NewMicroTime(time.Now())
+	got.Status.Phase = clusterpool.PhaseReady
+	got.Status.Lease = &platformv1.ClusterPoolLease{RenewTime: &renewed}
+	if err := c.Status().Update(ctx, got); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Reconcile(ctx, req("A")); err != nil {
+		t.Fatalf("reconcile (back, no drain report): %v", err)
+	}
+	if len(sf.released) != 0 || len(nf.released) != 0 {
+		t.Fatalf("no fresh drain report yet: nothing may be released; storage=%v network=%v", sf.released, nf.released)
+	}
+
+	// The broker's first report after recovery says the /64 is drained.
+	_ = c.Get(ctx, key("A"), got)
+	got.Status.NodeDrain = []platformv1.NodeDrainStatus{{Prefix: sourceNet, Drained: true}}
+	if err := c.Status().Update(ctx, got); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Reconcile(ctx, req("A")); err != nil {
+		t.Fatalf("reconcile (fresh drain report): %v", err)
+	}
+	if len(sf.released) != 1 || len(nf.released) != 1 {
+		t.Fatalf("a fresh drain report on a reachable pool releases; storage=%v network=%v", sf.released, nf.released)
+	}
+}

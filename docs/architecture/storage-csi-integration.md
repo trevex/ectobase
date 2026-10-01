@@ -150,16 +150,33 @@ The storage half is the csi-addons `NetworkFence` mechanism. The dispatch's
 fenced node can no longer touch its RBD images. The fencer is fail-safe: it
 returns success only once the CR is `Fenced` and reports `status.result ==
 Succeeded` with the fence op's message (`fencing operation successful`); a
-pending or absent status is an error that holds the barrier. csi-addons keeps one
-result per CR, overwritten by whichever op ran last, so a CR left `Unfenced` by a
-release in flight is never flipped back in place: its `Succeeded` belongs to the
-unfence. The fencer deletes it and creates a fresh `Fenced` one instead.
+pending or absent status is an error that holds the barrier.
+
+csi-addons keeps one result per CR, overwritten by whichever op ran last. It never
+sets `status.conditions` and records no generation, so `status.message` is the
+only thing that says which op a `Succeeded` belongs to: `fencing operation
+successful` or `unfencing operation successful` (its exported
+`FenceOperationSuccessfulMessage` and `UnFenceOperationSuccessfulMessage`). That
+needs csi-addons v0.9.0 or later; v0.5.0 wrote the fence message for both ops.
+Deleting a `NetworkFence` only drops csi-addons' finalizer: it never unfences, so
+a CR deleted before its unfence ran leaves the blocklist entry behind, with a
+multi-year expiry and nothing tracking it.
 
 Release is the inverse and equally careful. Ceph removes a blocklist entry only on
-the `Fenced → Unfenced` state transition — a bare delete of a `Fenced` CR would
-leave the blocklist in place (with a multi-year expiry). So `Release` flips the CR
-to `Unfenced` in place, waits for csi-addons to run `ceph osd blocklist rm` and
-report `Succeeded`, and only then deletes the CR.
+the `Fenced → Unfenced` state transition. So `Release` flips the CR to `Unfenced`
+in place, waits until csi-addons reports the unfence op `Succeeded` (right after
+the flip the status still shows the fence op's), and only then deletes the CR.
+Fence never flips an `Unfenced` CR back in place, where the fence op's old
+`Succeeded` could confirm a fence that is being removed. It waits for that CR's
+unfence to be reported, then deletes it and creates a fresh `Fenced` one. No path
+deletes a CR before its unfence is reported, which is what lets a missing CR mean
+"released". Never delete a `NetworkFence` by hand; patch it to `Unfenced` and let
+csi-addons run the removal.
+
+One residual is outside the fencer's reach: when a csi-addons RPC times out, the
+CR reports the op failed, but Ceph may still apply it later, after the next op.
+An unfence that lands late can remove a blocklist entry a later fence reported in
+place. This is equally true of an in-place flip.
 
 The csi-addons controller and `NetworkFence` CRD are installed alongside a
 `k8s-sidecar` wired into the ceph-csi RBD provisioner; the sidecar registers a

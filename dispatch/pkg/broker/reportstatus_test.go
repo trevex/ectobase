@@ -108,3 +108,34 @@ func TestReportStatus_WritesPrefixesPlacementAndDrain(t *testing.T) {
 		t.Fatalf("vm1 placement: %+v", gotCVM.Status.Placement)
 	}
 }
+
+// Failover forgets a lost pool's drain report by marking every entry not drained; the broker's
+// first report after recovery must overwrite that from its live downstream, not keep it.
+func TestReportStatus_OverwritesAForgottenDrainReport(t *testing.T) {
+	s := runtime.NewScheme()
+	if err := platforminstall.AddToScheme(s); err != nil {
+		t.Fatal(err)
+	}
+	const prefix = "2001:db8:0:1::/64"
+	pool := &platformv1.ClusterPool{
+		ObjectMeta: metav1.ObjectMeta{Name: "c1"},
+		Status: platformv1.ClusterPoolStatus{
+			FencedPrefixes: []string{prefix},
+			NodeDrain:      []platformv1.NodeDrainStatus{{Prefix: prefix, Drained: false}}, // forgotten by failover
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(pool).WithStatusSubresource(pool).Build()
+	b := &Broker{Dispatch: c, Pools: c, ClusterName: "c1"}
+
+	// Nothing runs on the /64 any more.
+	if err := b.ReportStatus(context.Background(), []NodeFact{{Name: "node-1", Prefix: prefix}}, nil); err != nil {
+		t.Fatalf("ReportStatus: %v", err)
+	}
+	got := &platformv1.ClusterPool{}
+	if err := c.Get(context.Background(), client.ObjectKey{Name: "c1"}, got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Status.NodeDrain) != 1 || !got.Status.NodeDrain[0].Drained {
+		t.Fatalf("a fresh report of an empty /64 must say drained, got %+v", got.Status.NodeDrain)
+	}
+}

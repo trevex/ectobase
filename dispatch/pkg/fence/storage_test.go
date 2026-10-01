@@ -69,21 +69,63 @@ func TestStorageFencer_ReleaseTransitionsToUnfenced(t *testing.T) {
 	}
 }
 
-// Once the CR is observed Unfenced AND reports Succeeded (csi-addons ran blocklist rm),
-// Release deletes it and returns nil.
+// Once the CR is observed Unfenced AND csi-addons reports the UNFENCE op Succeeded (it ran
+// blocklist rm), Release deletes it and returns nil.
 func TestStorageFencer_ReleaseDeletesAfterUnfenced(t *testing.T) {
 	const name = "ectobase-2001-db8-0-1----64"
-	cur := fenceCR(name, "Unfenced", "Succeeded")
+	cur := unfencedCR(name)
 	c := fake.NewClientBuilder().WithObjects(cur).Build()
 	f := NewStorageFencer(c, "rbd.csi.ceph.com", "", client.ObjectKey{Name: "csi-rbd-secret", Namespace: "ceph"})
 
 	if err := f.Release(context.Background(), "2001:db8:0:1::/64"); err != nil {
 		t.Fatalf("Release: %v", err)
 	}
-	got := &unstructured.Unstructured{}
-	got.SetGroupVersionKind(cur.GroupVersionKind())
-	if err := c.Get(context.Background(), client.ObjectKey{Name: name}, got); err == nil {
+	if _, ok := getCR(t, c, name); ok {
 		t.Fatalf("CR must be deleted after a confirmed un-fence")
+	}
+}
+
+// Right after Release flips a CR to Unfenced its status still reports the FENCE op Succeeded.
+// A pass that lands before csi-addons runs the unfence must not delete the CR: csi-addons'
+// delete only drops its finalizer, so the unfence would never run and the multi-year blocklist
+// entry would be stranded with nothing left tracking it.
+func TestStorageFencer_ReleaseKeepsAnUnfencedCRUntilTheUnfenceIsReported(t *testing.T) {
+	const name = "ectobase-2001-db8-0-1----64"
+	for what, cr := range map[string]*unstructured.Unstructured{
+		"fence op's result still standing": func() *unstructured.Unstructured {
+			u := fenceCR(name, "Unfenced", "Succeeded")
+			_ = unstructured.SetNestedField(u.Object, fenceSucceededMsg, "status", "message")
+			return u
+		}(),
+		"no message": fenceCR(name, "Unfenced", "Succeeded"),
+		"unfence failed": func() *unstructured.Unstructured {
+			u := fenceCR(name, "Unfenced", "Failed")
+			_ = unstructured.SetNestedField(u.Object, "rpc error", "status", "message")
+			return u
+		}(),
+	} {
+		t.Run(what, func(t *testing.T) {
+			c := fake.NewClientBuilder().WithObjects(cr).Build()
+			f := NewStorageFencer(c, "rbd.csi.ceph.com", "", client.ObjectKey{Name: "csi-rbd-secret", Namespace: "ceph"})
+			if err := f.Release(context.Background(), "2001:db8:0:1::/64"); err == nil {
+				t.Fatal("Release must not report released before the unfence op is reported")
+			}
+			if _, ok := getCR(t, c, name); !ok {
+				t.Fatal("the CR must survive until its unfence is reported")
+			}
+		})
+	}
+}
+
+// The status messages are csi-addons' exported FenceOperationSuccessfulMessage and
+// UnFenceOperationSuccessfulMessage (v0.9.0+). They are the only thing telling the two ops apart,
+// so a change upstream must fail here, not in a fence that confirms the wrong op.
+func TestCSIAddonsOperationMessagesArePinned(t *testing.T) {
+	if fenceSucceededMsg != "fencing operation successful" {
+		t.Fatalf("fence message drifted: %q", fenceSucceededMsg)
+	}
+	if unfenceSucceededMsg != "unfencing operation successful" {
+		t.Fatalf("unfence message drifted: %q", unfenceSucceededMsg)
 	}
 }
 
@@ -113,20 +155,59 @@ func getCR(t *testing.T, c client.Client, name string) (*unstructured.Unstructur
 	return got, true
 }
 
-// A release in flight leaves the CR Unfenced, its status reporting the UNFENCE op Succeeded. If the
-// pool is lost again before the release finishes, the next Fence must not take that status as
-// proof of a fence: it would let failover rebind the pool's VMs while csi-addons is running
-// `ceph osd blocklist rm` for the nodes still holding them. Fence replaces the CR instead, so the
-// only Succeeded it can see is one csi-addons wrote for the new Fenced op.
-func TestStorageFencer_FenceOnAnUnfencedCRRefencesBeforeConfirming(t *testing.T) {
+// unfencedCR is what csi-addons leaves after a successful unfence op.
+func unfencedCR(name string) *unstructured.Unstructured {
+	u := fenceCR(name, "Unfenced", "Succeeded")
+	_ = unstructured.SetNestedField(u.Object, unfenceSucceededMsg, "status", "message")
+	return u
+}
+
+// A release in flight leaves the CR Unfenced. If the pool is lost again before that release
+// finishes, Fence must re-fence — but deleting the CR before its unfence ran would strand the
+// blocklist entry (csi-addons' delete only drops its finalizer, and a later Release would find
+// nothing and call it released), and flipping it back in place would let the fence op's old
+// Succeeded confirm a fence that is being removed. So Fence waits, touching nothing, until the
+// unfence is reported; the barrier stays blocked meanwhile.
+func TestStorageFencer_FenceOnAnUnfencedCRWaitsForTheUnfence(t *testing.T) {
 	const name, prefix = "ectobase-2001-db8-0-1----64", "2001:db8:0:1::/64"
-	unfenced := fenceCR(name, "Unfenced", "Succeeded")
-	_ = unstructured.SetNestedField(unfenced.Object, "unfencing operation successful", "status", "message")
-	c := fake.NewClientBuilder().WithObjects(unfenced).Build()
+	for what, cr := range map[string]*unstructured.Unstructured{
+		"no result yet": fenceCR(name, "Unfenced", ""),
+		"fence op's result still standing": func() *unstructured.Unstructured {
+			u := fenceCR(name, "Unfenced", "Succeeded")
+			_ = unstructured.SetNestedField(u.Object, fenceSucceededMsg, "status", "message")
+			return u
+		}(),
+	} {
+		t.Run(what, func(t *testing.T) {
+			c := fake.NewClientBuilder().WithObjects(cr).Build()
+			before, _ := getCR(t, c, name)
+			f := NewStorageFencer(c, "rbd.csi.ceph.com", "", client.ObjectKey{Name: "csi-rbd-secret", Namespace: "ceph"})
+			if err := f.Fence(context.Background(), prefix); err == nil {
+				t.Fatal("Fence must not confirm on a CR whose unfence has not been reported")
+			}
+			after, ok := getCR(t, c, name)
+			if !ok {
+				t.Fatal("Fence must not delete a CR whose unfence has not been reported")
+			}
+			if after.GetResourceVersion() != before.GetResourceVersion() {
+				t.Fatal("Fence must not patch a CR whose unfence has not been reported")
+			}
+		})
+	}
+}
+
+// Once the unfence is reported, the old CR is spent: Fence deletes it and creates a fresh Fenced
+// one, whose only possible Succeeded is a fence op's.
+func TestStorageFencer_FenceReplacesAnUnfencedCROnceTheUnfenceIsReported(t *testing.T) {
+	const name, prefix = "ectobase-2001-db8-0-1----64", "2001:db8:0:1::/64"
+	c := fake.NewClientBuilder().WithObjects(unfencedCR(name)).Build()
 	f := NewStorageFencer(c, "rbd.csi.ceph.com", "", client.ObjectKey{Name: "csi-rbd-secret", Namespace: "ceph"})
 
 	if err := f.Fence(context.Background(), prefix); err == nil {
 		t.Fatal("an Unfenced CR's Succeeded is the unfence op's: Fence must not confirm on it")
+	}
+	if _, ok := getCR(t, c, name); ok {
+		t.Fatal("a CR whose unfence is reported must be deleted to make way for a fresh fence")
 	}
 	if err := f.Fence(context.Background(), prefix); err == nil {
 		t.Fatal("the replacement Fenced CR has no result yet: Fence must not confirm")
@@ -157,7 +238,7 @@ func TestStorageFencer_FenceOnAnUnfencedCRRefencesBeforeConfirming(t *testing.T)
 func TestStorageFencer_FenceIgnoresAnUnfenceResult(t *testing.T) {
 	const name = "ectobase-2001-db8-0-1----64"
 	cr := fenceCR(name, "Fenced", "Succeeded")
-	_ = unstructured.SetNestedField(cr.Object, "unfencing operation successful", "status", "message")
+	_ = unstructured.SetNestedField(cr.Object, unfenceSucceededMsg, "status", "message")
 	c := fake.NewClientBuilder().WithObjects(cr).Build()
 	f := NewStorageFencer(c, "rbd.csi.ceph.com", "", client.ObjectKey{Name: "csi-rbd-secret", Namespace: "ceph"})
 	if err := f.Fence(context.Background(), "2001:db8:0:1::/64"); err == nil {
