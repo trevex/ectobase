@@ -28,6 +28,10 @@ pki:
   clusterIssuer: ectobase-ca
   # caSecretName holds the CA keypair backing the ClusterIssuer.
   caSecretName: ectobase-ca
+  # clientCASecretName holds the dispatch client CA: a separate self-signed root, the only CA the
+  # dispatch apiserver accepts client certificates from. The dispatch-controller signs each pool
+  # broker's client certificate from it; the apiserver mounts only its certificate.
+  clientCASecretName: ectobase-dispatch-client-ca
   # reflectorIP is the fabric-loopback IP agents dial; added as a SAN on the
   # reflector server cert. MUST match the host part of reflectorAddress/reflectorAdmin.
   reflectorIP: "fd00:db8:0:1::1"

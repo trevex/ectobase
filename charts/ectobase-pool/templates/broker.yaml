@@ -40,10 +40,13 @@ spec:
             # The dispatch serving cert is ROOT-signed; verify against the pre-provisioned root
             # (NOT the leaf/intermediate Secret's ca.crt). Mirrors the agent's routebus-root mount.
             - "--dispatch-ca=/secrets/dispatch-root/ca.crt"
+            # The dispatch client certificate the broker requests from the dispatch signer and keeps
+            # in broker-dispatch-tls itself (mounted below; client-go re-reads the files).
+            - "--dispatch-client-secret=broker-dispatch-tls"
             - "--dispatch-client-cert=/secrets/dispatch-cert/tls.crt"
             - "--dispatch-client-key=/secrets/dispatch-cert/tls.key"
-            # First-boot only: short-lived token used to bootstrap the pool intermediate (submit
-            # the RouteBusIdentity CSR) until cert-manager mints broker-dispatch-tls from it.
+            # Short-lived enrollment token: used to request a client certificate when the broker
+            # has no usable one (first boot, or after the dispatch stops accepting it).
             - "--dispatch-bootstrap-kubeconfig=/secrets/dispatch-bootstrap/kubeconfig"
             {{- end }}
             {{- if .Values.pki.enabled }}
@@ -74,8 +77,8 @@ spec:
             {{- end }}
       volumes:
         {{- if .Values.pki.enabled }}
-        # Optional: cert-manager mints broker-dispatch-tls only AFTER the broker bootstraps the
-        # pool intermediate, so it is absent at first pod start (the broker waits for it).
+        # Optional: the broker writes broker-dispatch-tls itself once it has enrolled, so it is
+        # absent at first pod start (the broker enrolls, then waits for it to be mounted).
         - name: dispatch-cert
           secret:
             secretName: broker-dispatch-tls

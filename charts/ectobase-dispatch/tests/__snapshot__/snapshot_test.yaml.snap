@@ -191,7 +191,10 @@ renders the dispatch control plane:
                 secretName: dispatch-apiserver-tls
             - name: client-ca
               secret:
-                secretName: ectobase-ca
+                items:
+                  - key: tls.crt
+                    path: tls.crt
+                secretName: ectobase-dispatch-client-ca
   8: |
     apiVersion: apiregistration.k8s.io/v1
     kind: APIService
@@ -501,6 +504,8 @@ renders the dispatch control plane:
                 - -reflector-tls-key=/etc/routebus-tls/tls.key
                 - -routebus-ca-cert=/etc/routebus-ca/tls.crt
                 - -routebus-ca-key=/etc/routebus-ca/tls.key
+                - -dispatch-client-ca-cert=/etc/dispatch-client-ca/tls.crt
+                - -dispatch-client-ca-key=/etc/dispatch-client-ca/tls.key
                 - -routebus-server-ips=fd00:db8:0:1::1,fd00:db8:0:1::1
                 - -csi-driver=rbd.csi.ceph.com
                 - -csi-cluster-id=
@@ -523,6 +528,9 @@ renders the dispatch control plane:
                 - mountPath: /etc/routebus-ca
                   name: routebus-ca
                   readOnly: true
+                - mountPath: /etc/dispatch-client-ca
+                  name: dispatch-client-ca
+                  readOnly: true
           serviceAccountName: dispatch-controller
           volumes:
             - name: routebus-tls
@@ -531,6 +539,9 @@ renders the dispatch control plane:
             - name: routebus-ca
               secret:
                 secretName: ectobase-ca
+            - name: dispatch-client-ca
+              secret:
+                secretName: ectobase-dispatch-client-ca
   18: |
     apiVersion: v1
     kind: Secret
@@ -1024,6 +1035,27 @@ renders the dispatch control plane:
       secretName: ectobase-ca
   33: |
     apiVersion: cert-manager.io/v1
+    kind: Certificate
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-dispatch
+        helm.sh/chart: ectobase-dispatch-0.1.0
+      name: ectobase-dispatch-client-ca
+      namespace: system
+    spec:
+      commonName: ectobase-dispatch-client-ca
+      duration: 87600h
+      isCA: true
+      issuerRef:
+        kind: Issuer
+        name: ectobase-ca-selfsign
+      privateKey:
+        algorithm: ECDSA
+        size: 256
+      secretName: ectobase-dispatch-client-ca
+  34: |
+    apiVersion: cert-manager.io/v1
     kind: ClusterIssuer
     metadata:
       labels:
@@ -1034,7 +1066,7 @@ renders the dispatch control plane:
     spec:
       ca:
         secretName: ectobase-ca
-  34: |
+  35: |
     apiVersion: cert-manager.io/v1
     kind: Certificate
     metadata:
@@ -1062,7 +1094,7 @@ renders the dispatch control plane:
       usages:
         - server auth
         - client auth
-  35: |
+  36: |
     apiVersion: cert-manager.io/v1
     kind: Certificate
     metadata:
@@ -1084,7 +1116,7 @@ renders the dispatch control plane:
       secretName: dispatch-controller-routebus-tls
       usages:
         - client auth
-  36: |
+  37: |
     apiVersion: cert-manager.io/v1
     kind: Certificate
     metadata:

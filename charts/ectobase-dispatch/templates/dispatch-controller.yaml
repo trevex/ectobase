@@ -71,6 +71,10 @@ spec:
             # Route-bus PKI signer: sign pool intermediate CAs from the root (mounted below).
             - "-routebus-ca-cert=/etc/routebus-ca/tls.crt"
             - "-routebus-ca-key=/etc/routebus-ca/tls.key"
+            # Brokers' dispatch client certificates are signed from a SEPARATE root, the only CA the
+            # dispatch apiserver accepts client certificates from (mounted below).
+            - "-dispatch-client-ca-cert=/etc/dispatch-client-ca/tls.crt"
+            - "-dispatch-client-ca-key=/etc/dispatch-client-ca/tls.key"
             # The dispatch's own serving-certificate IP SANs: no intermediate may cover them.
             - "-routebus-server-ips={{ .Values.pki.reflectorIP }},{{ .Values.dispatchApiserver.serviceIP }}"
             {{- with .Values.pki.fleetIdentities }}
@@ -106,6 +110,9 @@ spec:
             - name: routebus-ca
               mountPath: /etc/routebus-ca
               readOnly: true
+            - name: dispatch-client-ca
+              mountPath: /etc/dispatch-client-ca
+              readOnly: true
       volumes:
         - name: routebus-tls
           secret:
@@ -113,4 +120,7 @@ spec:
         - name: routebus-ca
           secret:
             secretName: {{ .Values.pki.caSecretName }}
+        - name: dispatch-client-ca
+          secret:
+            secretName: {{ .Values.pki.clientCASecretName }}
           {{- end }}

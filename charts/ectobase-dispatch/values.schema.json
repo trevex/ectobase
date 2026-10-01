@@ -23,6 +23,11 @@
       "type": "object",
       "additionalProperties": true,
       "properties": {
+        "clientCASecretName": {
+          "type": "string",
+          "description": "Secret of the dispatch client CA, the only CA the dispatch apiserver accepts client certificates from.",
+          "minLength": 1
+        },
         "fleetIdentities": {
           "type": "array",
           "description": "RouteBusIdentity names that are not pools (e.g. edge); the signer constrains them to their own spec.permittedUnderlayCIDRs. Empty trusts none.",
