@@ -186,6 +186,23 @@ Do not reuse a fleet identity's name for a pool. A name in the dispatch chart's
 `pki.fleetIdentities` (for example `edge`) is signed on its own `spec.permittedUnderlayCIDRs`, and
 the signer denies it outright if a `ClusterPool` of the same name exists.
 
+### Decommission a pool
+
+Removing a pool means removing everything enrollment created for it, not only its `ClusterPool`:
+
+- the `ClusterRole` and `ClusterRoleBinding` `dispatch-broker-pool-<pool>`, the `Role` and
+  `RoleBinding` `dispatch-broker` in `pool-<pool>`, and the ServiceAccount
+  `dispatch-broker-bootstrap-<pool>`;
+- the `RouteBusIdentity` `<pool>`;
+- the namespace `pool-<pool>`, once its twins are gone.
+
+Nothing revokes the old broker's credentials. Its dispatch client certificate
+(`CN=ectobase:cluster:<pool>`) stays valid for up to 90 days, and so does the pool's intermediate,
+which can mint route-bus leaves for `<pool>.routebus.ectobase.dev` inside its old prefix. While the
+per-pool grant exists, that certificate still acts as the pool. Do not give a new pool the same
+name until the old broker certificate has expired, or unless every grant above was deleted first:
+a reused name re-creates the grant, and the old certificate then authenticates as the new pool.
+
 ## Install the pool chart
 
 The pool chart does not manage its release namespace, so create it first:
