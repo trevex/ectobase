@@ -39,8 +39,9 @@ func macOrSpec(nic *netv1.NetworkInterface) string {
 
 // PeerImportSpec is a pre-resolved peering import for a specific LOCAL VPC (peerVNI + the peer's
 // exposed prefixes). The controller computes these from Ready VPCPeerings; Compile just filters by
-// the NIC's VPC.
+// the NIC's VPC, namespace and name.
 type PeerImportSpec struct {
+	VPCNamespace   string // the LOCAL vpc's namespace (the peering's own; matches nic.Namespace)
 	VPCName        string // the LOCAL vpc this import applies to (matches nic.Spec.VPCRef.Name)
 	PeerVNI        int32
 	ImportPrefixes []string
@@ -92,7 +93,7 @@ func resolvePlacement(nic *netv1.NetworkInterface, containers []computev1.Contai
 // then decides what the interface enforces instead); records LB membership and peer imports; and,
 // for each overlay IP with a NATGateway allocation (natBySource, keyed by source overlay IP),
 // records a CompiledNATSource. peerings is a pre-resolved slice of PeerImportSpecs; only entries
-// whose VPCName matches the NIC's VPC are emitted. The returned CompiledNIC has no Status set
+// whose VPCNamespace and VPCName match the NIC's VPC are emitted. The returned CompiledNIC has no Status set
 // (caller fills that in if needed).
 func Compile(nic *netv1.NetworkInterface, vni int32, fw compiledv1.CompiledFirewall, lbs []netv1.LoadBalancer, peerings []PeerImportSpec, natBySource map[string]netv1.NATAllocation, placement Placement) compiledv1.CompiledNIC {
 	var port compiledv1.PortStatus
@@ -149,7 +150,7 @@ func Compile(nic *netv1.NetworkInterface, vni int32, fw compiledv1.CompiledFirew
 	}
 
 	for _, p := range peerings {
-		if p.VPCName != nic.Spec.VPCRef.Name {
+		if p.VPCNamespace != nic.Namespace || p.VPCName != nic.Spec.VPCRef.Name {
 			continue
 		}
 		compiled.Spec.PeerImports = append(compiled.Spec.PeerImports, compiledv1.CompiledPeerImport{
@@ -215,7 +216,8 @@ func (r *CompiledNICReconciler) vpcVNI(ctx context.Context, namespace, name stri
 	return vpc.Status.VNI
 }
 
-// resolvePeerImports returns a PeerImportSpec per Ready VPCPeering, keyed by the LOCAL vpc name.
+// resolvePeerImports returns a PeerImportSpec per Ready VPCPeering, keyed by the LOCAL vpc
+// (namespace + name).
 // A Ready peering P (VPCRef=local, PeerVPCRef=peer) contributes an import of the PEER's VNI,
 // filtered by what the PEER exposes to us — the reciprocal peering (peer→local) ExposedPrefixes.
 func (r *CompiledNICReconciler) resolvePeerImports(ctx context.Context) ([]PeerImportSpec, error) {
@@ -223,12 +225,12 @@ func (r *CompiledNICReconciler) resolvePeerImports(ctx context.Context) ([]PeerI
 	if err := r.Client.List(ctx, &peerings); err != nil {
 		return nil, err
 	}
-	// index every peering's exposedPrefixes by (namespace, fromVPC, toVPC)
-	type k struct{ ns, from, to string }
+	// index every peering's exposedPrefixes by (fromNamespace, fromVPC, toNamespace, toVPC)
+	type k struct{ fromNS, from, toNS, to string }
 	exposed := map[k][]string{}
 	for i := range peerings.Items {
 		p := &peerings.Items[i]
-		exposed[k{p.Namespace, p.Spec.VPCRef.Name, p.Spec.PeerVPCRef.Name}] = p.Spec.ExposedPrefixes
+		exposed[k{p.Namespace, p.Spec.VPCRef.Name, p.Spec.PeerVPCRef.Namespace, p.Spec.PeerVPCRef.Name}] = p.Spec.ExposedPrefixes
 	}
 	var out []PeerImportSpec
 	for i := range peerings.Items {
@@ -241,8 +243,9 @@ func (r *CompiledNICReconciler) resolvePeerImports(ctx context.Context) ([]PeerI
 			continue
 		}
 		// reciprocal (peer→local) exposedPrefixes = what the peer exposes to us
-		recip := exposed[k{p.Spec.PeerVPCRef.Namespace, p.Spec.PeerVPCRef.Name, p.Spec.VPCRef.Name}]
+		recip := exposed[k{p.Spec.PeerVPCRef.Namespace, p.Spec.PeerVPCRef.Name, p.Namespace, p.Spec.VPCRef.Name}]
 		out = append(out, PeerImportSpec{
+			VPCNamespace:   p.Namespace,
 			VPCName:        p.Spec.VPCRef.Name,
 			PeerVNI:        peerVNI,
 			ImportPrefixes: recip,
@@ -603,27 +606,32 @@ func (r *CompiledNICReconciler) nicsForLB(ctx context.Context, obj client.Object
 	return reqs
 }
 
-// nicsForPeering maps a VPCPeering event to reconcile requests for every NetworkInterface in the
-// peering's namespace whose VPC is either side of the peering. Enqueuing BOTH sides means the local
-// VPC's NICs recompile when the peering (or its reciprocal, referenced by the same VPC pair) changes.
+// nicsForPeering maps a VPCPeering event to reconcile requests for every NetworkInterface of either
+// side of the peering: the local VPC in the peering's namespace and the peer VPC in its namespace.
+// Enqueuing BOTH sides means the local VPC's NICs recompile when the peering changes, and the peer
+// VPC's NICs when their reciprocal's exposedPrefixes (this peering's) change.
 func (r *CompiledNICReconciler) nicsForPeering(ctx context.Context, obj client.Object) []reconcile.Request {
 	p, ok := obj.(*netv1.VPCPeering)
 	if !ok {
 		return nil
 	}
-	var nics netv1.NetworkInterfaceList
-	if err := r.Client.List(ctx, &nics, client.InNamespace(p.Namespace)); err != nil {
-		return nil
-	}
 	var reqs []reconcile.Request
-	for i := range nics.Items {
-		vpc := nics.Items[i].Spec.VPCRef.Name
-		if vpc != p.Spec.VPCRef.Name && vpc != p.Spec.PeerVPCRef.Name {
-			continue
+	for _, side := range []types.NamespacedName{
+		{Namespace: p.Namespace, Name: p.Spec.VPCRef.Name},
+		{Namespace: p.Spec.PeerVPCRef.Namespace, Name: p.Spec.PeerVPCRef.Name},
+	} {
+		var nics netv1.NetworkInterfaceList
+		if err := r.Client.List(ctx, &nics, client.InNamespace(side.Namespace)); err != nil {
+			return nil
 		}
-		reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{
-			Namespace: nics.Items[i].Namespace, Name: nics.Items[i].Name,
-		}})
+		for i := range nics.Items {
+			if nics.Items[i].Spec.VPCRef.Name != side.Name {
+				continue
+			}
+			reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{
+				Namespace: nics.Items[i].Namespace, Name: nics.Items[i].Name,
+			}})
+		}
 	}
 	return reqs
 }

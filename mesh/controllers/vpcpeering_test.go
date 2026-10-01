@@ -63,6 +63,27 @@ func TestVPCPeering_ReadyWhenReciprocalExists(t *testing.T) {
 	}
 }
 
+// A reciprocal must point back by namespace and name: same VPC names in the wrong namespace (on
+// either side) do not make the peering Ready.
+func TestVPCPeering_PendingWhenReciprocalNamespaceDiffers(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		recip *netv1.VPCPeering
+	}{
+		// green in the right namespace, but it points at blue in another namespace.
+		{"peer points elsewhere", peeringIn("default", "b-to-a", "b", "other", "a", "")},
+		// right back-reference, but this green lives in another namespace than the one a-to-b names.
+		{"peer in wrong namespace", peeringIn("other", "b-to-a", "b", "default", "a", "")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := reconcilePeering(t, "a-to-b", peering("a-to-b", "a", "b", "10.0.0.0/24"), tc.recip)
+			if got.Status.State != netv1.VPCPeeringPending {
+				t.Fatalf("State = %q, want %q", got.Status.State, netv1.VPCPeeringPending)
+			}
+		})
+	}
+}
+
 func TestVPCPeering_InvalidPrefix(t *testing.T) {
 	got := reconcilePeering(t, "a-to-b", peering("a-to-b", "a", "b", "not-a-cidr"))
 	if got.Status.State != netv1.VPCPeeringInvalid {
