@@ -224,12 +224,11 @@ func (b *PoolCertBootstrapper) submitCSR(ctx context.Context, csrPEM []byte, cid
 	id.Spec.PoolName = b.PoolName
 	id.Spec.Request = csrPEM
 	id.Spec.PermittedUnderlayCIDRs = cidrs
-	// Clear the old status cert so pollSigned waits for the re-sign, not the stale one.
-	id.Status.Certificate = nil
+	// The status is left alone: it is the signer's, and the broker holds no grant on it. A stale
+	// cert there is for the old key, which pollSigned does not accept.
 	if err := b.Dispatch.Update(ctx, id); err != nil {
 		return fmt.Errorf("update RouteBusIdentity: %w", err)
 	}
-	_ = b.Dispatch.Status().Update(ctx, id) // best-effort clear of stale status
 	return nil
 }
 

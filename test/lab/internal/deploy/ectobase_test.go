@@ -75,6 +75,10 @@ func TestClusterPoolsManifestScopesRouteBusPerPool(t *testing.T) {
 		}
 	}
 
+	// The RouteBusIdentity status (the signed certificate) is the signer's alone.
+	if strings.Contains(got, "routebusidentities/status") {
+		t.Fatalf("per-pool grant must not include routebusidentities/status:\n%s", got)
+	}
 	// The grant must never include `create` — that verb cannot be resourceNames-scoped, so
 	// granting it would re-open cross-pool RouteBusIdentity creation.
 	if strings.Contains(got, `"create"`) {

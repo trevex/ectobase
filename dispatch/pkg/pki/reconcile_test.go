@@ -349,3 +349,21 @@ func TestSigner_IgnoresStatusOnlyIdentityUpdates(t *testing.T) {
 		t.Error("a new CSR must trigger the signer")
 	}
 }
+
+// A certificate in status is the signer's only if the root signed it. Status is writable by more
+// than the signer (and a root may be rotated), so a cert with the right key and constraint from any
+// other issuer is replaced, not kept as "already signed".
+func TestSigner_ResignsACertTheRootDidNotSign(t *testing.T) {
+	id := identity(t, "k02")
+	otherRoot, otherKey, _ := makeRoot(t)
+	foreign, err := SignIntermediate(otherRoot, otherKey, id.Spec.Request, "k02", []string{poolPrefix}, time.Now().Add(intermediateTTL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id.Status.Certificate = foreign
+	s, c := testSigner(t, clusterPool("k02", poolPrefix), id)
+	got := signedCert(t, reconcileIdentity(t, s, c, "k02"))
+	if err := got.CheckSignatureFrom(s.Root.Cert); err != nil {
+		t.Fatalf("the cert left in status was not signed by the root: %v", err)
+	}
+}

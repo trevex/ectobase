@@ -225,7 +225,7 @@ lab generates them in `clusterPoolsManifest` (`test/lab/internal/deploy/ectobase
 | Object | Grants |
 |---|---|
 | `Role` `dispatch-broker` in `pool-<pool>` | `get`, `list`, `watch` on `compilednics`, `compiledvms`, `compiledvolumeattachments`, `compiledcontainers`; `get`, `update`, `patch` on `compiledvms/status` and `compiledvolumeattachments/status` |
-| `ClusterRole` `dispatch-broker-pool-<pool>` | with `resourceNames: [<pool>]`: `get`, `update` on `routebusidentities` and their status; `get` on `clusterpools`; `get`, `update`, `patch` on `clusterpools/status` |
+| `ClusterRole` `dispatch-broker-pool-<pool>` | with `resourceNames: [<pool>]`: `get`, `update` on `routebusidentities` (not their status, which only the signer writes); `get` on `clusterpools`; `get`, `update`, `patch` on `clusterpools/status` |
 
 Both are bound to the user `ectobase:cluster:<pool>`. The `ClusterRole` is also bound to the
 bootstrap ServiceAccount `dispatch-broker-bootstrap-<pool>`.

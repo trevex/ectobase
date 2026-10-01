@@ -711,12 +711,10 @@ kind: ClusterRole
 metadata:
   name: dispatch-broker-pool-%[1]s
 rules:
+  # The broker files its CSR into spec.request. Its status is the signer's alone: the broker only
+  # reads it (a plain get returns it) and accepts a certificate there only if it matches its key.
   - apiGroups: ["platform.ectobase.dev"]
     resources: ["routebusidentities"]
-    resourceNames: ["%[1]s"]
-    verbs: ["get", "update"]
-  - apiGroups: ["platform.ectobase.dev"]
-    resources: ["routebusidentities/status"]
     resourceNames: ["%[1]s"]
     verbs: ["get", "update"]
   # The pool reads its own ClusterPool and reports lease/capacity/fence facts onto its status.

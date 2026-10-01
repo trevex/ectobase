@@ -306,8 +306,8 @@ func prefixWithin(inner, outer netip.Prefix) bool {
 	return inner.Addr().Is4() == outer.Addr().Is4() && inner.Bits() >= outer.Bits() && outer.Contains(inner.Addr())
 }
 
-// alreadySigned reports whether status carries a cert matching the current CSR's public key,
-// name-constrained exactly to the identity's DNS domain and to permitted, and comfortably before
+// alreadySigned reports whether status carries a cert the root signed, for the current CSR's public
+// key, name-constrained exactly to the identity's DNS domain and to permitted, and comfortably before
 // expiry (so re-issuing on rotation or a changed constraint but not every reconcile).
 func (s *Signer) alreadySigned(id *platformv1.RouteBusIdentity, permitted []string) (bool, error) {
 	if len(id.Status.Certificate) == 0 {
@@ -323,6 +323,9 @@ func (s *Signer) alreadySigned(id *platformv1.RouteBusIdentity, permitted []stri
 	}
 	if time.Until(cert.NotAfter) < intermediateTTL/2 {
 		return false, nil // due for rotation
+	}
+	if cert.CheckSignatureFrom(s.Root.Cert) != nil {
+		return false, nil // not ours: another issuer, or a root since rotated
 	}
 	if !slices.Equal(cert.PermittedDNSDomains, []string{PoolDNSDomain(id.Spec.PoolName)}) ||
 		!sameRanges(cert.PermittedIPRanges, permitted) {

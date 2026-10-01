@@ -138,7 +138,7 @@ func TestPerPoolRBAC_ScopesABroker(t *testing.T) {
 			},
 			{
 				APIGroups:     []string{"platform.ectobase.dev"},
-				Resources:     []string{"routebusidentities", "routebusidentities/status"},
+				Resources:     []string{"routebusidentities"},
 				ResourceNames: []string{ownPool},
 				Verbs:         []string{"get", "update"},
 			},
@@ -280,6 +280,13 @@ func TestPerPoolRBAC_ScopesABroker(t *testing.T) {
 		own.Spec.Request = []byte("csr")
 		if err := broker.Update(ctx, &own); err != nil {
 			t.Fatalf("broker must file its CSR into its own RouteBusIdentity: %v", err)
+		}
+		// The status carries the signed certificate; it is the signer's to write.
+		own.Status.Certificate = []byte("forged")
+		if err := broker.Status().Update(ctx, &own); err == nil {
+			t.Fatal("broker wrote its RouteBusIdentity status")
+		} else if !apierrors.IsForbidden(err) {
+			t.Fatalf("want Forbidden on a status write, got: %v", err)
 		}
 		if err := broker.Get(ctx, client.ObjectKey{Name: foreignPool}, &platformv1.RouteBusIdentity{}); !apierrors.IsForbidden(err) {
 			t.Fatalf("want Forbidden reading a foreign RouteBusIdentity, got: %v", err)
