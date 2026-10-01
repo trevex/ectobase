@@ -4591,7 +4591,7 @@ func schema_ectobase_api_platform_v1alpha1_ClusterPoolSpec(ref common.ReferenceC
 					},
 					"underlayPrefix": {
 						SchemaProps: spec.SchemaProps{
-							Description: "UnderlayPrefix is this cluster's underlay aggregate (a CIDR that contains every node's underlay address, e.g. \"fd00:cafe:1a2b::/48\"). Declaring it makes Tier-2 fencing COMPLETE by construction: the dispatch fences this one prefix instead of enumerating node /64s, so a node it never observed — one that joined while the pool was unreachable — is fenced too.\n\nIt is dispatch configuration, set when the pool is registered, deliberately NOT reported by the broker: a fence coordinate must never be derived from the entity being fenced, because that entity is by definition the one you have lost contact with.\n\nWhen empty, the dispatch falls back to the broker-reported node /64s, which is only safe while every node in the cluster shares one /64 (each node's identity being a /128 inside it). If the reported set contains MORE than one distinct /64, the cluster spans /64s, an unobserved node could sit in an unreported one. Failover then fences the /64s it knows about but blocks the rebind, because fencing incompletely must not reattach a disk an unfenced node may still write to. Set this field to unblock it. See docs/architecture/failover.md.",
+							Description: "UnderlayPrefix is this cluster's underlay aggregate (a CIDR that contains every node's underlay address, e.g. \"fd00:cafe:1a2b::/48\"). Declaring it makes Tier-2 fencing COMPLETE by construction: the dispatch fences this one prefix instead of enumerating node /64s, so a node it never observed — one that joined while the pool was unreachable — is fenced too.\n\nIt is also the pool's route-bus certificate constraint: the dispatch signer IP-name-constrains the pool's intermediate CA to exactly this prefix, so the pool can only mint node leaves whose IP SAN lies inside it, and the reflector only trusts nexthops equal to such a SAN. A pool must declare it to join the route bus: with it empty, the signer denies the pool's intermediate.\n\nIt is dispatch configuration, set when the pool is registered, deliberately NOT reported by the broker: neither a fence coordinate nor a certificate constraint may be derived from the entity it bounds. A fenced pool is by definition the one you have lost contact with, and a constraint the pool chooses itself constrains nothing.\n\nWhen empty, failover falls back to the broker-reported node /64s, which is only safe while every node in the cluster shares one /64 (each node's identity being a /128 inside it). If the reported set contains MORE than one distinct /64, the cluster spans /64s, an unobserved node could sit in an unreported one. Failover then fences the /64s it knows about but blocks the rebind, because fencing incompletely must not reattach a disk an unfenced node may still write to. Set this field to unblock it. See docs/architecture/failover.md.",
 							Type:        []string{"string"},
 							Format:      "",
 						},
@@ -4753,7 +4753,7 @@ func schema_ectobase_api_platform_v1alpha1_RouteBusIdentity(ref common.Reference
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
-				Description: "RouteBusIdentity is a pool's route-bus intermediate-CA request + signed response, served by the dispatch aggregated apiserver. The broker creates it; the dispatch signer fills status.",
+				Description: "RouteBusIdentity is a pool's route-bus intermediate-CA request + signed response, served by the dispatch aggregated apiserver. The operator pre-creates it when enrolling the pool, the broker files its CSR into it, and the dispatch signer fills status.",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
 					"kind": {
@@ -4854,7 +4854,7 @@ func schema_ectobase_api_platform_v1alpha1_RouteBusIdentitySpec(ref common.Refer
 				Properties: map[string]spec.Schema{
 					"poolName": {
 						SchemaProps: spec.SchemaProps{
-							Description: "PoolName is the identity this intermediate belongs to — a ClusterPool name, or `edge` for the WAN edge fleet. The signed intermediate is name-constrained to it so it can only mint leaves within it.",
+							Description: "PoolName is the identity this intermediate belongs to — a ClusterPool name, or `edge` for the WAN edge fleet. It must equal the object's name. The signed intermediate is name-constrained to it so it can only mint leaves within it.",
 							Type:        []string{"string"},
 							Format:      "",
 						},
@@ -4868,7 +4868,7 @@ func schema_ectobase_api_platform_v1alpha1_RouteBusIdentitySpec(ref common.Refer
 					},
 					"permittedUnderlayCIDRs": {
 						SchemaProps: spec.SchemaProps{
-							Description: "PermittedUnderlayCIDRs are this identity's underlay IPv6 ranges — a pool's /48, or the edge loopback aggregate for the edge fleet. The signer name-constrains the intermediate to these so it can only mint leaves whose IP SAN falls inside them; the reflector then binds route nexthops to that SAN. This constraint, not the minting code, is what bounds a holder of the intermediate — which matters most for the edge, where an agent signs its own leaf locally.",
+							Description: "PermittedUnderlayCIDRs are the underlay ranges of an identity that has NO ClusterPool of its name, such as the edge fleet (its loopback aggregate). The signer name-constrains that identity's intermediate to these, so it can only mint leaves whose IP SAN falls inside them; the reflector then binds route nexthops to that SAN. This constraint, not the minting code, is what bounds a holder of the intermediate, which matters most for the edge, where an agent signs its own leaf locally. Empty there means the signer denies the request.\n\nFor a pool it is IGNORED: a pool's broker writes this object, so the signer constrains the pool's intermediate to its ClusterPool's spec.underlayPrefix instead, and only names any requested range outside that prefix in the Signed condition.",
 							Type:        []string{"array"},
 							Items: &spec.SchemaOrArray{
 								Schema: &spec.Schema{

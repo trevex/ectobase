@@ -16,17 +16,22 @@ package v1alpha1
 // aggregate, and each edge agent mints its own leaf from that intermediate in process.
 type RouteBusIdentitySpecApplyConfiguration struct {
 	// PoolName is the identity this intermediate belongs to — a ClusterPool name, or `edge` for
-	// the WAN edge fleet. The signed intermediate is name-constrained to it so it can only mint
-	// leaves within it.
+	// the WAN edge fleet. It must equal the object's name. The signed intermediate is
+	// name-constrained to it so it can only mint leaves within it.
 	PoolName *string `json:"poolName,omitempty"`
 	// Request is the PEM-encoded PKCS#10 certificate-signing request for the pool's
 	// intermediate CA (the pool keeps the matching private key).
 	Request []byte `json:"request,omitempty"`
-	// PermittedUnderlayCIDRs are this identity's underlay IPv6 ranges — a pool's /48, or the edge
-	// loopback aggregate for the edge fleet. The signer name-constrains the intermediate to these
-	// so it can only mint leaves whose IP SAN falls inside them; the reflector then binds route
-	// nexthops to that SAN. This constraint, not the minting code, is what bounds a holder of the
-	// intermediate — which matters most for the edge, where an agent signs its own leaf locally.
+	// PermittedUnderlayCIDRs are the underlay ranges of an identity that has NO ClusterPool of its
+	// name, such as the edge fleet (its loopback aggregate). The signer name-constrains that
+	// identity's intermediate to these, so it can only mint leaves whose IP SAN falls inside them;
+	// the reflector then binds route nexthops to that SAN. This constraint, not the minting code,
+	// is what bounds a holder of the intermediate, which matters most for the edge, where an agent
+	// signs its own leaf locally. Empty there means the signer denies the request.
+	//
+	// For a pool it is IGNORED: a pool's broker writes this object, so the signer constrains the
+	// pool's intermediate to its ClusterPool's spec.underlayPrefix instead, and only names any
+	// requested range outside that prefix in the Signed condition.
 	PermittedUnderlayCIDRs []string `json:"permittedUnderlayCIDRs,omitempty"`
 }
 

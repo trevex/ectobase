@@ -12,7 +12,8 @@ import (
 // with apply.
 //
 // RouteBusIdentity is a pool's route-bus intermediate-CA request + signed response, served
-// by the dispatch aggregated apiserver. The broker creates it; the dispatch signer fills status.
+// by the dispatch aggregated apiserver. The operator pre-creates it when enrolling the pool, the
+// broker files its CSR into it, and the dispatch signer fills status.
 type RouteBusIdentityApplyConfiguration struct {
 	v1.TypeMetaApplyConfiguration    `json:",inline"`
 	*v1.ObjectMetaApplyConfiguration `json:"metadata,omitempty"`

@@ -19,7 +19,8 @@ spec:
       openAPIV3Schema:
         description: |-
           RouteBusIdentity is a pool's route-bus intermediate-CA request + signed response, served
-          by the dispatch aggregated apiserver. The broker creates it; the dispatch signer fills status.
+          by the dispatch aggregated apiserver. The operator pre-creates it when enrolling the pool, the
+          broker files its CSR into it, and the dispatch signer fills status.
         properties:
           apiVersion:
             description: |-
@@ -52,19 +53,24 @@ spec:
             properties:
               permittedUnderlayCIDRs:
                 description: |-
-                  PermittedUnderlayCIDRs are this identity's underlay IPv6 ranges — a pool's /48, or the edge
-                  loopback aggregate for the edge fleet. The signer name-constrains the intermediate to these
-                  so it can only mint leaves whose IP SAN falls inside them; the reflector then binds route
-                  nexthops to that SAN. This constraint, not the minting code, is what bounds a holder of the
-                  intermediate — which matters most for the edge, where an agent signs its own leaf locally.
+                  PermittedUnderlayCIDRs are the underlay ranges of an identity that has NO ClusterPool of its
+                  name, such as the edge fleet (its loopback aggregate). The signer name-constrains that
+                  identity's intermediate to these, so it can only mint leaves whose IP SAN falls inside them;
+                  the reflector then binds route nexthops to that SAN. This constraint, not the minting code,
+                  is what bounds a holder of the intermediate, which matters most for the edge, where an agent
+                  signs its own leaf locally. Empty there means the signer denies the request.
+
+                  For a pool it is IGNORED: a pool's broker writes this object, so the signer constrains the
+                  pool's intermediate to its ClusterPool's spec.underlayPrefix instead, and only names any
+                  requested range outside that prefix in the Signed condition.
                 items:
                   type: string
                 type: array
               poolName:
                 description: |-
                   PoolName is the identity this intermediate belongs to — a ClusterPool name, or `edge` for
-                  the WAN edge fleet. The signed intermediate is name-constrained to it so it can only mint
-                  leaves within it.
+                  the WAN edge fleet. It must equal the object's name. The signed intermediate is
+                  name-constrained to it so it can only mint leaves within it.
                 type: string
               request:
                 description: |-
