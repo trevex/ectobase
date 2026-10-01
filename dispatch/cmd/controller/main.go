@@ -81,6 +81,8 @@ func main() {
 	csiSecretNS := flag.String("csi-secret-namespace", "rook-ceph", "NetworkFence provisioner secret namespace")
 	routebusCACert := flag.String("routebus-ca-cert", "", "route-bus root CA cert PEM (dispatch cert-manager ectobase-ca secret); empty => RouteBusIdentity signer inactive")
 	routebusCAKey := flag.String("routebus-ca-key", "", "route-bus root CA key PEM")
+	clientCACert := flag.String("dispatch-client-ca-cert", "", "dispatch client CA cert PEM: the only CA the dispatch apiserver accepts client certificates from; the signer issues brokers' client certificates from it. Empty => none issued")
+	clientCAKey := flag.String("dispatch-client-ca-key", "", "dispatch client CA key PEM")
 	routebusFleet := flag.String("routebus-fleet-identities", "", "comma-separated RouteBusIdentity names that are not pools (e.g. edge) and are signed under their own operator-written spec.permittedUnderlayCIDRs; empty => none, every identity must be a ClusterPool with spec.underlayPrefix")
 
 	flag.Parse()
@@ -178,7 +180,16 @@ func main() {
 	if root == nil {
 		log.Printf("route-bus CA not configured (--routebus-ca-cert/key unset); RouteBusIdentity signer inactive")
 	}
-	if err := (&pki.Signer{Client: mgr.GetClient(), Reader: mgr.GetAPIReader(), Root: root, FleetIdentities: splitList(*routebusFleet)}).SetupWithManager(mgr); err != nil {
+	// A separate root from the route-bus one: every pool intermediate chains to the route-bus root,
+	// so the apiserver must not accept a client certificate from it.
+	clientCA, err := pki.LoadRootCA(*clientCACert, *clientCAKey)
+	if err != nil {
+		log.Fatalf("load dispatch client CA: %v", err)
+	}
+	if clientCA == nil {
+		log.Printf("dispatch client CA not configured (--dispatch-client-ca-cert/key unset); no broker client certificates are signed")
+	}
+	if err := (&pki.Signer{Client: mgr.GetClient(), Reader: mgr.GetAPIReader(), Root: root, ClientCA: clientCA, FleetIdentities: splitList(*routebusFleet)}).SetupWithManager(mgr); err != nil {
 		log.Fatalf("setup routebus signer controller: %v", err)
 	}
 

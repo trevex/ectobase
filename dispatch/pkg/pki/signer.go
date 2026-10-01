@@ -16,7 +16,6 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
-	"errors"
 	"fmt"
 	"math/big"
 	"net"
@@ -143,6 +142,10 @@ type Signer struct {
 	// uses Client.
 	Reader client.Reader
 	Root   *RootCA
+	// ClientCA signs the brokers' dispatch client certificates (--dispatch-client-ca-cert/key). It
+	// is a separate root, the only one the dispatch apiserver accepts client certificates from, so
+	// nothing a pool intermediate (under Root) mints can authenticate there. nil signs none.
+	ClientCA *RootCA
 	// FleetIdentities names the RouteBusIdentities that are not pools and whose operator-written
 	// spec.permittedUnderlayCIDRs is trusted (--routebus-fleet-identities). Empty trusts none.
 	FleetIdentities []string
@@ -153,38 +156,83 @@ func (s *Signer) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, 
 	if err := s.Client.Get(ctx, req.NamespacedName, &id); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
-	if s.Root == nil {
+	if s.Root == nil && s.ClientCA == nil {
 		// mTLS not configured on this dispatch — nothing to sign. (Requeue is driven by
-		// events; a later config that mounts the root re-runs on the next request.)
+		// events; a later config that mounts the roots re-runs on the next request.)
 		return ctrl.Result{}, nil
 	}
+	orig := id.Status.DeepCopy()
+	res, poolMark, err := s.reconcileIntermediate(ctx, &id)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	clientRes, err := s.reconcileClient(ctx, &id)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if !equality.Semantic.DeepEqual(*orig, id.Status) {
+		if err := s.Client.Status().Update(ctx, &id); err != nil {
+			if apierrors.IsConflict(err) {
+				return ctrl.Result{Requeue: true}, nil // the object changed; its event re-runs this
+			}
+			return ctrl.Result{}, err
+		}
+	}
+	if poolMark != nil {
+		if err := s.markPool(ctx, id.Name, *poolMark); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+	return soonest(res, clientRes), nil
+}
+
+// soonest merges two results, keeping the earlier requeue.
+func soonest(a, b ctrl.Result) ctrl.Result {
+	switch {
+	case a.RequeueAfter == 0:
+		return b
+	case b.RequeueAfter == 0 || a.RequeueAfter < b.RequeueAfter:
+		return a
+	}
+	return b
+}
+
+// reconcileIntermediate decides the route-bus intermediate in id's status, in memory. poolMark, when
+// not nil, is what to record on the ClusterPool: the denial, or "" once signed.
+func (s *Signer) reconcileIntermediate(ctx context.Context, id *platformv1.RouteBusIdentity) (res ctrl.Result, poolMark *string, err error) {
+	denyPool := func(msg string) *string { setDenied(id, msg); return &msg }
+	signed := ""
+	if s.Root == nil {
+		return ctrl.Result{}, nil, nil
+	}
 	if id.Spec.PoolName == "" || len(id.Spec.Request) == 0 {
-		return ctrl.Result{}, s.deny(ctx, &id, "spec.poolName and spec.request are required")
+		setDenied(id, "spec.poolName and spec.request are required")
+		return ctrl.Result{}, nil, nil
 	}
 	// RBAC binds a broker to the identity NAMED after its pool; spec.poolName is a field it
 	// writes. Signing for any other poolName would hand it another identity's DNS domain and range.
 	if id.Spec.PoolName != id.Name {
-		return ctrl.Result{}, s.denyPool(ctx, &id, fmt.Sprintf("spec.poolName %q must equal the RouteBusIdentity name %q", id.Spec.PoolName, id.Name))
+		return ctrl.Result{}, denyPool(fmt.Sprintf("spec.poolName %q must equal the RouteBusIdentity name %q", id.Spec.PoolName, id.Name)), nil
 	}
-	permitted, note, denial, err := s.constraint(ctx, &id)
+	permitted, note, denial, err := s.constraint(ctx, id)
 	if err != nil {
-		return ctrl.Result{}, err
+		return ctrl.Result{}, nil, err
 	}
 	if denial != "" {
 		// A denial can hinge on objects the signer does not watch (the pool it overlapped is
 		// deleted, a fleet identity's ranges change), so look again later.
-		return ctrl.Result{RequeueAfter: deniedRecheck}, s.denyPool(ctx, &id, denial)
+		return ctrl.Result{RequeueAfter: deniedRecheck}, denyPool(denial), nil
 	}
 	// Idempotent: if already signed for THIS public key under THIS constraint and not near
 	// expiry, leave it. A cert carrying a different constraint (signed under an earlier rule, or
 	// before the operator changed the prefix) is re-signed now, not at its expiry.
-	if fresh, err := s.alreadySigned(&id, permitted); err == nil && fresh {
-		return ctrl.Result{RequeueAfter: intermediateTTL / 3}, s.markPool(ctx, id.Name, "")
+	if fresh, err := s.alreadySigned(id, permitted); err == nil && fresh {
+		return ctrl.Result{RequeueAfter: intermediateTTL / 3}, &signed, nil
 	}
 
 	cert, err := SignIntermediate(s.Root.Cert, s.Root.Key, id.Spec.Request, id.Spec.PoolName, permitted, time.Now().Add(intermediateTTL))
 	if err != nil {
-		return ctrl.Result{}, s.denyPool(ctx, &id, err.Error())
+		return ctrl.Result{}, denyPool(err.Error()), nil
 	}
 	msg := fmt.Sprintf("intermediate CA signed for pool %s, IP-constrained to %s", id.Spec.PoolName, strings.Join(permitted, ","))
 	if note != "" {
@@ -196,21 +244,13 @@ func (s *Signer) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, 
 	meta.SetStatusCondition(&id.Status.Conditions, metav1.Condition{
 		Type: "Signed", Status: metav1.ConditionTrue, Reason: "Issued", Message: msg,
 	})
-	if err := s.Client.Status().Update(ctx, &id); err != nil {
-		return ctrl.Result{}, err
-	}
-	return ctrl.Result{RequeueAfter: intermediateTTL / 3}, s.markPool(ctx, id.Name, "")
+	return ctrl.Result{RequeueAfter: intermediateTTL / 3}, &signed, nil
 }
 
 // ConditionRouteBusIdentityDenied is set on a ClusterPool while the signer denies the pool's
 // RouteBusIdentity. A denied pool keeps running on the intermediate it already has and only fails at
 // renewal, months later, so the denial has to be visible where the operator looks at the pool.
 const ConditionRouteBusIdentityDenied = "RouteBusIdentityDenied"
-
-// denyPool denies id and records the denial on the ClusterPool of the same name, if there is one.
-func (s *Signer) denyPool(ctx context.Context, id *platformv1.RouteBusIdentity, msg string) error {
-	return errors.Join(s.deny(ctx, id, msg), s.markPool(ctx, id.Name, msg))
-}
 
 // markPool sets RouteBusIdentityDenied on ClusterPool name: True with msg when denied (msg
 // non-empty), False once signed, and nothing for a pool that was never denied. Other writers patch
@@ -434,17 +474,13 @@ func canonicalCIDRs(cidrs []string) []string {
 	return out
 }
 
-// deny records Signed=False and drops any certificate from status: a denied identity must not
-// keep presenting an intermediate the signer would no longer issue.
-func (s *Signer) deny(ctx context.Context, id *platformv1.RouteBusIdentity, msg string) error {
+// setDenied records Signed=False and drops any intermediate from status, in memory: a denied
+// identity must not keep presenting an intermediate the signer would no longer issue.
+func setDenied(id *platformv1.RouteBusIdentity, msg string) {
 	id.Status.Certificate = nil
 	meta.SetStatusCondition(&id.Status.Conditions, metav1.Condition{
 		Type: "Signed", Status: metav1.ConditionFalse, Reason: "Denied", Message: msg,
 	})
-	if err := s.Client.Status().Update(ctx, id); err != nil && !apierrors.IsConflict(err) {
-		return err
-	}
-	return nil
 }
 
 func (s *Signer) SetupWithManager(mgr ctrl.Manager) error {
