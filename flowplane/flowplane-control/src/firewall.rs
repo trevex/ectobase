@@ -153,7 +153,10 @@ impl<W: MapWriter> ControlCore<W> {
                 *n -= 1;
                 if *n == 0 {
                     self.fw_scope_refs.remove(&id);
-                    let _ = self.w.fw_scope_delete(id);
+                    // After a cut adopt, a binding it never read may still use the scope.
+                    if !self.fw_partial {
+                        let _ = self.w.fw_scope_delete(id);
+                    }
                 }
             }
         }
@@ -162,8 +165,15 @@ impl<W: MapWriter> ControlCore<W> {
     /// Adopt after a restart: the pinned `FW_BIND` entries and scopes survived but the in-memory
     /// bookkeeping did not. Rebuild the bindings and scope references from the maps, and delete
     /// scopes nothing binds (leaked by a process that died between a create and its binding).
-    pub fn adopt_fw_classifier(&mut self) {
-        self.fw_binds = self.w.fw_bind_entries().into_iter().collect();
+    ///
+    /// A `FW_BIND` walk a read error cut short makes a live binding's scopes look unbound. Then
+    /// the bindings read are adopted, no scope is deleted, here or later when its references run
+    /// out (`fw_partial`, until the next whole adopt), and the error is returned. Scopes leak
+    /// instead; a scope's id is its content, so a rebind to one is still found.
+    pub fn adopt_fw_classifier(&mut self) -> anyhow::Result<()> {
+        let binds = self.w.fw_bind_entries();
+        self.fw_partial = binds.error.is_some();
+        self.fw_binds = binds.entries.into_iter().collect();
         self.fw_scope_refs.clear();
         for b in self.fw_binds.values() {
             for id in [b.ingress_scope, b.egress_scope] {
@@ -172,10 +182,17 @@ impl<W: MapWriter> ControlCore<W> {
                 }
             }
         }
-        for id in self.w.fw_scope_ids() {
-            if !self.fw_scope_refs.contains_key(&id) {
-                let _ = self.w.fw_scope_delete(id);
+        let scopes = self.w.fw_scope_ids();
+        if !self.fw_partial {
+            for id in scopes.entries {
+                if !self.fw_scope_refs.contains_key(&id) {
+                    let _ = self.w.fw_scope_delete(id);
+                }
             }
+        }
+        match binds.error.or(scopes.error) {
+            None => Ok(()),
+            Some(e) => Err(e.context("a walk was cut short: adopted the bindings read")),
         }
     }
 
@@ -399,7 +416,7 @@ mod tests {
                 ifindex: 1,
             },
         );
-        c.adopt_fw_classifier();
+        c.adopt_fw_classifier().unwrap();
         assert!(
             !c.w.fw_scopes.contains_key(&0xdead),
             "unbound scope collected"
@@ -415,6 +432,49 @@ mod tests {
             c.w.fw_scopes.len(),
             1,
             "the adopted scope is freed once unreferenced"
+        );
+    }
+    // A FW_BIND walk a read error cut short makes a live binding's scopes look unbound. No scope
+    // may be deleted then: not the unbound-looking ones at adopt, and not one whose references
+    // run out later, since a binding adopt never read may still point at it.
+    #[test]
+    fn a_cut_bind_walk_deletes_no_scope() {
+        let mut before = core_with(&[(b"a", 1), (b"b", 2)]);
+        replace(&mut before, b"a", &[allow_from(1, 0)]).unwrap();
+        replace(&mut before, b"b", &[allow_from(1, 0)]).unwrap();
+        let mut w = before.w;
+        let orphan = crate::fwclass::Scope {
+            id: 0xdead,
+            ..Default::default()
+        };
+        w.fw_scope_create(&orphan).unwrap();
+        w.walk_cut.insert("FW_BIND", 1);
+        let scopes: Vec<u64> = w.fw_scopes.keys().copied().collect();
+
+        let mut c = ControlCore::new(w);
+        for (id, ifindex) in [(&b"a"[..], 1), (b"b", 2)] {
+            c.register_iface_meta(
+                id.to_vec(),
+                IfaceMeta {
+                    vni: 1,
+                    ipv4: [10, 0, 0, ifindex as u8],
+                    ipv6: [0u8; 16],
+                    underlay: [1u8; 16],
+                    ifindex,
+                },
+            );
+        }
+        assert!(c.adopt_fw_classifier().is_err(), "the cut is reported");
+        assert!(scopes.iter().all(|s| c.w.fw_scopes.contains_key(s)));
+
+        // The interface adopt read moves to other rules: the shared scope loses its last known
+        // reference, but the binding adopt did not read still uses it.
+        let read = *c.fw_binds.keys().next().unwrap();
+        let id: &[u8] = if read == 1 { b"a" } else { b"b" };
+        replace(&mut c, id, &[allow_from(2, 0)]).unwrap();
+        assert!(
+            scopes.iter().all(|s| c.w.fw_scopes.contains_key(s)),
+            "the unread binding's scope survives"
         );
     }
 }

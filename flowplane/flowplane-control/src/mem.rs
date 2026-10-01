@@ -34,9 +34,9 @@ pub struct MemMapWriter {
     pub lb: HashMap<LbKey, LbValue>,
     pub lb6: HashMap<LbKey6, LbValue>,
     pub maglev: HashMap<MaglevKey, LbBackend>,
-    /// Test knob: cut each `LB`, `LB6` and `MAGLEV` walk short after this many entries, as a
-    /// kernel map walk can fail part-way.
-    pub lb_walk_cut: Option<usize>,
+    /// Test knob: cut the adopt walk of each named map (`"LB"`, `"FW_BIND"`, `"IFACE_META"`, ...)
+    /// short after that many entries, as a kernel map walk can fail part-way.
+    pub walk_cut: HashMap<&'static str, usize>,
     pub underlay: HashMap<[u8; 16], UnderlayValue>,
     pub fw_bind: HashMap<u32, FwBind>,
     pub fw_scopes: HashMap<u64, crate::fwclass::Scope>,
@@ -60,12 +60,11 @@ pub struct MemMapWriter {
 }
 
 impl MemMapWriter {
-    fn walk<K: Copy, V: Copy>(&self, map: &HashMap<K, V>) -> Walk<(K, V)> {
-        let all = map.iter().map(|(k, v)| (*k, *v));
-        match self.lb_walk_cut {
-            Some(n) => Walk {
+    fn walk<T>(&self, name: &str, all: impl Iterator<Item = T>) -> Walk<T> {
+        match self.walk_cut.get(name) {
+            Some(&n) => Walk {
                 entries: all.take(n).collect(),
-                error: Some(anyhow::anyhow!("injected walk failure")),
+                error: Some(anyhow::anyhow!("injected {name} walk failure")),
             },
             None => Walk {
                 entries: all.collect(),
@@ -110,17 +109,13 @@ impl MapWriter for MemMapWriter {
         self.routes6.remove(&(vni, ipv6, p));
         Ok(())
     }
-    fn route_entries(&self) -> Vec<(u32, [u8; 4], u32, RouteValue)> {
-        self.routes
-            .iter()
-            .map(|(&(v, p, l), r)| (v, p, l, *r))
-            .collect()
+    fn route_entries(&self) -> Walk<(u32, [u8; 4], u32, RouteValue)> {
+        let all = self.routes.iter().map(|(&(v, p, l), r)| (v, p, l, *r));
+        self.walk("ROUTES", all)
     }
-    fn route6_entries(&self) -> Vec<(u32, [u8; 16], u32, RouteValue)> {
-        self.routes6
-            .iter()
-            .map(|(&(v, p, l), r)| (v, p, l, *r))
-            .collect()
+    fn route6_entries(&self) -> Walk<(u32, [u8; 16], u32, RouteValue)> {
+        let all = self.routes6.iter().map(|(&(v, p, l), r)| (v, p, l, *r));
+        self.walk("ROUTES6", all)
     }
     fn nat_upsert(&mut self, k: NatKey, v: NatValue) -> anyhow::Result<()> {
         self.nat.insert(k, v);
@@ -155,11 +150,9 @@ impl MapWriter for MemMapWriter {
         self.nat_owners.remove(&(p, *k));
         Ok(())
     }
-    fn nat_owner_entries(&self) -> Vec<(u32, NatOwnerKey, NatOwner)> {
-        self.nat_owners
-            .iter()
-            .map(|((p, k), v)| (*p, *k, *v))
-            .collect()
+    fn nat_owner_entries(&self) -> Walk<(u32, NatOwnerKey, NatOwner)> {
+        let all = self.nat_owners.iter().map(|((p, k), v)| (*p, *k, *v));
+        self.walk("NAT_OWNERS", all)
     }
     fn nat6_upsert(&mut self, k: NatKey6, v: NatValue6) -> anyhow::Result<()> {
         self.nat6.insert(k, v);
@@ -194,11 +187,9 @@ impl MapWriter for MemMapWriter {
         self.nat_owners6.remove(&(p, *k));
         Ok(())
     }
-    fn nat_owner6_entries(&self) -> Vec<(u32, NatOwnerKey6, NatOwner)> {
-        self.nat_owners6
-            .iter()
-            .map(|((p, k), v)| (*p, *k, *v))
-            .collect()
+    fn nat_owner6_entries(&self) -> Walk<(u32, NatOwnerKey6, NatOwner)> {
+        let all = self.nat_owners6.iter().map(|((p, k), v)| (*p, *k, *v));
+        self.walk("NAT_OWNERS6", all)
     }
     fn lb_upsert(&mut self, k: LbKey, v: LbValue) -> anyhow::Result<()> {
         self.lb.insert(k, v);
@@ -225,13 +216,13 @@ impl MapWriter for MemMapWriter {
         Ok(())
     }
     fn lb_entries(&self) -> Walk<(LbKey, LbValue)> {
-        self.walk(&self.lb)
+        self.walk("LB", self.lb.iter().map(|(k, v)| (*k, *v)))
     }
     fn lb6_entries(&self) -> Walk<(LbKey6, LbValue)> {
-        self.walk(&self.lb6)
+        self.walk("LB6", self.lb6.iter().map(|(k, v)| (*k, *v)))
     }
     fn maglev_entries(&self) -> Walk<(MaglevKey, LbBackend)> {
-        self.walk(&self.maglev)
+        self.walk("MAGLEV", self.maglev.iter().map(|(k, v)| (*k, *v)))
     }
     fn underlay_upsert(&mut self, k: [u8; 16], v: UnderlayValue) -> anyhow::Result<()> {
         self.underlay.insert(k, v);
@@ -266,11 +257,11 @@ impl MapWriter for MemMapWriter {
         self.fw_epoch = self.fw_epoch.wrapping_add(1);
         Ok(())
     }
-    fn fw_bind_entries(&self) -> Vec<(u32, FwBind)> {
-        self.fw_bind.iter().map(|(k, v)| (*k, *v)).collect()
+    fn fw_bind_entries(&self) -> Walk<(u32, FwBind)> {
+        self.walk("FW_BIND", self.fw_bind.iter().map(|(k, v)| (*k, *v)))
     }
-    fn fw_scope_ids(&self) -> Vec<u64> {
-        self.fw_scopes.keys().copied().collect()
+    fn fw_scope_ids(&self) -> Walk<u64> {
+        self.walk("FW_SCOPES", self.fw_scopes.keys().copied())
     }
     fn meter_upsert(&mut self, i: u32, v: MeterState) -> anyhow::Result<()> {
         self.meter.insert(i, v);
@@ -317,6 +308,13 @@ impl MapWriter for MemMapWriter {
     fn iface_meta_upsert(&mut self, k: IfaceMetaKey, v: IfaceMetaVal) -> anyhow::Result<()> {
         self.iface_meta.insert(k.id, v);
         Ok(())
+    }
+    fn iface_meta_entries(&self) -> Walk<(IfaceMetaKey, IfaceMetaVal)> {
+        let all = self
+            .iface_meta
+            .iter()
+            .map(|(id, v)| (IfaceMetaKey { id: *id }, *v));
+        self.walk("IFACE_META", all)
     }
     fn iface_meta_remove(&mut self, k: &IfaceMetaKey) -> anyhow::Result<()> {
         self.iface_meta.remove(&k.id);

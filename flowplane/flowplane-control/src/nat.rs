@@ -10,6 +10,7 @@ use std::collections::HashSet;
 
 use crate::natowner::{owner_prefixes4, owner_prefixes6};
 use crate::ports::port_prefix_count;
+use crate::Walk;
 use crate::{
     BlockKey4, BlockKey6, ControlCore, CtFlushScope, CtFlushScope6, MapWriter, NeighborNatError,
 };
@@ -661,10 +662,16 @@ impl<W: MapWriter> ControlCore<W> {
     /// older decomposition or a writer outside this core left can describe a range starting inside
     /// a real block. Those are dropped, keeping the one that starts first — arbitrary but
     /// deterministic, and the next [`Self::replace_neighbor_nats`] corrects the set anyway.
-    pub fn adopt_nat_owners(&mut self) {
+    ///
+    /// A walk a read error cut short lists fewer blocks than the trie holds. What it read is
+    /// adopted and completed, but nothing is swept, and the error is returned.
+    pub fn adopt_nat_owners(&mut self) -> anyhow::Result<()> {
         // One walk per family: on the aya writer `nat_owner_entries` reads the whole trie by
         // syscall, so the sweep below reuses this list rather than walking it again.
-        let walked4 = self.w.nat_owner_entries();
+        let Walk {
+            entries: walked4,
+            error: error4,
+        } = self.w.nat_owner_entries();
         // Each prefix repeats its block; the index dedups them by key as it is built.
         let mut v4: std::collections::BTreeMap<BlockKey4, NeighborNatEntry> = Default::default();
         for (_, key, o) in &walked4 {
@@ -709,13 +716,18 @@ impl<W: MapWriter> ControlCore<W> {
             .flat_map(owner_prefixes4)
             .map(|(p, k, _)| (p, k))
             .collect();
-        for (plen, key, _) in walked4 {
-            if !want4.contains(&(plen, key)) {
-                let _ = self.w.nat_owner_remove(plen, &key);
+        if error4.is_none() {
+            for (plen, key, _) in walked4 {
+                if !want4.contains(&(plen, key)) {
+                    let _ = self.w.nat_owner_remove(plen, &key);
+                }
             }
         }
 
-        let walked6 = self.w.nat_owner6_entries();
+        let Walk {
+            entries: walked6,
+            error: error6,
+        } = self.w.nat_owner6_entries();
         let mut v6: std::collections::BTreeMap<BlockKey6, NeighborNat6Entry> = Default::default();
         for (_, key, o) in &walked6 {
             let b = NeighborNat6Entry {
@@ -750,9 +762,17 @@ impl<W: MapWriter> ControlCore<W> {
             .flat_map(owner_prefixes6)
             .map(|(p, k, _)| (p, k))
             .collect();
-        for (plen, key, _) in walked6 {
-            if !want6.contains(&(plen, key)) {
-                let _ = self.w.nat_owner6_remove(plen, &key);
+        if error6.is_none() {
+            for (plen, key, _) in walked6 {
+                if !want6.contains(&(plen, key)) {
+                    let _ = self.w.nat_owner6_remove(plen, &key);
+                }
+            }
+        }
+        match error4.or(error6) {
+            None => Ok(()),
+            Some(e) => {
+                Err(e.context("a walk was cut short: adopted the blocks read, swept nothing"))
             }
         }
     }
@@ -883,11 +903,11 @@ mod neighbor_nat_tests {
 
     /// What the trie holds.
     fn stored(c: &ControlCore<MemMapWriter>) -> Entries {
-        sorted(c.w.nat_owner_entries())
+        sorted(c.w.nat_owner_entries().entries)
     }
 
     fn stored6(c: &ControlCore<MemMapWriter>) -> Entries6 {
-        sorted6(c.w.nat_owner6_entries())
+        sorted6(c.w.nat_owner6_entries().entries)
     }
 
     /// What the trie holds when it stores exactly `blocks`.
@@ -1231,7 +1251,7 @@ mod neighbor_nat_tests {
             .unwrap();
         let want = state(&before);
         let mut c = ControlCore::new(before.w);
-        c.adopt_nat_owners();
+        c.adopt_nat_owners().unwrap();
         assert_eq!(state(&c), want);
 
         // A re-announce, as the handler does it: withdraw, then add the same block.
@@ -1268,7 +1288,7 @@ mod neighbor_nat_tests {
         before.w.nat_owners6.remove(&(p6, k6));
 
         let mut c = ControlCore::new(before.w);
-        c.adopt_nat_owners();
+        c.adopt_nat_owners().unwrap();
         assert_eq!(state(&c), want);
 
         assert!(c.del_neighbor_nat(7, IP, 20000, 30000).unwrap());
@@ -1391,7 +1411,7 @@ mod neighbor_nat_tests {
         let mut before = ControlCore::new(MemMapWriter::default());
         add(&mut before, block(IP, 7, 20000, 30000, 3));
         let mut c = ControlCore::new(before.w);
-        c.adopt_nat_owners();
+        c.adopt_nat_owners().unwrap();
         let successor = block(IP, 8, 25000, 35000, 4);
         assert_eq!(
             c.replace_neighbor_nats(&[successor], &[]).unwrap(),
@@ -1671,7 +1691,7 @@ mod neighbor_nat_tests {
         before.w.nat_owner6_upsert(plen6, key6, owner6).unwrap();
 
         let mut c = ControlCore::new(before.w);
-        c.adopt_nat_owners();
+        c.adopt_nat_owners().unwrap();
         assert_eq!(stored(&c), prefixes(&[block(IP, 7, 20000, 30000, 3)]));
         assert_eq!(stored6(&c), prefixes6(&[block6(IP6, 7, 20000, 30000, 3)]));
         assert_counted(&c);
@@ -1704,7 +1724,7 @@ mod neighbor_nat_tests {
             .unwrap();
 
         let mut c = ControlCore::new(before.w);
-        c.adopt_nat_owners();
+        c.adopt_nat_owners().unwrap();
         assert_eq!(c.neigh_nats.len(), 1, "one block listed");
         assert_eq!(stored(&c), prefixes(&[real]));
         assert_counted(&c);
@@ -1741,7 +1761,7 @@ mod neighbor_nat_tests {
             .unwrap();
 
         let mut c = ControlCore::new(before.w);
-        c.adopt_nat_owners();
+        c.adopt_nat_owners().unwrap();
         assert_eq!(c.neigh_nats6.len(), 1, "one block listed");
         assert_eq!(stored6(&c), prefixes6(&[real]));
         assert_counted(&c);
@@ -1779,7 +1799,7 @@ mod neighbor_nat_tests {
             .unwrap();
 
         let mut c = ControlCore::new(before.w);
-        c.adopt_nat_owners();
+        c.adopt_nat_owners().unwrap();
         let b = *c.neigh_nats.values().next().unwrap();
         assert_eq!(c.neigh_nats.len(), 1);
         assert_eq!(stored(&c), prefixes(&[b]));

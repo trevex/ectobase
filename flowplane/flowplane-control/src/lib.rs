@@ -14,6 +14,7 @@ pub mod shadow;
 pub mod writer;
 
 pub use firewall::FwError;
+use flowplane_common::{IfaceMetaKey, IfaceMetaVal};
 pub use interface::{meter_state, IfaceParams};
 pub use nat::ReplaceCounts;
 pub use natowner::NeighborNatError;
@@ -36,8 +37,11 @@ pub struct ControlCore<W: MapWriter> {
     pub(crate) self_routes6: std::collections::HashSet<(u32, [u8; 16])>,
     // NAT domain: interface meta + lb shadow the nat conflict checks read.
     pub(crate) ifaces_meta: std::collections::HashMap<Vec<u8>, shadow::IfaceMeta>,
+    // Set when adopt's `IFACE_META` walk was cut short: a live interface may be missing from the
+    // recovered set, so its absence proves nothing until the next whole adopt.
+    pub(crate) ifaces_partial: bool,
     // LB domain: the load balancers (keyed by id) + the Maglev table-id allocator.
-    // The eBPF `detach_interface` VNI-reset reads lb-vni membership via `vni_has_lb`.
+    // The eBPF `detach_interface` VNI-reset reads lb-vni membership via `keeps_vni`.
     pub(crate) lbs: std::collections::HashMap<Vec<u8>, shadow::LbEntry>,
     // Load balancers adopt found in the pinned maps, which keep everything but the id: each waits
     // here until a call names its address (lb.rs `claim_lb`).
@@ -59,6 +63,8 @@ pub struct ControlCore<W: MapWriter> {
     // (interface, direction) pairs reference each scope — a scope is deleted at zero.
     pub(crate) fw_binds: std::collections::HashMap<u32, flowplane_common::FwBind>,
     pub(crate) fw_scope_refs: std::collections::HashMap<u64, u32>,
+    // Set when adopt's `FW_BIND` walk was cut short: no scope is deleted (firewall.rs).
+    pub(crate) fw_partial: bool,
 }
 
 impl<W: MapWriter> ControlCore<W> {
@@ -70,6 +76,7 @@ impl<W: MapWriter> ControlCore<W> {
             self_routes: std::collections::HashSet::new(),
             self_routes6: std::collections::HashSet::new(),
             ifaces_meta: std::collections::HashMap::new(),
+            ifaces_partial: false,
             lbs: std::collections::HashMap::new(),
             adopted_lbs: Vec::new(),
             next_table_id: 1,
@@ -79,6 +86,7 @@ impl<W: MapWriter> ControlCore<W> {
             nat_owner_count6: 0,
             fw_binds: std::collections::HashMap::new(),
             fw_scope_refs: std::collections::HashMap::new(),
+            fw_partial: false,
         }
     }
     pub fn writer_mut(&mut self) -> &mut W {
@@ -96,6 +104,21 @@ impl<W: MapWriter> ControlCore<W> {
     }
     pub fn forget_iface_meta(&mut self, id: &[u8]) {
         self.ifaces_meta.remove(id);
+    }
+    /// Adopt: the `IFACE_META` restart journal the caller rebuilds its interfaces from. A walk a
+    /// read error cut short (its `error` set) may miss live interfaces, so the core stops taking an
+    /// interface's absence for its removal: [`Self::keeps_vni`] keeps every VNI and
+    /// `adopt_routes` holds orphan-looking self-routes, until the next whole adopt.
+    pub fn read_iface_journal(&mut self) -> Walk<(IfaceMetaKey, IfaceMetaVal)> {
+        let walk = self.w.iface_meta_entries();
+        self.ifaces_partial = walk.error.is_some();
+        walk
+    }
+    /// Whether something besides the caller's own interfaces keeps `vni` in use, so the detach
+    /// of its last known interface must not purge it: a load balancer on it, or interfaces a cut
+    /// `IFACE_META` walk may have left unrecovered.
+    pub fn keeps_vni(&self, vni: u32) -> bool {
+        self.ifaces_partial || self.vni_has_lb(vni)
     }
     /// The tap ifindex registered for an interface (0 if unknown). Used by the eBPF
     /// `detach_interface` device path now `Inner.by_ifindex` is retired — `ifaces_meta` is the

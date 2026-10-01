@@ -714,7 +714,7 @@ mod tests {
     // table-id counter do not.
 
     use flowplane_common::{LbBackend, LbKey, LbKey6, LbValue};
-    use std::collections::{BTreeMap, BTreeSet};
+    use std::collections::{BTreeMap, BTreeSet, HashMap};
 
     const UL: [u8; 16] = [0xfd, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xe0];
     const A4: [u8; 4] = [203, 0, 113, 50];
@@ -1012,7 +1012,7 @@ mod tests {
     #[test]
     fn a_cut_walk_adopts_what_it_read_and_repairs_nothing() {
         let mut w = damaged().w;
-        w.lb_walk_cut = Some(1);
+        w.walk_cut = HashMap::from([("LB", 1), ("LB6", 1), ("MAGLEV", 1)]);
         let (lb, lb6, maglev) = (w.lb.clone(), w.lb6.clone(), w.maglev.clone());
         let mut c = ControlCore::new(w);
         assert!(c.adopt_lbs().is_err(), "a cut walk is reported");
