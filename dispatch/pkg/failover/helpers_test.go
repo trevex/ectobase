@@ -5,6 +5,7 @@ package failover
 
 import (
 	"testing"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -37,8 +38,13 @@ func testScheme(t *testing.T) *runtime.Scheme {
 	return s
 }
 
+// readyPoolObj is a reachable pool: Ready, with a lease its broker just renewed.
 func readyPoolObj(name string) *platformv1.ClusterPool {
-	return &platformv1.ClusterPool{ObjectMeta: metav1.ObjectMeta{Name: name}, Status: platformv1.ClusterPoolStatus{Phase: clusterpool.PhaseReady}}
+	now := metav1.NewMicroTime(time.Now())
+	return &platformv1.ClusterPool{ObjectMeta: metav1.ObjectMeta{Name: name}, Status: platformv1.ClusterPoolStatus{
+		Phase: clusterpool.PhaseReady,
+		Lease: &platformv1.ClusterPoolLease{RenewTime: &now},
+	}}
 }
 
 func req(name string) ctrl.Request {

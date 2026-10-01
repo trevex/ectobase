@@ -321,7 +321,11 @@ func (b *Broker) SyncCompiledContainers(ctx context.Context) error {
 // best-effort per-VM Placement update. A VM present in vmNode but absent from the dispatch
 // (e.g. a raw KubeVirt VMI with no central VirtualMachine anchor) is skipped, not
 // treated as an error — vmNode is a superset gathered from the live downstream.
-func (b *Broker) ReportStatus(ctx context.Context, nodes []NodeFact, vmNode map[string]string) error {
+//
+// vmsKnown false means vmNode could not be gathered this tick. NodeDrain is then left exactly as
+// stored, and no placement is written: central releases a fence on Drained=true, and not knowing
+// where VMs run must never read as "nothing runs here". NodePrefixes is still reported.
+func (b *Broker) ReportStatus(ctx context.Context, nodes []NodeFact, vmNode map[string]string, vmsKnown bool) error {
 	var pool platformv1.ClusterPool
 	if err := b.Pools.Get(ctx, client.ObjectKey{Name: b.ClusterName}, &pool); err != nil {
 		return fmt.Errorf("get pool %s: %w", b.ClusterName, err)
@@ -341,7 +345,9 @@ func (b *Broker) ReportStatus(ctx context.Context, nodes []NodeFact, vmNode map[
 			busy[p] = true
 		}
 	}
-	pool.Status.NodeDrain = DrainStatus(pool.Status.FencedPrefixes, busy)
+	if vmsKnown {
+		pool.Status.NodeDrain = DrainStatus(pool.Status.FencedPrefixes, busy)
+	}
 	// Merge Patch (not Update): the Heartbeater concurrently writes Lease/Allocatable and the
 	// pool-health controller writes Phase on this same status subresource. A full Update from a
 	// cached Get 409-conflicts against them and clobbers their fields; MergeFrom patches only

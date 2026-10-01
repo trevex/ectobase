@@ -5,6 +5,7 @@ package reflector
 import (
 	"log"
 	"net"
+	"net/netip"
 	"sort"
 	"sync"
 
@@ -421,17 +422,19 @@ func (r *RIB) SetFence(prefix string) {
 // ClearFence releases a fence and re-advertises every route it was hiding, from what the
 // RIB still stores — no agent re-announces them.
 //
-// KNOWN WINDOW (follow-up: gate the release on route state). Failover releases a /64 once
-// its broker reports it drained, which means the stale VMI objects are gone — not that the
-// recovered pool's agent has withdrawn their routes. That agent withdraws a route only after
-// the CNI DEL has detached the interface AND its next reconcile tick, so a release can land
-// first and re-advertise a failed-over VM's /32 as {stale source, new pool}. Agents program
-// only Nexthops[0] of that sorted set, so non-origin nodes may send the VM's traffic to the
-// stale source until the withdraw lands, normally seconds. A pool whose kubelet died but whose
-// agent and flowplane kept running can keep announcing such a zombie interface after the
-// release, with no bound. The naive fix — keep hiding every key the fenced source shares with
-// another origin — would also hide the recovered pool's E/W LB anycast addresses, which are
-// shared by design.
+// Whatever the fenced prefix still announces comes back, stale or not, so the caller must not
+// clear a fence while it announces something that has moved away. "Drained" (no VMI left) is not
+// that: the recovered pool's agent withdraws a failed-over VM's /32 only after the CNI DEL has
+// detached the interface AND its next reconcile tick, and a pool whose kubelet died under a
+// running agent and flowplane never does. Released first, the /32 would come back as {stale
+// source, new pool}, and agents program only Nexthops[0] of that sorted set. So failover asks
+// AnnouncedFrom about every overlay address placed on another pool and clears the fence only once
+// none is announced from it; a zombie keeps its fence, and the answer names its node. The question
+// is targeted rather than "anything the fenced source shares with another origin", which would
+// also catch the recovered pool's E/W LB anycast addresses — shared by design.
+//
+// What remains: a stale key placed nowhere else (a VM deleted while its pool was lost, a NIC whose
+// twin is gone or whose addresses changed since) is re-advertised on release, as before.
 //
 // Neither fence change reaches a key's own origins (see refilter).
 func (r *RIB) ClearFence(prefix string) {
@@ -496,6 +499,86 @@ func (r *RIB) advertised(e routeEntry) []string {
 		}
 	}
 	return out
+}
+
+// AnnouncedFrom returns who still announces any of keys from inside within: one holding per (key,
+// origin, nexthop inside within), keys in the order asked, origins and nexthops sorted. It reads
+// what the RIB stores, so a key a fence hides still counts: it is exactly what releasing that fence
+// would re-advertise. Failover asks this, about the addresses of workloads placed on other pools,
+// before it releases a recovered pool's fence (see ClearFence). Naming the origin and nexthop lets
+// an operator find the one node holding a fence over a shared /64 or a pool aggregate.
+//
+// It answers only for the keys asked, never for whatever else the prefix announces: a recovered
+// pool legitimately shares keys with other origins (its E/W LB anycast addresses), and those must
+// not hold its fence. A key matches in its own spelling or in canonical form, and is returned as
+// asked, each at most once.
+func (r *RIB) AnnouncedFrom(within string, keys []*pb.RouteKey) ([]*pb.RouteHolding, error) {
+	_, ipnet, err := net.ParseCIDR(within)
+	if err != nil {
+		return nil, err
+	}
+	nets := map[string]*net.IPNet{within: ipnet} // the shape nexthopFenced tests against
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []*pb.RouteHolding
+	seen := map[routeKey]bool{}
+	for _, q := range keys {
+		asked := routeKey{q.GetVni(), q.GetPrefix()}
+		if seen[asked] {
+			continue
+		}
+		seen[asked] = true
+		for _, k := range spellings(asked) {
+			if hs := r.holdersWithin(k, asked, nets); len(hs) > 0 {
+				out = append(out, hs...)
+				break
+			}
+		}
+	}
+	return out, nil
+}
+
+// holdersWithin lists every (origin, nexthop) of k whose nexthop is inside one of nets, sorted, each
+// reported under the key as it was asked. Caller holds r.mu.
+func (r *RIB) holdersWithin(k, asked routeKey, nets map[string]*net.IPNet) []*pb.RouteHolding {
+	origins := r.routes[k].origins
+	ids := make([]string, 0, len(origins))
+	for id := range origins {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	var out []*pb.RouteHolding
+	for _, id := range ids {
+		nhs := append([]string(nil), origins[id]...)
+		sort.Strings(nhs)
+		for _, nh := range nhs {
+			if nexthopFenced(nh, nets) {
+				out = append(out, &pb.RouteHolding{
+					Key:    &pb.RouteKey{Vni: asked.vni, Prefix: asked.prefix},
+					Origin: id, Nexthop: nh,
+				})
+			}
+		}
+	}
+	return out
+}
+
+// spellings is k as asked, plus its canonical form when that differs: the agent keys a host route
+// by the address string flowplane reports, which need not match the caller's.
+func spellings(k routeKey) []routeKey {
+	p, err := netip.ParsePrefix(k.prefix)
+	if err != nil || p.String() == k.prefix {
+		return []routeKey{k}
+	}
+	return []routeKey{k, {k.vni, p.String()}}
+}
+
+// Advertised is the nexthop set subscribers are told for (vni, prefix) — fence-filtered, empty when
+// the key is not advertised. Test/inspection helper.
+func (r *RIB) Advertised(vni uint32, prefix string) []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.advertised(r.routes[routeKey{vni, prefix}])
 }
 
 // HasRoute reports whether (vni, prefix) is currently advertised — stored AND left with a

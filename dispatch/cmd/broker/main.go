@@ -14,6 +14,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -22,6 +23,8 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -30,6 +33,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
@@ -284,9 +288,13 @@ func (s *statusReporter) reportOnce(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("gather nodes: %w", err)
 	}
-	vmNode := s.gatherVMNodes(ctx)
+	vmNode, vmErr := s.gatherVMNodes(ctx)
+	if vmErr != nil {
+		// Fail closed: without knowing where VMIs run, the drain report stays as stored this tick.
+		log.Printf("status report: %v; leaving the drain report unchanged", vmErr)
+	}
 	b := &broker.Broker{Dispatch: s.dispatch, Pools: s.pools, Downstream: s.downstream, ClusterName: s.clusterName}
-	if err := b.ReportStatus(ctx, nodes, vmNode); err != nil {
+	if err := b.ReportStatus(ctx, nodes, vmNode, vmErr == nil); err != nil {
 		return err
 	}
 	// Reported on the same tick, but its failures are not folded into the fence signal above:
@@ -319,10 +327,13 @@ func (s *statusReporter) gatherNodes(ctx context.Context) ([]broker.NodeFact, er
 
 // gatherVMNodes maps each downstream KubeVirt VirtualMachineInstance's
 // "namespace/name" -> the node it runs on (VMI.status.nodeName). Read via unstructured
-// so the dispatch need not import the heavy kubevirt.io/api module. Best-effort: if the VMI
-// CRD is absent (no KubeVirt on the downstream) it returns an empty map, and
-// ReportStatus still stamps the node prefixes + an all-drained NodeDrain.
-func (s *statusReporter) gatherVMNodes(ctx context.Context) map[string]string {
+// so the dispatch need not import the heavy kubevirt.io/api module.
+//
+// KubeVirt not installed on the downstream is an empty set: no VMI can run there, so every
+// fenced /64 is drained. Any other failure to list is returned, and the caller leaves the
+// drain report as stored: reading "could not list" as "nothing runs" would report drained
+// /64s that still run VMs, and central releases fences on that.
+func (s *statusReporter) gatherVMNodes(ctx context.Context) (map[string]string, error) {
 	vmis := &unstructured.UnstructuredList{}
 	vmis.SetGroupVersionKind(schema.GroupVersionKind{
 		Group:   "kubevirt.io",
@@ -330,8 +341,10 @@ func (s *statusReporter) gatherVMNodes(ctx context.Context) map[string]string {
 		Kind:    "VirtualMachineInstanceList",
 	})
 	if err := s.downstream.List(ctx, vmis); err != nil {
-		// No KubeVirt / no VMIs — not fatal; report prefixes with nothing busy.
-		return map[string]string{}
+		if kubevirtAbsent(err) {
+			return map[string]string{}, nil
+		}
+		return nil, fmt.Errorf("list VMIs: %w", err)
 	}
 	out := make(map[string]string, len(vmis.Items))
 	for i := range vmis.Items {
@@ -342,7 +355,26 @@ func (s *statusReporter) gatherVMNodes(ctx context.Context) map[string]string {
 		}
 		out[vmi.GetNamespace()+"/"+vmi.GetName()] = nodeName
 	}
-	return out
+	return out, nil
+}
+
+// kubevirtAbsent reports whether a VMI list failed only because the downstream does not serve
+// kubevirt.io at all. controller-runtime's RESTMapper says so in two shapes: a NoKindMatchError
+// when the group is unknown, and an ErrResourceDiscoveryFailed whose group versions all failed
+// discovery as NotFound (it unwraps those as NoResourceMatchError). The latter must be checked
+// entry by entry: errors.Is would also match a map where one version is missing and another
+// failed for a reason that says nothing about whether KubeVirt is there.
+func kubevirtAbsent(err error) bool {
+	var df *apiutil.ErrResourceDiscoveryFailed
+	if errors.As(err, &df) {
+		for _, e := range *df {
+			if !apierrors.IsNotFound(e) && !meta.IsNoMatchError(e) {
+				return false
+			}
+		}
+		return len(*df) > 0
+	}
+	return meta.IsNoMatchError(err)
 }
 
 // nodeCapacityReporter sums Status.Allocatable over all Ready downstream nodes.
