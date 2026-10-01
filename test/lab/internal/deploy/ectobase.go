@@ -83,9 +83,10 @@ type EctobaseSpec struct {
 type ComputeCluster struct {
 	Name       string
 	Kubeconfig string
-	// UnderlayCIDRs is this pool's underlay range(s) (its /48); the route-bus intermediate is
-	// IP-name-constrained to these so it can only mint node leaves inside the pool's underlay.
-	// Only used when EctobaseSpec.RouteBusMTLS is set.
+	// UnderlayCIDRs is this pool's underlay range (its /48, a single CIDR). It is the ClusterPool's
+	// spec.underlayPrefix, which the dispatch signer turns into the route-bus intermediate's IP name
+	// constraint and failover fences as one aggregate. With RouteBusMTLS it is also passed to the
+	// pool chart as the advisory pki.underlayCIDRs.
 	UnderlayCIDRs string
 }
 
@@ -518,8 +519,9 @@ func helmInstallPool(ctx context.Context, kubeconfig, clusterName, chartPath, di
 	}
 	timeout := "8m"
 	if mtls {
-		// The intermediate is IP-name-constrained to the pool /48. underlayCIDRs is a single
-		// CIDR (no comma) so helm --set takes it literally. dispatchServer is the URL the
+		// The signer constrains the intermediate to the ClusterPool's underlayPrefix (the same /48);
+		// pki.underlayCIDRs is only advisory. underlayCIDRs is a single CIDR (no comma) so helm
+		// --set takes it literally. dispatchServer is the URL the
 		// broker dials for its dispatch credential; the host MUST match the dispatch-apiserver
 		// serving cert's IP SAN (dispatchIdentity, see helmInstallDispatch's pki.reflectorIP /
 		// dispatchApiserver.serviceIP).
@@ -605,8 +607,8 @@ users:
 }
 
 // clusterPoolsManifest renders one cluster-scoped ClusterPool per compute cluster
-// (spec.region: eu). The broker Gets + heartbeats the pool; the agent stamps
-// status.nodePrefixes.
+// (spec.region: eu, spec.underlayPrefix: the cluster's underlay /48). The broker Gets + heartbeats
+// the pool; the agent stamps status.nodePrefixes.
 func clusterPoolsManifest(compute []ComputeCluster) string {
 	var b strings.Builder
 	for _, c := range compute {
@@ -626,6 +628,9 @@ metadata:
   name: %[1]s
 spec:
   region: eu
+  # The operator-declared underlay aggregate. The dispatch signer constrains this pool's route-bus
+  # intermediate to exactly this prefix (and denies one without it), and failover fences it whole.
+  underlayPrefix: "%[2]s"
 ---
 # Pre-created so this pool's route-bus access can be resourceNames-scoped: RBAC cannot scope
 # `+"`create`"+` by name, so the broker only ever get/updates its own RouteBusIdentity. The signer
@@ -727,7 +732,7 @@ subjects:
   - kind: ServiceAccount
     name: dispatch-broker-bootstrap-%[1]s
     namespace: system
-`, c.Name)
+`, c.Name, c.UnderlayCIDRs)
 	}
 	return b.String()
 }

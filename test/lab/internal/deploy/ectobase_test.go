@@ -22,13 +22,20 @@ func TestMintKubeconfigCAQuotesBracketedV6Server(t *testing.T) {
 }
 
 func TestClusterPoolsManifest(t *testing.T) {
-	got := clusterPoolsManifest([]ComputeCluster{{Name: "k02"}, {Name: "k03"}})
+	got := clusterPoolsManifest([]ComputeCluster{
+		{Name: "k02", UnderlayCIDRs: "fd00:cafe:1914::/48"},
+		{Name: "k03", UnderlayCIDRs: "fd00:cafe:2a3b::/48"},
+	})
 	for _, want := range []string{
 		"apiVersion: platform.ectobase.dev/v1alpha1",
 		"kind: ClusterPool",
 		"name: k02",
 		"name: k03",
 		"region: eu",
+		// Each pool's operator-declared underlay aggregate: the signer constrains the pool's
+		// route-bus intermediate to it, and denies a pool that has none.
+		`underlayPrefix: "fd00:cafe:1914::/48"`,
+		`underlayPrefix: "fd00:cafe:2a3b::/48"`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("manifest missing %q:\n%s", want, got)

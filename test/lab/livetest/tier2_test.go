@@ -35,7 +35,7 @@ const (
 
 // fenceName mirrors dispatch/pkg/fence/storage.go fenceName(): "ectobase-" +
 // prefix with ':' -> '-', '/' -> '--', '.' -> '-'. Used to look up the csi-addons
-// NetworkFence CR for a node /64 by name.
+// NetworkFence CR for a fenced prefix (a node /64 or a pool aggregate) by name.
 func fenceName(prefix string) string {
 	r := strings.NewReplacer(":", "-", "/", "--", ".", "-")
 	return "ectobase-" + r.Replace(prefix)
@@ -165,14 +165,20 @@ func TestTier2Failover(t *testing.T) {
 	t.Logf("protected disk on k02: image=%s handle=%s pool=%s", srcImage, srcHandle, pool)
 
 	// --- Phase 6: k02 fence coordinate ----------------------------------------------
-	k02Prefix, err := poolField(ctx, cfg, "k02", "{.status.nodePrefixes[0]}")
-	require.NoError(t, err, "read k02 nodePrefixes[0]")
-	require.NotEmpty(t, k02Prefix, "k02 fence coordinate (nodePrefixes[0]) empty")
+	// The declared underlay aggregate when the pool has one (failover then fences it whole, see
+	// failover.fenceCoverage), else the one reported node /64.
+	k02Prefix, err := poolField(ctx, cfg, "k02", "{.spec.underlayPrefix}")
+	require.NoError(t, err, "read k02 spec.underlayPrefix")
+	if k02Prefix == "" {
+		k02Prefix, err = poolField(ctx, cfg, "k02", "{.status.nodePrefixes[0]}")
+		require.NoError(t, err, "read k02 nodePrefixes[0]")
+	}
+	require.NotEmpty(t, k02Prefix, "k02 fence coordinate (spec.underlayPrefix or nodePrefixes[0]) empty")
 	fenceCR := fenceName(k02Prefix)
-	// The blocklist entries are client addresses inside the /64; match its leading
-	// hextets (strip a trailing ::/64 / :: / /64).
-	k02Hextets := strings.NewReplacer("/64", "", "::", "").Replace(k02Prefix)
-	k02Hextets = strings.TrimSuffix(k02Hextets, ":")
+	// The blocklist entries are client addresses inside the fenced prefix; match its leading
+	// hextets (strip the /len, then a trailing :: or :).
+	k02Hextets, _, _ := strings.Cut(k02Prefix, "/")
+	k02Hextets = strings.TrimSuffix(strings.TrimSuffix(k02Hextets, "::"), ":")
 	cephCtr := "clab-" + cfg.Name + "-ceph"
 	t.Logf("k02 prefix=%s fenceCR=%s hextets=%s ceph=%s", k02Prefix, fenceCR, k02Hextets, cephCtr)
 

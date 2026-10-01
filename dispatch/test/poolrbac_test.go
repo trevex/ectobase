@@ -136,6 +136,12 @@ func TestPerPoolRBAC_ScopesABroker(t *testing.T) {
 				ResourceNames: []string{ownPool},
 				Verbs:         []string{"get", "update", "patch"},
 			},
+			{
+				APIGroups:     []string{"platform.ectobase.dev"},
+				Resources:     []string{"routebusidentities", "routebusidentities/status"},
+				ResourceNames: []string{ownPool},
+				Verbs:         []string{"get", "update"},
+			},
 		},
 	}); err != nil {
 		t.Fatalf("create per-pool ClusterRole: %v", err)
@@ -150,8 +156,13 @@ func TestPerPoolRBAC_ScopesABroker(t *testing.T) {
 
 	// --- state in both pools, seeded by an unrestricted identity ---
 	for _, p := range []string{ownPool, foreignPool} {
-		if err := admin.Create(ctx, &platformv1.ClusterPool{ObjectMeta: metav1.ObjectMeta{Name: p}}); err != nil {
+		if err := admin.Create(ctx, &platformv1.ClusterPool{ObjectMeta: metav1.ObjectMeta{Name: p},
+			Spec: platformv1.ClusterPoolSpec{UnderlayPrefix: "fd00:cafe:" + p[1:] + "::/48"}}); err != nil {
 			t.Fatalf("create pool %s: %v", p, err)
+		}
+		if err := admin.Create(ctx, &platformv1.RouteBusIdentity{ObjectMeta: metav1.ObjectMeta{Name: p},
+			Spec: platformv1.RouteBusIdentitySpec{PoolName: p}}); err != nil {
+			t.Fatalf("create RouteBusIdentity %s: %v", p, err)
 		}
 	}
 	for ns, name := range map[string]string{ownNS: "default-nic-a", foreignNS: "default-nic-b"} {
@@ -240,6 +251,45 @@ func TestPerPoolRBAC_ScopesABroker(t *testing.T) {
 			t.Fatal("broker read ANOTHER pool's ClusterPool")
 		} else if !apierrors.IsForbidden(err) {
 			t.Fatalf("want Forbidden reading a foreign pool, got: %v", err)
+		}
+	})
+
+	// spec.underlayPrefix is the pool's route-bus certificate constraint and its fence coordinate.
+	// Both are only worth anything because the operator sets it and the pool cannot.
+	t.Run("CannotWriteItsOwnUnderlayPrefix", func(t *testing.T) {
+		var own platformv1.ClusterPool
+		if err := broker.Get(ctx, client.ObjectKey{Name: ownPool}, &own); err != nil {
+			t.Fatalf("broker get own pool: %v", err)
+		}
+		own.Spec.UnderlayPrefix = "fd00::/8"
+		if err := broker.Update(ctx, &own); err == nil {
+			t.Fatal("broker widened its own ClusterPool's underlayPrefix")
+		} else if !apierrors.IsForbidden(err) {
+			t.Fatalf("want Forbidden on a spec update, got: %v", err)
+		}
+	})
+
+	// The broker files its CSR into its own pre-created RouteBusIdentity, and that is all. RBAC
+	// cannot scope `create` by name, so the grant has none: a broker able to create an identity
+	// with no ClusterPool behind it would choose that identity's IP constraint itself.
+	t.Run("RouteBusIdentityUpdateOwnButNeverCreate", func(t *testing.T) {
+		var own platformv1.RouteBusIdentity
+		if err := broker.Get(ctx, client.ObjectKey{Name: ownPool}, &own); err != nil {
+			t.Fatalf("broker get own RouteBusIdentity: %v", err)
+		}
+		own.Spec.Request = []byte("csr")
+		if err := broker.Update(ctx, &own); err != nil {
+			t.Fatalf("broker must file its CSR into its own RouteBusIdentity: %v", err)
+		}
+		if err := broker.Get(ctx, client.ObjectKey{Name: foreignPool}, &platformv1.RouteBusIdentity{}); !apierrors.IsForbidden(err) {
+			t.Fatalf("want Forbidden reading a foreign RouteBusIdentity, got: %v", err)
+		}
+		forged := &platformv1.RouteBusIdentity{ObjectMeta: metav1.ObjectMeta{Name: "forged"},
+			Spec: platformv1.RouteBusIdentitySpec{PoolName: "forged", PermittedUnderlayCIDRs: []string{"fd00::/8"}}}
+		if err := broker.Create(ctx, forged); err == nil {
+			t.Fatal("broker created a RouteBusIdentity")
+		} else if !apierrors.IsForbidden(err) {
+			t.Fatalf("want Forbidden creating a RouteBusIdentity, got: %v", err)
 		}
 	})
 }
