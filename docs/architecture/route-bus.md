@@ -203,7 +203,12 @@ operator, never from the pool:
 - A pool prefix that overlaps another `ClusterPool`'s, or a fleet identity's ranges, is denied: two
   holders could otherwise mint leaves for the same VTEPs. Between two pools the one enrolled later
   is denied, so a mistake on a new pool cannot take a running one off the route bus at renewal.
-  Admission already refuses a non-canonical prefix and one shorter than /32 (IPv6) or /16 (IPv4).
+  Admission already refuses a non-canonical prefix and one shorter than /32 (IPv6) or /16 (IPv4),
+  and the signer applies the same rules to a prefix stored before them.
+- No range, a pool's or a fleet identity's, may cover the reflector's or the dispatch apiserver's
+  IP (`pki.reflectorIP`, `dispatchApiserver.serviceIP`, passed as `--routebus-server-ips`). Their
+  serving certificates carry that IP SAN under the same root, so an intermediate permitted it could
+  mint a leaf the agents and brokers would take for that server.
 - An identity that is neither is denied: `no ClusterPool <name> and not a fleet identity`. A missing
   `ClusterPool` never makes an identity trusted, so one left behind by a deleted pool, still
   writable by that pool's broker, gets nothing.

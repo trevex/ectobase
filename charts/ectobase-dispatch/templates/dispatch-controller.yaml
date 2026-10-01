@@ -71,6 +71,8 @@ spec:
             # Route-bus PKI signer: sign pool intermediate CAs from the root (mounted below).
             - "-routebus-ca-cert=/etc/routebus-ca/tls.crt"
             - "-routebus-ca-key=/etc/routebus-ca/tls.key"
+            # The dispatch's own serving-certificate IP SANs: no intermediate may cover them.
+            - "-routebus-server-ips={{ .Values.pki.reflectorIP }},{{ .Values.dispatchApiserver.serviceIP }}"
             {{- with .Values.pki.fleetIdentities }}
             # Identities that are not pools; the signer trusts their own permittedUnderlayCIDRs.
             - "-routebus-fleet-identities={{ join "," . }}"

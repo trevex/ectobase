@@ -501,6 +501,7 @@ renders the dispatch control plane:
                 - -reflector-tls-key=/etc/routebus-tls/tls.key
                 - -routebus-ca-cert=/etc/routebus-ca/tls.crt
                 - -routebus-ca-key=/etc/routebus-ca/tls.key
+                - -routebus-server-ips=fd00:db8:0:1::1,fd00:db8:0:1::1
                 - -csi-driver=rbd.csi.ceph.com
                 - -csi-cluster-id=
                 - -csi-secret-name=csi-rbd-secret

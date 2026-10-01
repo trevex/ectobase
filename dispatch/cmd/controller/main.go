@@ -10,6 +10,7 @@ package main
 import (
 	"flag"
 	"log"
+	"net/netip"
 	"os"
 	"strings"
 	"time"
@@ -83,6 +84,7 @@ func main() {
 	routebusCAKey := flag.String("routebus-ca-key", "", "route-bus root CA key PEM")
 	clientCACert := flag.String("dispatch-client-ca-cert", "", "dispatch client CA cert PEM: the only CA the dispatch apiserver accepts client certificates from; the signer issues brokers' client certificates from it. Empty => none issued")
 	clientCAKey := flag.String("dispatch-client-ca-key", "", "dispatch client CA key PEM")
+	routebusServerIPs := flag.String("routebus-server-ips", "", "comma-separated IP SANs of the dispatch's own serving certificates (the reflector's and the dispatch apiserver's); no route-bus intermediate is permitted a range covering one")
 	routebusFleet := flag.String("routebus-fleet-identities", "", "comma-separated RouteBusIdentity names that are not pools (e.g. edge) and are signed under their own operator-written spec.permittedUnderlayCIDRs; empty => none, every identity must be a ClusterPool with spec.underlayPrefix")
 
 	flag.Parse()
@@ -180,6 +182,14 @@ func main() {
 	if root == nil {
 		log.Printf("route-bus CA not configured (--routebus-ca-cert/key unset); RouteBusIdentity signer inactive")
 	}
+	var serverIPs []netip.Addr
+	for _, v := range splitList(*routebusServerIPs) {
+		ip, err := netip.ParseAddr(v)
+		if err != nil {
+			log.Fatalf("--routebus-server-ips: %v", err)
+		}
+		serverIPs = append(serverIPs, ip)
+	}
 	// A separate root from the route-bus one: every pool intermediate chains to the route-bus root,
 	// so the apiserver must not accept a client certificate from it.
 	clientCA, err := pki.LoadRootCA(*clientCACert, *clientCAKey)
@@ -189,7 +199,7 @@ func main() {
 	if clientCA == nil {
 		log.Printf("dispatch client CA not configured (--dispatch-client-ca-cert/key unset); no broker client certificates are signed")
 	}
-	if err := (&pki.Signer{Client: mgr.GetClient(), Reader: mgr.GetAPIReader(), Root: root, ClientCA: clientCA, FleetIdentities: splitList(*routebusFleet)}).SetupWithManager(mgr); err != nil {
+	if err := (&pki.Signer{Client: mgr.GetClient(), Reader: mgr.GetAPIReader(), Root: root, ClientCA: clientCA, ServerIPs: serverIPs, FleetIdentities: splitList(*routebusFleet)}).SetupWithManager(mgr); err != nil {
 		log.Fatalf("setup routebus signer controller: %v", err)
 	}
 

@@ -37,3 +37,14 @@ tests:
           path: spec.template.spec.containers[0].args
           content: "-routebus-fleet-identities=edge,wan"
         documentIndex: 3
+  # A route-bus intermediate covering the reflector's or the apiserver's IP SAN could mint a leaf the
+  # agents and brokers would take for that server, so the signer is told both.
+  - it: passes the dispatch server IPs to the signer
+    set:
+      pki.reflectorIP: "fd00:db8:0:1::1"
+      dispatchApiserver.serviceIP: "fd00:db8:0:1::2"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "-routebus-server-ips=fd00:db8:0:1::1,fd00:db8:0:1::2"
+        documentIndex: 3

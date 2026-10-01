@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"net"
+	"net/netip"
 	"slices"
 	"strings"
 	"testing"
@@ -462,4 +463,18 @@ func TestSigner_SignedPoolWithoutAPriorDenialGetsNoCondition(t *testing.T) {
 	if cond := poolCondition(t, c, "k02"); cond != nil {
 		t.Fatalf("want no condition, got %+v", cond)
 	}
+}
+
+// The reflector's and the dispatch apiserver's serving certificates carry an IP SAN under the same
+// root. A range covering one would let its holder mint a leaf with that IP SAN: neither a pool nor a
+// fleet identity may be constrained to one.
+func TestSigner_DeniesARangeCoveringADispatchServer(t *testing.T) {
+	s, c := testSigner(t, clusterPool("k02", poolPrefix), identity(t, "k02"), identity(t, "edge", "fd00:ffff::/32"))
+	s.ServerIPs = []netip.Addr{netip.MustParseAddr("fd00:cafe:1914::5"), netip.MustParseAddr("fd00:ffff::1")}
+	s.FleetIdentities = []string{"edge"}
+	requireDenied(t, reconcileIdentity(t, s, c, "k02"), "fd00:cafe:1914::5")
+	requireDenied(t, reconcileIdentity(t, s, c, "edge"), "fd00:ffff::1")
+
+	s.ServerIPs = []netip.Addr{netip.MustParseAddr("fd00:db8:0:1::1")}
+	signedCert(t, reconcileIdentity(t, s, c, "k02"))
 }

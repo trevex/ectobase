@@ -149,6 +149,9 @@ type Signer struct {
 	// is a separate root, the only one the dispatch apiserver accepts client certificates from, so
 	// nothing a pool intermediate (under Root) mints can authenticate there. nil signs none.
 	ClientCA *RootCA
+	// ServerIPs are the dispatch's own serving-certificate IP SANs, the reflector's and the dispatch
+	// apiserver's (--routebus-server-ips). No intermediate is permitted a range covering one.
+	ServerIPs []netip.Addr
 	// FleetIdentities names the RouteBusIdentities that are not pools and whose operator-written
 	// spec.permittedUnderlayCIDRs is trusted (--routebus-fleet-identities). Empty trusts none.
 	FleetIdentities []string
@@ -288,6 +291,37 @@ func (s *Signer) markPool(ctx context.Context, name, msg string) error {
 // denial is non-empty when there is no range to sign under: the signer fails closed. err is a
 // failed read (retry).
 func (s *Signer) constraint(ctx context.Context, id *platformv1.RouteBusIdentity) (permitted []string, note, denial string, err error) {
+	permitted, note, denial, err = s.ranges(ctx, id)
+	if err != nil || denial != "" {
+		return nil, "", denial, err
+	}
+	if d := s.coversServer(id.Name, permitted); d != "" {
+		return nil, "", d, nil
+	}
+	return permitted, note, "", nil
+}
+
+// coversServer denies a range that covers a dispatch server's address. The reflector's and the
+// dispatch apiserver's serving certificates carry that IP SAN under the same root, so an
+// intermediate permitted it could mint a leaf the agents and brokers would take for that server.
+func (s *Signer) coversServer(name string, permitted []string) string {
+	for _, c := range permitted {
+		p, err := netip.ParsePrefix(c)
+		if err != nil {
+			continue
+		}
+		for _, ip := range s.ServerIPs {
+			if p.Contains(ip.Unmap()) {
+				return fmt.Sprintf("RouteBusIdentity %s would be permitted %s, which covers the dispatch server address %s "+
+					"(--routebus-server-ips)", name, c, ip)
+			}
+		}
+	}
+	return ""
+}
+
+// ranges is constraint without the server-address check.
+func (s *Signer) ranges(ctx context.Context, id *platformv1.RouteBusIdentity) (permitted []string, note, denial string, err error) {
 	reader := s.Reader
 	if reader == nil {
 		reader = s.Client
