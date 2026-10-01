@@ -263,7 +263,9 @@ Fences are not permanent — leaving a Ceph blocklist entry in place would stran
 the pool's storage for its multi-year default expiry. When a fenced pool comes
 back — `Ready`, on a lease its broker renewed within the health threshold — its
 broker reports, per fenced `/64`, whether that prefix's stale VMIs are
-gone (`Status.NodeDrain[].Drained`). The reconciler's `releaseDrained` step
+gone (`Status.NodeDrain[].Drained`). A broker that cannot list its VMIs leaves
+the stored report untouched for that tick; only KubeVirt being absent from the
+pool counts as "no VMIs". The reconciler's `releaseDrained` step
 un-fences only `/64`s the broker has confirmed drained and that no longer
 announce an address placed on another pool (see below):
 
