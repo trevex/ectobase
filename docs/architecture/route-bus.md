@@ -184,15 +184,21 @@ a route on the VNI's own table wins, then a peer import, then the public default
 egress VNI. Each `RouteUpdate` programs the keys it feeds as it arrives. Every reconcile
 tick then converges the rest against what the agent last programmed, so a failed
 `AddRoute` or `WithdrawRoute` is retried, and a peering or egress change takes effect
-without a replay. A converged tick makes no dataplane calls. The routes of a VNI the
-agent stops subscribing to are forgotten and withdrawn.
+without a replay. A converged tick makes no dataplane calls. A route the dataplane keeps
+refusing is retried with exponential backoff, up to five minutes apart, and logged when
+it starts failing rather than on every retry. The routes of a VNI the agent has stopped
+subscribing to for three ticks in a row are forgotten and withdrawn; the delay keeps a
+guest pod restart from withdrawing and re-learning a VNI's routes.
 
 A restarted `flowplane` rebuilds its routes from its pinned maps, but not a mesh route
 that a local self-route was holding back. The kernel never had that route. Its
 `ListInterfaces` reports an instance id that changes with every process start. When it
 changes, or when the dataplane answers again after an outage, the agent re-sends every
-route it has learned. A full re-send also runs every five minutes, for a dataplane that
-predates the id.
+route it has learned, held local host keys first. A dataplane that predates the id gets
+the same re-send every five minutes. A tick makes at most 256 dataplane calls and a
+re-send continues over the ticks that follow: the tick runs on the goroutine that drains
+the route-bus stream, and a stream backed up long enough makes the reflector drop live
+updates.
 
 ## Securing the bus: per-node mTLS + underlay authz
 

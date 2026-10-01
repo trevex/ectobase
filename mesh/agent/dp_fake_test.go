@@ -143,6 +143,14 @@ func (f *recordingDP) restart() {
 	f.external = map[string]bool{}
 }
 
+// loseRoutes models routes lost with no restart to show for it: nothing programmed, same instance.
+func (f *recordingDP) loseRoutes() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.added = map[string]string{}
+	f.external = map[string]bool{}
+}
+
 func natKeyStr(natIp string, min, max uint32) string {
 	return fmt.Sprintf("%s %d %d", natIp, min, max)
 }

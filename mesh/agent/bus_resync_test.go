@@ -4,7 +4,12 @@
 package agent
 
 import (
+	"bytes"
 	"context"
+	"fmt"
+	"log"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -244,7 +249,9 @@ func TestRoutesOfAnUnsubscribedVNIAreWithdrawnAndNotReasserted(t *testing.T) {
 	b.apply(ctx, routeAdd(300, "10.3.0.7/32", remoteNH))
 	b.apply(ctx, routeAdd(100, "10.0.0.7/32", remoteNH))
 
-	tick(t, b, subs(100))
+	for range unsubscribeAfterTicks {
+		tick(t, b, subs(100))
+	}
 	if !withdrewKey(dp, 300, "10.3.0.7/32") {
 		t.Fatal("a route of an unsubscribed VNI must be withdrawn")
 	}
@@ -324,5 +331,140 @@ func TestPruneOfThePublicVNIDropsAStaleDefault(t *testing.T) {
 	}
 	if _, ok := b.LearnedPublic()["0.0.0.0/0"]; ok {
 		t.Fatal("and forgotten")
+	}
+}
+
+// A VNI is forgotten only once it has been missing from the subscriptions for
+// unsubscribeAfterTicks ticks in a row: a guest pod that restarts, or one reconcile that reads
+// without the peering, must not withdraw and re-learn a VNI's routes.
+func TestABrieflyUnsubscribedVNIKeepsItsRoutes(t *testing.T) {
+	ctx := context.Background()
+	dp := newRecordingDP()
+	b := NewBus("nodeA", selfNH, dp, false)
+	tick(t, b, subs(100, 300))
+	b.apply(ctx, routeAdd(300, "10.3.0.7/32", remoteNH))
+
+	for range unsubscribeAfterTicks - 1 {
+		tick(t, b, subs(100))
+	}
+	tick(t, b, subs(100, 300)) // back: the count starts over
+	for range unsubscribeAfterTicks - 1 {
+		tick(t, b, subs(100))
+	}
+	if withdrewKey(dp, 300, "10.3.0.7/32") {
+		t.Fatal("a VNI missing for fewer than unsubscribeAfterTicks ticks in a row must keep its routes")
+	}
+	tick(t, b, subs(100))
+	if !withdrewKey(dp, 300, "10.3.0.7/32") {
+		t.Fatalf("a VNI missing for %d ticks in a row must be withdrawn", unsubscribeAfterTicks)
+	}
+}
+
+// learnRoutes applies n routes on vni 100 (1.9.x.y/32 -> remoteNH; they sort before guestHost).
+func learnRoutes(b *Bus, n int) {
+	for i := range n {
+		b.apply(context.Background(), routeAdd(100, fmt.Sprintf("1.9.%d.%d/32", i/250, i%250+1), remoteNH))
+	}
+}
+
+// A full re-send is spread over ticks, routeCallsPerTick calls at most each, so the Run goroutine
+// never blocks long enough on the dataplane to back up the route-bus stream (whose reflector side
+// drops live deltas it cannot deliver). The keys a restart actually loses — held local host keys —
+// go first.
+func TestAFullResendIsSpreadOverTicks(t *testing.T) {
+	ctx := context.Background()
+	dp := newRecordingDP()
+	dp.instanceID = "boot-1"
+	b := newGuestBus(dp)
+	localGuest(dp)
+	tick(t, b, subs(100))
+	n := 2*routeCallsPerTick + routeCallsPerTick/2
+	learnRoutes(b, n)
+	b.apply(ctx, routeAdd(100, guestHost, remoteNH))
+
+	dp.restart()
+	before := attempts(dp)
+	tick(t, b, subs(100))
+	if got := attempts(dp) - before; got > routeCallsPerTick {
+		t.Fatalf("one tick must make at most %d dataplane calls, made %d", routeCallsPerTick, got)
+	}
+	if _, ok := dp.get(100, guestHost); !ok {
+		t.Fatal("the held key, which a restart actually loses, must be re-sent on the first tick")
+	}
+	for range 2 {
+		before = attempts(dp)
+		tick(t, b, subs(100))
+		if got := attempts(dp) - before; got > routeCallsPerTick {
+			t.Fatalf("one tick must make at most %d dataplane calls, made %d", routeCallsPerTick, got)
+		}
+	}
+	dp.mu.Lock()
+	got := len(dp.added)
+	dp.mu.Unlock()
+	if got != n+1 {
+		t.Fatalf("the re-send must converge over ticks: %d of %d routes back", got, n+1)
+	}
+	before = attempts(dp)
+	tick(t, b, subs(100))
+	if got := attempts(dp) - before; got != 0 {
+		t.Fatalf("a finished re-send must leave the tick quiet, got %d calls", got)
+	}
+}
+
+// A dataplane that reports an instance id announces its restarts, so it gets no timed sweep: each
+// would cost a call per learned route for nothing.
+func TestNoTimedSweepWhenTheDataplaneReportsAnInstanceID(t *testing.T) {
+	ctx := context.Background()
+	dp := newRecordingDP()
+	dp.instanceID = "boot-1"
+	b := NewBus("nodeA", selfNH, dp, false)
+	b.apply(ctx, routeAdd(100, "10.0.0.7/32", remoteNH))
+	tick(t, b, subs(100))
+
+	dp.loseRoutes()
+	b.lastFullResync = time.Now().Add(-fullResyncEvery)
+	before := attempts(dp)
+	tick(t, b, subs(100))
+	if got := attempts(dp) - before; got != 0 {
+		t.Fatalf("no timed sweep against a dataplane with an instance id, got %d calls", got)
+	}
+}
+
+// A key whose AddRoute keeps failing is retried with exponential backoff, not every tick, and its
+// failure is logged once rather than on every retry. It is programmed once the call succeeds.
+func TestAPersistentlyFailingRouteBacksOff(t *testing.T) {
+	var logs bytes.Buffer
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	ctx := context.Background()
+	dp := newRecordingDP()
+	b := NewBus("nodeA", selfNH, dp, false)
+	failNextAdd(dp, 100, "10.0.0.7/32", 1000)
+	b.apply(ctx, routeAdd(100, "10.0.0.7/32", remoteNH))
+
+	const ticks = 20
+	before := attempts(dp)
+	for range ticks {
+		tick(t, b, subs(100))
+	}
+	got := attempts(dp) - before
+	if got < 3 || got > 6 {
+		t.Fatalf("over %d ticks a failing key must be retried with backoff (about log2 of them), got %d calls", ticks, got)
+	}
+	if n := strings.Count(logs.String(), "AddRoute vni=100 10.0.0.7/32"); n != 1 {
+		t.Fatalf("a persistently failing key must be logged once, not on every retry; got %d lines:\n%s", n, logs.String())
+	}
+
+	failNextAdd(dp, 100, "10.0.0.7/32", 0)
+	for range retryMaxTicks + 1 {
+		tick(t, b, subs(100))
+	}
+	if _, ok := dp.get(100, "10.0.0.7/32"); !ok {
+		t.Fatal("the key must be programmed once its AddRoute succeeds")
+	}
+	before = attempts(dp)
+	tick(t, b, subs(100))
+	if got := attempts(dp) - before; got != 0 {
+		t.Fatalf("a recovered key must leave the tick quiet, got %d calls", got)
 	}
 }

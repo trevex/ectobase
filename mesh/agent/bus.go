@@ -5,10 +5,12 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log"
 	"net"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -220,12 +222,21 @@ type Bus struct {
 	// not a mesh route a self-route was holding back (the kernel never had it), and not anything at
 	// all if the maps went too. So the agent re-sends every learned route when the dataplane's
 	// instance id (from ListInterfaces) changes or it answers again after an outage, and on a slow
-	// sweep (fullResyncEvery) for a dataplane that cannot say.
+	// sweep (fullResyncEvery) for a dataplane that cannot say. A re-send is owed key by key
+	// (resendQueue) and paid routeCallsPerTick at a time.
 	dpInstance     string
-	dpSeen         bool      // dpInstance has been read at least once
-	dpUnreachable  bool      // the last ListInterfaces failed
-	resyncPending  bool      // a full re-send is owed: a restart was seen and no re-send has finished since
-	lastFullResync time.Time // when the last full re-send finished
+	dpSeen         bool       // dpInstance has been read at least once
+	dpUnreachable  bool       // the last ListInterfaces failed
+	resendQueue    []routeRef // keys still owed a full re-send, held local host keys first
+	lastFullResync time.Time  // when the last full re-send was queued
+
+	// ticks counts syncRoutes runs; it is the clock retries back off on. retries holds each key
+	// whose last call failed for a reason other than an unreachable dataplane (see routeRetry).
+	ticks   int
+	retries map[routeRef]*routeRetry
+	// absentTicks[vni] counts the successful reconciles in a row whose subscriptions left out a VNI
+	// that still has learned routes (see forgetUnsubscribed).
+	absentTicks map[uint32]int
 
 	// reconcileEvery is how often Run recomputes the desired announcement set and pushes deltas onto
 	// the live stream. Tests override it for fast convergence.
@@ -237,6 +248,41 @@ type Bus struct {
 // or route state lost some other way — so it can be slow: each route costs one AddRoute (and a log
 // line in flowplane), and a restart re-sends on the next tick anyway.
 const fullResyncEvery = 5 * time.Minute
+
+// routeCallsPerTick caps the dataplane calls one tick's resync makes. A tick runs on the Run
+// goroutine, which meanwhile drains nothing from the route-bus stream: past recvCh's 64 messages
+// the reflector's per-session queue fills, and it drops live deltas beyond 1024, which no resync
+// can recover. One AddRoute is a local unix-socket RPC plus a linear scan of flowplane's route
+// shadow, well under a millisecond each, so 256 of them hold Run for a fraction of a second — far
+// shorter than it takes any realistic churn to queue a thousand deltas for one node. A full
+// re-send of N routes takes N/256 ticks: about three minutes for 10k, with the keys a restart
+// actually loses (held local host keys) sent on the first.
+const routeCallsPerTick = 256
+
+// retryMaxTicks caps a failing key's backoff: retries come 1, 2, 4, ... ticks apart, then every
+// 60 ticks (five minutes at the default reconcileEvery).
+const retryMaxTicks = 60
+
+// retrySummaryTicks is how often the keys still failing are summarised in the log (about a
+// minute), since each is logged only when it starts failing.
+const retrySummaryTicks = 12
+
+// unsubscribeAfterTicks is how many successful reconciles in a row must leave a VNI out of the
+// subscriptions before its learned routes are forgotten and withdrawn. A guest pod that restarts
+// detaches and re-attaches within a tick or two, and one reconcile can read the peering config
+// without an import; dropping a VNI's routes on either would blackhole it until the re-subscribe
+// replays them. Three ticks (~15 s) outlasts both, and costs only that much longer for a VNI that
+// really left — its routes are frozen meanwhile (the unsubscribe has gone out), and a re-subscribe
+// replays and prunes them anyway.
+const unsubscribeAfterTicks = 3
+
+// routeRetry is a key whose last dataplane call failed: how often in a row, the first tick it may
+// be retried on, and the error, for the summary.
+type routeRetry struct {
+	failures  int
+	nextTick  int
+	lastError string
+}
 
 // natEntry is one learned neighbor-NAT block, keyed exactly as the dataplane programs it so a
 // prune can withdraw it verbatim.
@@ -478,6 +524,8 @@ func NewBus(nodeID, underlay string, dp Dataplane, isEdge bool) *Bus {
 		learnedOwn:      map[uint32]map[string]ownRoute{},
 		peerImports:     map[uint32][]PeerImport{},
 		lastFullResync:  time.Now(),
+		retries:         map[routeRef]*routeRetry{},
+		absentTicks:     map[uint32]int{},
 		reconcileEvery:  defaultReconcileEvery,
 	}
 }
@@ -597,9 +645,10 @@ func (b *Bus) reconcileStep(ctx context.Context, stream rbv1.RouteBus_SessionCli
 }
 
 // syncRoutes is the level-triggered half of programming the learned routes (apply, as each
-// RouteUpdate arrives, is the event-driven half). It re-reads the local interfaces, then converges
-// every key: in full when the dataplane restarted or the slow sweep is due, else only the keys that
-// drifted from what was programmed.
+// RouteUpdate arrives, is the event-driven half). It re-reads the local interfaces, queues a full
+// re-send when the dataplane restarted (or, for one without an instance id, the slow sweep is due),
+// then converges the keys that drifted from what was programmed and pays down the re-send, within
+// one tick's budget (see resyncRoutes).
 //
 // apply alone left gaps nothing closed short of a route-bus reconnect: a failed AddRoute or
 // WithdrawRoute was only logged; a restarted flowplane never got back a mesh route a self-route had
@@ -608,31 +657,99 @@ func (b *Bus) reconcileStep(ctx context.Context, stream rbv1.RouteBus_SessionCli
 // lands later, the steady-state ordering), a peering configured or removed, a guest arriving over a
 // route that names this node — was programmed only if the session happened to replay.
 func (b *Bus) syncRoutes(ctx context.Context) {
+	b.ticks++
 	if b.refreshLocalHosts(ctx) {
 		log.Printf("dataplane restarted or answered again after an outage: re-sending every learned route")
-		b.resyncPending = true
+		b.queueFullResend()
 	}
-	full := b.resyncPending || time.Since(b.lastFullResync) >= fullResyncEvery
-	if b.resyncRoutes(ctx, full) && full {
-		b.resyncPending = false
-		b.lastFullResync = time.Now()
+	// A dataplane with an instance id announces its restarts, so only one without gets the sweep.
+	if b.dpInstance == "" && len(b.resendQueue) == 0 && time.Since(b.lastFullResync) >= fullResyncEvery {
+		b.queueFullResend()
+	}
+	b.resyncRoutes(ctx)
+	if len(b.retries) > 0 && b.ticks%retrySummaryTicks == 0 {
+		b.logRetrySummary()
 	}
 }
 
-// resyncRoutes converges every route key: each the learned routes want programmed and each
-// programmed that they no longer want. Without full it is an in-memory diff that calls the
-// dataplane only for keys that drifted; with full every wanted route is re-sent (flowplane's
-// AddRoute replaces in place, so re-sending a route it holds is a no-op upsert). It stops at the
-// first call that never reached the dataplane — the rest would fail the same way, one log line
-// each — and the next tick picks up from the diff. Reports whether it got through every key.
-func (b *Bus) resyncRoutes(ctx context.Context, full bool) bool {
+// queueFullResend owes every key a re-send, held local host keys first: they are what a restarted
+// flowplane cannot recover from its pinned maps, so they lead the line when it is paid over ticks.
+func (b *Bus) queueFullResend() {
+	keys := make([]routeRef, 0, len(b.resendQueue))
 	for k := range b.routeKeys() {
-		if err := b.syncKey(ctx, k.Vni, k.Prefix, full); err != nil && transientDataplaneError(err) {
-			log.Printf("route resync: dataplane unreachable; resuming on the next tick")
-			return false
+		keys = append(keys, k)
+	}
+	slices.SortFunc(keys, func(x, y routeRef) int {
+		if hx, hy := b.localHosts[x.Vni][x.Prefix], b.localHosts[y.Vni][y.Prefix]; hx != hy {
+			if hx {
+				return -1
+			}
+			return 1
+		}
+		if x.Vni != y.Vni {
+			return int(x.Vni) - int(y.Vni)
+		}
+		return strings.Compare(x.Prefix, y.Prefix)
+	})
+	b.resendQueue = keys
+	b.lastFullResync = time.Now()
+}
+
+// resyncRoutes converges the route keys within one tick's budget (routeCallsPerTick). First the
+// diff: every key the learned routes want programmed, or that is programmed and no longer wanted,
+// gets a call only if it drifted from what was last programmed and is not backing off — so a
+// converged tick makes none. Then, with what is left of the budget, the owed full re-send (flowplane's
+// AddRoute replaces in place, so re-sending a route it holds is a no-op upsert). What the budget
+// does not reach is picked up next tick. It stops early at the first call that never reached the
+// dataplane: the rest would fail the same way, one log line each.
+func (b *Bus) resyncRoutes(ctx context.Context) {
+	budget := routeCallsPerTick
+	keys := b.routeKeys()
+	for k := range b.retries {
+		if !keys[k] {
+			delete(b.retries, k) // nothing wants it and nothing is programmed there any more
 		}
 	}
-	return true
+	for k := range keys {
+		if budget == 0 {
+			return
+		}
+		if r := b.retries[k]; r != nil && b.ticks < r.nextTick {
+			continue
+		}
+		sent, err := b.syncKey(ctx, k.Vni, k.Prefix, false)
+		if sent {
+			budget--
+		}
+		if err != nil && transientDataplaneError(err) {
+			log.Printf("route resync: dataplane unreachable; resuming on the next tick")
+			return
+		}
+	}
+	for len(b.resendQueue) > 0 && budget > 0 {
+		k := b.resendQueue[0]
+		b.resendQueue = b.resendQueue[1:]
+		sent, err := b.syncKey(ctx, k.Vni, k.Prefix, true)
+		if sent {
+			budget--
+		}
+		if err != nil && transientDataplaneError(err) {
+			log.Printf("route resync: dataplane unreachable; resuming on the next tick")
+			return
+		}
+	}
+	if len(b.resendQueue) == 0 {
+		b.resendQueue = nil
+	}
+}
+
+// logRetrySummary logs how many keys are still failing, with one of them as an example.
+func (b *Bus) logRetrySummary() {
+	for k, r := range b.retries {
+		log.Printf("route resync: %d route key(s) failing, backing off; e.g. vni=%d %s (%d failures): %s",
+			len(b.retries), k.Vni, k.Prefix, r.failures, r.lastError)
+		return
+	}
 }
 
 // routeKeys is every key the learned routes reach — each own-table route, each peer import, the
@@ -667,21 +784,40 @@ func (b *Bus) routeKeys() map[routeRef]bool {
 	return keys
 }
 
-// forgetUnsubscribed forgets the routes learned for every VNI this node no longer subscribes to:
-// the reflector stops updating such a VNI, so they could only go stale. The next resync withdraws
-// them, and whatever was imported from them. Level-triggered on the desired set rather than on the
-// unsubscribe sent, so a VNI dropped while the session was down is forgotten too.
+// forgetUnsubscribed forgets the routes learned for every VNI this node has no longer subscribed
+// to for unsubscribeAfterTicks reconciles in a row: the reflector stops updating such a VNI, so
+// they could only go stale. The resync then withdraws them, and whatever was imported from them.
+// Level-triggered on the desired set rather than on the unsubscribe sent, so a VNI dropped while
+// the session was down is forgotten too. The public VNI counts like any other.
 func (b *Bus) forgetUnsubscribed(subs []uint32) {
 	keep := vniSet(subs)
+	absent := map[uint32]bool{}
 	for vni := range b.learnedOwn {
 		if !keep[vni] {
-			delete(b.learnedOwn, vni)
+			absent[vni] = true
 		}
 	}
-	if !keep[PublicVNI] {
-		b.mu.Lock()
-		clear(b.learnedPublic)
-		b.mu.Unlock()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !keep[PublicVNI] && len(b.learnedPublic) > 0 {
+		absent[PublicVNI] = true
+	}
+	for vni := range b.absentTicks {
+		if !absent[vni] {
+			delete(b.absentTicks, vni)
+		}
+	}
+	for vni := range absent {
+		b.absentTicks[vni]++
+		if b.absentTicks[vni] < unsubscribeAfterTicks {
+			continue
+		}
+		delete(b.absentTicks, vni)
+		if vni == PublicVNI {
+			clear(b.learnedPublic)
+		} else {
+			delete(b.learnedOwn, vni)
+		}
 	}
 }
 
@@ -963,14 +1099,14 @@ func (b *Bus) apply(ctx context.Context, ru *rbv1.RouteUpdate) {
 func (b *Bus) syncLearned(ctx context.Context, vni uint32, prefix string, force bool) {
 	if vni == PublicVNI {
 		for _, egress := range b.egressVNIs {
-			_ = b.syncKey(ctx, egress, prefix, false)
+			_, _ = b.syncKey(ctx, egress, prefix, false)
 		}
 		return
 	}
-	_ = b.syncKey(ctx, vni, prefix, force)
+	_, _ = b.syncKey(ctx, vni, prefix, force)
 	for _, im := range b.importersOf(vni) {
 		if prefixInCIDRs(prefix, im.prefixes) {
-			_ = b.syncKey(ctx, im.localVNI, prefix, false)
+			_, _ = b.syncKey(ctx, im.localVNI, prefix, false)
 		}
 	}
 }
@@ -1015,32 +1151,67 @@ func (b *Bus) desiredRoute(vni uint32, prefix string) (dpRoute, bool) {
 // may hold a route for the key that this agent never programmed (a held key's shadow from before an
 // agent restart). A failed call may or may not have landed (a deadline, say), so it leaves the key
 // unknown — the zero dpRoute, which differs from every wanted route and from none — and the next
-// tick's resync sends whatever is wanted then.
-func (b *Bus) syncKey(ctx context.Context, vni uint32, prefix string, force bool) error {
+// resync sends whatever is wanted then. sent reports whether the dataplane was called.
+func (b *Bus) syncKey(ctx context.Context, vni uint32, prefix string, force bool) (sent bool, err error) {
 	want, ok := b.desiredRoute(vni, prefix)
 	have, had := b.programmed[vni][prefix]
+	k := routeRef{vni, prefix}
 	if !ok {
 		if !had && !force {
-			return nil
+			return false, nil
 		}
 		if err := b.dp.WithdrawRoute(ctx, vni, prefix); err != nil {
-			log.Printf("WithdrawRoute vni=%d %s: %v", vni, prefix, err)
+			b.noteFailure(k, fmt.Sprintf("WithdrawRoute vni=%d %s", vni, prefix), err)
 			b.setProgrammed(vni, prefix, dpRoute{})
-			return err
+			return true, err
 		}
+		b.noteSuccess(k)
 		b.forgetProgrammed(vni, prefix)
-		return nil
+		return true, nil
 	}
 	if had && have == want && !force {
-		return nil
+		return false, nil
 	}
 	if err := b.dp.AddRoute(ctx, vni, prefix, want.nexthop, want.external, want.deliveryVNI); err != nil {
-		log.Printf("AddRoute vni=%d %s -> %s external=%t delivery=%d (%s): %v", vni, prefix, want.nexthop, want.external, want.deliveryVNI, want.origin, err)
+		b.noteFailure(k, fmt.Sprintf("AddRoute vni=%d %s -> %s external=%t delivery=%d (%s)",
+			vni, prefix, want.nexthop, want.external, want.deliveryVNI, want.origin), err)
 		b.setProgrammed(vni, prefix, dpRoute{})
-		return err
+		return true, err
 	}
+	b.noteSuccess(k)
 	b.setProgrammed(vni, prefix, want)
-	return nil
+	return true, nil
+}
+
+// noteFailure logs a failed call and backs the key off. An unreachable dataplane is not the key's
+// fault: it is logged each time, as before, and not backed off, so the key goes out as soon as the
+// dataplane is back. Any other failure — the dataplane refused this route — is logged once, when
+// the key starts failing or fails differently, and retried 1, 2, 4, ... ticks later, up to
+// retryMaxTicks apart; the summary keeps it visible meanwhile.
+func (b *Bus) noteFailure(k routeRef, call string, err error) {
+	if transientDataplaneError(err) {
+		log.Printf("%s: %v", call, err)
+		return
+	}
+	r := b.retries[k]
+	if r == nil {
+		r = &routeRetry{}
+		b.retries[k] = r
+	}
+	r.failures++
+	r.nextTick = b.ticks + min(1<<min(r.failures-1, 30), retryMaxTicks)
+	if msg := err.Error(); msg != r.lastError {
+		r.lastError = msg
+		log.Printf("%s: %v — retrying with backoff", call, err)
+	}
+}
+
+// noteSuccess ends a key's backoff, logging the recovery if it had been failing.
+func (b *Bus) noteSuccess(k routeRef) {
+	if r := b.retries[k]; r != nil {
+		log.Printf("route vni=%d %s programmed after %d failed attempt(s)", k.Vni, k.Prefix, r.failures)
+		delete(b.retries, k)
+	}
 }
 
 func (b *Bus) setProgrammed(vni uint32, prefix string, r dpRoute) {
@@ -1308,7 +1479,7 @@ func (b *Bus) releaseLocalHost(ctx context.Context, vni uint32, prefix string) {
 		r.nexthops = slices.DeleteFunc(slices.Clone(r.nexthops), func(nh string) bool { return b.ownUnderlays[nh] })
 		b.learnedOwn[vni][prefix] = r
 	}
-	_ = b.syncKey(ctx, vni, prefix, true)
+	_, _ = b.syncKey(ctx, vni, prefix, true)
 }
 
 // nexthopFor picks the nexthop to program for (vni, prefix) from a route's sorted set. Any key but
