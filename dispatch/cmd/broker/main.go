@@ -61,7 +61,7 @@ func main() {
 	flag.StringVar(&routebusSecret, "routebus-intermediate-secret", "", "if set, bootstrap this pool's route-bus intermediate CA into this Secret (enables the mTLS PKI); empty => disabled")
 	flag.StringVar(&routebusSecretNS, "routebus-intermediate-namespace", os.Getenv("POD_NAMESPACE"), "namespace for the intermediate CA Secret (defaults to POD_NAMESPACE)")
 	var routebusCIDRs string
-	flag.StringVar(&routebusCIDRs, "routebus-underlay-cidrs", "", "comma-separated pool underlay CIDRs (e.g. the pool /48); the intermediate is IP-name-constrained to these so it can only mint node leaves inside the pool's underlay")
+	flag.StringVar(&routebusCIDRs, "routebus-underlay-cidrs", "", "comma-separated pool underlay CIDRs (e.g. the pool /48), sent with the intermediate CSR. Advisory: the dispatch signer constrains a pool intermediate to its ClusterPool's spec.underlayPrefix and ignores these")
 	var dispatchServer, dispatchCA, dispatchCert, dispatchKey string
 	flag.StringVar(&dispatchServer, "dispatch-server", "", "dispatch apiserver URL (mTLS mode); with --dispatch-{ca,client-cert,client-key}")
 	flag.StringVar(&dispatchCA, "dispatch-ca", "", "CA file verifying the dispatch serving cert")

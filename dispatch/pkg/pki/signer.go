@@ -19,14 +19,24 @@ import (
 	"fmt"
 	"math/big"
 	"net"
+	"net/netip"
 	"os"
+	"slices"
+	"strings"
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	platformv1 "github.com/trevex/ectobase/api/platform/v1alpha1"
 )
@@ -49,9 +59,13 @@ const intermediateTTL = 90 * 24 * time.Hour
 
 // SignIntermediate signs the CSR as a pool-scoped, path-len-0 intermediate CA from the root.
 // The returned cert IsCA with MaxPathLen 0 (cannot sign further CAs) and is name-constrained to
-// the pool's DNS domain AND (when permittedCIDRs is non-empty) its underlay IP ranges, so it can
-// only issue leaves for its own pool and only with node IP SANs inside the pool's underlay. Pure.
+// the pool's DNS domain AND its underlay IP ranges, so it can only issue leaves for its own pool
+// and only with node IP SANs inside the pool's underlay. permittedCIDRs must not be empty: an
+// intermediate with no IP constraint could mint a leaf for any VTEP on the route bus. Pure.
 func SignIntermediate(rootCert *x509.Certificate, rootKey crypto.Signer, csrDER []byte, poolName string, permittedCIDRs []string, notAfter time.Time) ([]byte, error) {
+	if len(permittedCIDRs) == 0 {
+		return nil, fmt.Errorf("no permitted underlay CIDRs: an intermediate is only signed with an IP constraint")
+	}
 	block, _ := pem.Decode(csrDER)
 	if block == nil || block.Type != "CERTIFICATE REQUEST" {
 		return nil, fmt.Errorf("spec.request is not a PEM CERTIFICATE REQUEST")
@@ -84,7 +98,7 @@ func SignIntermediate(rootCert *x509.Certificate, rootKey crypto.Signer, csrDER 
 	}
 	// IP boundary: constrain the intermediate to the pool's underlay ranges so it cannot mint a
 	// leaf with an IP SAN in another pool's underlay (which the reflector's nexthop==SAN check
-	// would otherwise accept). Empty ranges => no IP constraint (bootstrap before prefixes known).
+	// would otherwise accept).
 	for _, c := range permittedCIDRs {
 		_, ipNet, perr := net.ParseCIDR(c)
 		if perr != nil {
@@ -108,8 +122,18 @@ type RootCA struct {
 
 // Signer reconciles RouteBusIdentity: it signs each request's CSR into a pool intermediate
 // and writes the result to status. Inactive (skips) when Root is nil (mTLS not configured).
+//
+// The intermediate's IP constraint never comes from a field the constrained party writes. A pool's
+// broker files its own RouteBusIdentity (it holds update on it), so for an identity whose name is a
+// ClusterPool the constraint is that pool's operator-authored spec.underlayPrefix, and the request's
+// permittedUnderlayCIDRs is ignored. Only an identity with no ClusterPool of its name — the WAN edge
+// fleet, created by the operator and writable by no broker — is constrained to its own spec.
 type Signer struct {
 	Client client.Client
+	// Reader reads ClusterPools for the constraint decision. It should be uncached
+	// (mgr.GetAPIReader()): a cache that has not seen a new ClusterPool yet would read as "no
+	// ClusterPool" and fall through to the broker-written spec. nil uses Client.
+	Reader client.Reader
 	Root   *RootCA
 }
 
@@ -126,20 +150,38 @@ func (s *Signer) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, 
 	if id.Spec.PoolName == "" || len(id.Spec.Request) == 0 {
 		return ctrl.Result{}, s.deny(ctx, &id, "spec.poolName and spec.request are required")
 	}
-	// Idempotent: if already signed for THIS public key and not near expiry, leave it.
-	if fresh, err := s.alreadySigned(&id); err == nil && fresh {
+	// RBAC binds a broker to the identity NAMED after its pool; spec.poolName is a field it
+	// writes. Signing for any other poolName would hand it another identity's DNS domain and range.
+	if id.Spec.PoolName != id.Name {
+		return ctrl.Result{}, s.deny(ctx, &id, fmt.Sprintf("spec.poolName %q must equal the RouteBusIdentity name %q", id.Spec.PoolName, id.Name))
+	}
+	permitted, note, denial, err := s.constraint(ctx, &id)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if denial != "" {
+		return ctrl.Result{}, s.deny(ctx, &id, denial)
+	}
+	// Idempotent: if already signed for THIS public key under THIS constraint and not near
+	// expiry, leave it. A cert carrying a different constraint (signed under an earlier rule, or
+	// before the operator changed the prefix) is re-signed now, not at its expiry.
+	if fresh, err := s.alreadySigned(&id, permitted); err == nil && fresh {
 		return ctrl.Result{RequeueAfter: intermediateTTL / 3}, nil
 	}
 
-	cert, err := SignIntermediate(s.Root.Cert, s.Root.Key, id.Spec.Request, id.Spec.PoolName, id.Spec.PermittedUnderlayCIDRs, time.Now().Add(intermediateTTL))
+	cert, err := SignIntermediate(s.Root.Cert, s.Root.Key, id.Spec.Request, id.Spec.PoolName, permitted, time.Now().Add(intermediateTTL))
 	if err != nil {
 		return ctrl.Result{}, s.deny(ctx, &id, err.Error())
+	}
+	msg := fmt.Sprintf("intermediate CA signed for pool %s, IP-constrained to %s", id.Spec.PoolName, strings.Join(permitted, ","))
+	if note != "" {
+		msg += "; " + note
+		log.FromContext(ctx).Info(note, "identity", id.Name)
 	}
 	id.Status.Certificate = cert
 	id.Status.CABundle = s.Root.PEM
 	meta.SetStatusCondition(&id.Status.Conditions, metav1.Condition{
-		Type: "Signed", Status: metav1.ConditionTrue, Reason: "Issued",
-		Message: "intermediate CA signed for pool " + id.Spec.PoolName,
+		Type: "Signed", Status: metav1.ConditionTrue, Reason: "Issued", Message: msg,
 	})
 	if err := s.Client.Status().Update(ctx, &id); err != nil {
 		return ctrl.Result{}, err
@@ -147,9 +189,58 @@ func (s *Signer) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, 
 	return ctrl.Result{RequeueAfter: intermediateTTL / 3}, nil
 }
 
-// alreadySigned reports whether status carries a cert matching the current CSR's public key
-// and comfortably before expiry (so re-issuing on rotation but not every reconcile).
-func (s *Signer) alreadySigned(id *platformv1.RouteBusIdentity) (bool, error) {
+// constraint decides the IP ranges id's intermediate is constrained to. With a ClusterPool of the
+// identity's name, that is exactly the pool's spec.underlayPrefix (note says so when the request
+// asked for ranges outside it); without one, it is the identity's own spec. denial is non-empty
+// when there is no range to sign under: the signer fails closed. err is a failed read (retry).
+func (s *Signer) constraint(ctx context.Context, id *platformv1.RouteBusIdentity) (permitted []string, note, denial string, err error) {
+	reader := s.Reader
+	if reader == nil {
+		reader = s.Client
+	}
+	var pool platformv1.ClusterPool
+	err = reader.Get(ctx, client.ObjectKey{Name: id.Spec.PoolName}, &pool)
+	switch {
+	case errors.IsNotFound(err):
+		if len(id.Spec.PermittedUnderlayCIDRs) == 0 {
+			return nil, "", fmt.Sprintf("RouteBusIdentity %s has no ClusterPool and no spec.permittedUnderlayCIDRs; "+
+				"an intermediate is only signed with an IP constraint", id.Name), nil
+		}
+		return id.Spec.PermittedUnderlayCIDRs, "", "", nil
+	case err != nil:
+		return nil, "", "", fmt.Errorf("get ClusterPool %s: %w", id.Spec.PoolName, err)
+	}
+	if pool.Spec.UnderlayPrefix == "" {
+		return nil, "", fmt.Sprintf("ClusterPool %s has no spec.underlayPrefix; a pool intermediate is only signed "+
+			"with an operator-declared IP constraint", pool.Name), nil
+	}
+	prefix, perr := netip.ParsePrefix(pool.Spec.UnderlayPrefix)
+	if perr != nil {
+		return nil, "", fmt.Sprintf("ClusterPool %s spec.underlayPrefix %q is not a CIDR: %v", pool.Name, pool.Spec.UnderlayPrefix, perr), nil
+	}
+	prefix = prefix.Masked()
+	var outside []string
+	for _, c := range id.Spec.PermittedUnderlayCIDRs {
+		if p, err := netip.ParsePrefix(c); err != nil || !prefixWithin(p, prefix) {
+			outside = append(outside, c)
+		}
+	}
+	if len(outside) > 0 {
+		note = fmt.Sprintf("ignored spec.permittedUnderlayCIDRs %v outside ClusterPool %s spec.underlayPrefix %s",
+			outside, pool.Name, prefix)
+	}
+	return []string{prefix.String()}, note, "", nil
+}
+
+// prefixWithin reports whether inner lies entirely inside outer (same family).
+func prefixWithin(inner, outer netip.Prefix) bool {
+	return inner.Addr().Is4() == outer.Addr().Is4() && inner.Bits() >= outer.Bits() && outer.Contains(inner.Addr())
+}
+
+// alreadySigned reports whether status carries a cert matching the current CSR's public key,
+// name-constrained exactly to the identity's DNS domain and to permitted, and comfortably before
+// expiry (so re-issuing on rotation or a changed constraint but not every reconcile).
+func (s *Signer) alreadySigned(id *platformv1.RouteBusIdentity, permitted []string) (bool, error) {
 	if len(id.Status.Certificate) == 0 {
 		return false, nil
 	}
@@ -164,6 +255,10 @@ func (s *Signer) alreadySigned(id *platformv1.RouteBusIdentity) (bool, error) {
 	if time.Until(cert.NotAfter) < intermediateTTL/2 {
 		return false, nil // due for rotation
 	}
+	if !slices.Equal(cert.PermittedDNSDomains, []string{PoolDNSDomain(id.Spec.PoolName)}) ||
+		!sameRanges(cert.PermittedIPRanges, permitted) {
+		return false, nil // signed under another constraint
+	}
 	rb, _ := pem.Decode(id.Spec.Request)
 	if rb == nil {
 		return false, nil
@@ -175,7 +270,40 @@ func (s *Signer) alreadySigned(id *platformv1.RouteBusIdentity) (bool, error) {
 	return publicKeysEqual(cert.PublicKey, csr.PublicKey), nil
 }
 
+// sameRanges reports whether a cert's permitted IP ranges are exactly the CIDRs in want, as sets
+// of canonical prefixes.
+func sameRanges(got []*net.IPNet, want []string) bool {
+	set := func(ps []netip.Prefix) []string {
+		out := make([]string, 0, len(ps))
+		for _, p := range ps {
+			out = append(out, p.Masked().String())
+		}
+		slices.Sort(out)
+		return slices.Compact(out)
+	}
+	var g, w []netip.Prefix
+	for _, n := range got {
+		addr, ok := netip.AddrFromSlice(n.IP)
+		if !ok {
+			return false
+		}
+		ones, _ := n.Mask.Size()
+		g = append(g, netip.PrefixFrom(addr.Unmap(), ones))
+	}
+	for _, c := range want {
+		p, err := netip.ParsePrefix(c)
+		if err != nil {
+			return false
+		}
+		w = append(w, p)
+	}
+	return slices.Equal(set(g), set(w))
+}
+
+// deny records Signed=False and drops any certificate from status: a denied identity must not
+// keep presenting an intermediate the signer would no longer issue.
 func (s *Signer) deny(ctx context.Context, id *platformv1.RouteBusIdentity, msg string) error {
+	id.Status.Certificate = nil
 	meta.SetStatusCondition(&id.Status.Conditions, metav1.Condition{
 		Type: "Signed", Status: metav1.ConditionFalse, Reason: "Denied", Message: msg,
 	})
@@ -188,7 +316,28 @@ func (s *Signer) deny(ctx context.Context, id *platformv1.RouteBusIdentity, msg 
 func (s *Signer) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&platformv1.RouteBusIdentity{}).
+		// The constraint is the ClusterPool's spec.underlayPrefix, so declaring or changing it
+		// re-signs (or unblocks a denied) identity of the same name right away.
+		Watches(&platformv1.ClusterPool{}, handler.EnqueueRequestsFromMapFunc(identityForPool),
+			builder.WithPredicates(underlayPrefixChanged)).
 		Complete(s)
+}
+
+// identityForPool maps a ClusterPool to the RouteBusIdentity of the same name (the signer only
+// signs an identity whose spec.poolName equals its name).
+func identityForPool(_ context.Context, o client.Object) []reconcile.Request {
+	return []reconcile.Request{{NamespacedName: types.NamespacedName{Name: o.GetName()}}}
+}
+
+// underlayPrefixChanged admits ClusterPool events that can change an intermediate's constraint:
+// create, delete, and an update to spec.underlayPrefix. The broker patches the pool's status every
+// few seconds; those must not wake the signer.
+var underlayPrefixChanged = predicate.Funcs{
+	UpdateFunc: func(e event.UpdateEvent) bool {
+		o, ok1 := e.ObjectOld.(*platformv1.ClusterPool)
+		n, ok2 := e.ObjectNew.(*platformv1.ClusterPool)
+		return !ok1 || !ok2 || o.Spec.UnderlayPrefix != n.Spec.UnderlayPrefix
+	},
 }
 
 // publicKeysEqual compares two public keys by their PKIX DER encoding.

@@ -166,6 +166,8 @@ func main() {
 
 	// Route-bus PKI signer: signs per-pool intermediate CAs from the root (mounted from the
 	// dispatch cert-manager ectobase-ca secret). Inactive when the root isn't mounted (mTLS off).
+	// It reads the ClusterPool that sets a pool's IP constraint through the uncached API reader, so
+	// a pool the cache has not caught up with never reads as "no ClusterPool".
 	root, err := pki.LoadRootCA(*routebusCACert, *routebusCAKey)
 	if err != nil {
 		log.Fatalf("load route-bus root CA: %v", err)
@@ -173,7 +175,7 @@ func main() {
 	if root == nil {
 		log.Printf("route-bus CA not configured (--routebus-ca-cert/key unset); RouteBusIdentity signer inactive")
 	}
-	if err := (&pki.Signer{Client: mgr.GetClient(), Root: root}).SetupWithManager(mgr); err != nil {
+	if err := (&pki.Signer{Client: mgr.GetClient(), Reader: mgr.GetAPIReader(), Root: root}).SetupWithManager(mgr); err != nil {
 		log.Fatalf("setup routebus signer controller: %v", err)
 	}
 
