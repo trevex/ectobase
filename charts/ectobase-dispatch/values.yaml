@@ -31,6 +31,13 @@ pki:
   # reflectorIP is the fabric-loopback IP agents dial; added as a SAN on the
   # reflector server cert. MUST match the host part of reflectorAddress/reflectorAdmin.
   reflectorIP: "fd00:db8:0:1::1"
+  # fleetIdentities names the RouteBusIdentities that are NOT pools, such as the WAN edge fleet's
+  # `edge`, passed to the signer as --routebus-fleet-identities. The signer constrains a fleet
+  # identity's intermediate to its own spec.permittedUnderlayCIDRs, so list only identities the
+  # operator creates and no broker can write. Every other identity must be a ClusterPool with
+  # spec.underlayPrefix. Empty by default: an install trusts no identity's own spec until told to.
+  # A name here must not also be a ClusterPool; the signer denies the collision.
+  fleetIdentities: []
 
 # imagePullPolicy applies to all containers in the chart.
 # External Ceph the dispatch controller fences against. clusterID is the cluster's fsid,

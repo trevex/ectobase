@@ -135,7 +135,7 @@ func Ectobase(ctx context.Context, s EctobaseSpec) error {
 		return fmt.Errorf("migrate dispatch Deployments to Recreate: %w", err)
 	}
 	slog.Info("installing ectobase-dispatch chart", "chart", s.DispatchChartPath)
-	if err := helmInstallDispatch(ctx, s.DispatchKubeconfig, s.DispatchChartPath, s.DispatchIdentity, s.RouteBusMTLS, s.ReflectorIP, s.ImageRegistry, s.CephClusterID); err != nil {
+	if err := helmInstallDispatch(ctx, s.DispatchKubeconfig, s.DispatchChartPath, s.DispatchIdentity, s.RouteBusMTLS, s.ReflectorIP, s.ImageRegistry, s.CephClusterID, fleetIdentities(s)); err != nil {
 		return fmt.Errorf("helm install ectobase-dispatch: %w", err)
 	}
 	if err := waitAggregatedAPI(ctx, s.DispatchKubeconfig); err != nil {
@@ -399,12 +399,21 @@ func imageSetArgs(registry string, images map[string]string) []string {
 // on the dispatch's fabric identity, so the dispatch-controller's -reflector-admin (a chart value) points
 // there. --create-namespace makes the `system` release namespace unless Ectobase already pre-created it
 // PSA-privileged (mtls); the chart creates the PSA-privileged ectobase-system namespace itself.
-func helmInstallDispatch(ctx context.Context, kubeconfig, chartPath, dispatchIdentity string, mtls bool, reflectorIP, imageRegistry, cephClusterID string) error {
-	return exec.Run(ctx, "helm", dispatchHelmArgs(kubeconfig, chartPath, dispatchIdentity, mtls, reflectorIP, imageRegistry, cephClusterID)...)
+func helmInstallDispatch(ctx context.Context, kubeconfig, chartPath, dispatchIdentity string, mtls bool, reflectorIP, imageRegistry, cephClusterID string, fleet []string) error {
+	return exec.Run(ctx, "helm", dispatchHelmArgs(kubeconfig, chartPath, dispatchIdentity, mtls, reflectorIP, imageRegistry, cephClusterID, fleet)...)
+}
+
+// fleetIdentities are the RouteBusIdentities the lab creates that are not pools: the WAN edge fleet's,
+// when the lab provisions one. The signer trusts only these to carry their own IP constraint.
+func fleetIdentities(s EctobaseSpec) []string {
+	if s.RouteBusMTLS && s.EdgePKIDir != "" {
+		return []string{edgeIdentityName}
+	}
+	return nil
 }
 
 // dispatchHelmArgs is helmInstallDispatch's helm argv, split out so it can be asserted without a cluster.
-func dispatchHelmArgs(kubeconfig, chartPath, dispatchIdentity string, mtls bool, reflectorIP, imageRegistry, cephClusterID string) []string {
+func dispatchHelmArgs(kubeconfig, chartPath, dispatchIdentity string, mtls bool, reflectorIP, imageRegistry, cephClusterID string, fleet []string) []string {
 	args := []string{"upgrade", "--install", "ectobase-dispatch", chartPath,
 		"--kubeconfig", kubeconfig,
 		"--namespace", "system", "--create-namespace",
@@ -432,6 +441,10 @@ func dispatchHelmArgs(kubeconfig, chartPath, dispatchIdentity string, mtls bool,
 			"--set", "pki.reflectorIP="+reflectorIP,
 			"--set", "dispatchApiserver.serviceIP="+dispatchIdentity,
 		)
+		// The chart trusts no fleet identity by default; the lab's edge identity is one.
+		if len(fleet) > 0 {
+			args = append(args, "--set", "pki.fleetIdentities={"+strings.Join(fleet, ",")+"}")
+		}
 	}
 	return args
 }

@@ -271,7 +271,7 @@ func TestPerPoolRBAC_ScopesABroker(t *testing.T) {
 
 	// The broker files its CSR into its own pre-created RouteBusIdentity, and that is all. RBAC
 	// cannot scope `create` by name, so the grant has none: a broker able to create an identity
-	// with no ClusterPool behind it would choose that identity's IP constraint itself.
+	// is one more object a grant cannot scope, and the signer would at best deny it.
 	t.Run("RouteBusIdentityUpdateOwnButNeverCreate", func(t *testing.T) {
 		var own platformv1.RouteBusIdentity
 		if err := broker.Get(ctx, client.ObjectKey{Name: ownPool}, &own); err != nil {

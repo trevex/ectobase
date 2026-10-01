@@ -124,17 +124,22 @@ type RootCA struct {
 // and writes the result to status. Inactive (skips) when Root is nil (mTLS not configured).
 //
 // The intermediate's IP constraint never comes from a field the constrained party writes. A pool's
-// broker files its own RouteBusIdentity (it holds update on it), so for an identity whose name is a
-// ClusterPool the constraint is that pool's operator-authored spec.underlayPrefix, and the request's
-// permittedUnderlayCIDRs is ignored. Only an identity with no ClusterPool of its name — the WAN edge
-// fleet, created by the operator and writable by no broker — is constrained to its own spec.
+// broker files its own RouteBusIdentity (it holds update on it), so a pool's constraint is its
+// ClusterPool's operator-authored spec.underlayPrefix, and the request's permittedUnderlayCIDRs is
+// ignored. Only a fleet identity — one the operator names in FleetIdentities, such as the WAN edge
+// fleet, created by the operator and writable by no broker — is constrained to its own spec. Which
+// rule applies is configuration, never inferred: a missing ClusterPool does not make an identity a
+// fleet identity, because an identity left behind by a deleted ClusterPool is still broker-writable.
 type Signer struct {
 	Client client.Client
 	// Reader reads ClusterPools for the constraint decision. It should be uncached
-	// (mgr.GetAPIReader()): a cache that has not seen a new ClusterPool yet would read as "no
-	// ClusterPool" and fall through to the broker-written spec. nil uses Client.
+	// (mgr.GetAPIReader()), so a ClusterPool the cache has not caught up with is still seen. nil
+	// uses Client.
 	Reader client.Reader
 	Root   *RootCA
+	// FleetIdentities names the RouteBusIdentities that are not pools and whose operator-written
+	// spec.permittedUnderlayCIDRs is trusted (--routebus-fleet-identities). Empty trusts none.
+	FleetIdentities []string
 }
 
 func (s *Signer) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -189,10 +194,11 @@ func (s *Signer) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, 
 	return ctrl.Result{RequeueAfter: intermediateTTL / 3}, nil
 }
 
-// constraint decides the IP ranges id's intermediate is constrained to. With a ClusterPool of the
-// identity's name, that is exactly the pool's spec.underlayPrefix (note says so when the request
-// asked for ranges outside it); without one, it is the identity's own spec. denial is non-empty
-// when there is no range to sign under: the signer fails closed. err is a failed read (retry).
+// constraint decides the IP ranges id's intermediate is constrained to. For a fleet identity it is
+// the identity's own spec; for any other identity it must be a pool, and the range is exactly its
+// ClusterPool's spec.underlayPrefix (note says so when the request asked for ranges outside it).
+// denial is non-empty when there is no range to sign under: the signer fails closed. err is a
+// failed read (retry).
 func (s *Signer) constraint(ctx context.Context, id *platformv1.RouteBusIdentity) (permitted []string, note, denial string, err error) {
 	reader := s.Reader
 	if reader == nil {
@@ -200,15 +206,25 @@ func (s *Signer) constraint(ctx context.Context, id *platformv1.RouteBusIdentity
 	}
 	var pool platformv1.ClusterPool
 	err = reader.Get(ctx, client.ObjectKey{Name: id.Spec.PoolName}, &pool)
-	switch {
-	case errors.IsNotFound(err):
-		if len(id.Spec.PermittedUnderlayCIDRs) == 0 {
-			return nil, "", fmt.Sprintf("RouteBusIdentity %s has no ClusterPool and no spec.permittedUnderlayCIDRs; "+
+	if err != nil && !errors.IsNotFound(err) {
+		return nil, "", "", fmt.Errorf("get ClusterPool %s: %w", id.Spec.PoolName, err)
+	}
+	poolExists := err == nil
+	if slices.Contains(s.FleetIdentities, id.Name) {
+		switch {
+		case poolExists:
+			// The pool's broker would write this identity's spec, and a fleet identity's spec is trusted.
+			return nil, "", fmt.Sprintf("RouteBusIdentity %s is both a fleet identity and a ClusterPool "+
+				"(--routebus-fleet-identities names it); rename one of them", id.Name), nil
+		case len(id.Spec.PermittedUnderlayCIDRs) == 0:
+			return nil, "", fmt.Sprintf("fleet identity %s has no spec.permittedUnderlayCIDRs; "+
 				"an intermediate is only signed with an IP constraint", id.Name), nil
 		}
 		return id.Spec.PermittedUnderlayCIDRs, "", "", nil
-	case err != nil:
-		return nil, "", "", fmt.Errorf("get ClusterPool %s: %w", id.Spec.PoolName, err)
+	}
+	if !poolExists {
+		return nil, "", fmt.Sprintf("no ClusterPool %s and not a fleet identity (--routebus-fleet-identities); "+
+			"a pool intermediate is only signed for an enrolled ClusterPool", id.Spec.PoolName), nil
 	}
 	if pool.Spec.UnderlayPrefix == "" {
 		return nil, "", fmt.Sprintf("ClusterPool %s has no spec.underlayPrefix; a pool intermediate is only signed "+

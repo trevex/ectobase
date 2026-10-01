@@ -186,15 +186,20 @@ The IP constraint is what stops one pool from minting a valid leaf for another p
 the reflector's exact-match nexthop check would then accept. So the signer takes it from the
 operator, never from the pool:
 
-- For a `RouteBusIdentity` named after a `ClusterPool`, the constraint is exactly that pool's
+- A **fleet identity** is constrained to its own `spec.permittedUnderlayCIDRs`. Fleet identities
+  are the names in the dispatch chart's `pki.fleetIdentities` (`--routebus-fleet-identities`), such
+  as the WAN edge fleet's `edge`: the operator creates them and no broker can write them. The list
+  is empty by default. A fleet identity with no ranges is denied, and so is a name that is also a
+  `ClusterPool`.
+- Every other identity must be a pool, and its constraint is exactly its `ClusterPool`'s
   `spec.underlayPrefix`. The broker writes its own `RouteBusIdentity`, so the
   `spec.permittedUnderlayCIDRs` it sends (from the pool chart's `pki.underlayCIDRs`) is ignored; a
   requested range outside the prefix is only named in the `Signed` condition.
 - A `ClusterPool` without `spec.underlayPrefix` gets no intermediate: the signer sets `Signed=False`
   and says why. Setting the prefix later wakes the signer.
-- An identity with no `ClusterPool` of its name, the WAN edge fleet's `edge`, is constrained to its
-  own `spec.permittedUnderlayCIDRs`. The operator creates it and no broker can write it. With no
-  ranges it is denied.
+- An identity that is neither is denied: `no ClusterPool <name> and not a fleet identity`. A missing
+  `ClusterPool` never makes an identity trusted, so one left behind by a deleted pool, still
+  writable by that pool's broker, gets nothing.
 - `spec.poolName` must equal the object's name. RBAC scopes a broker by name, and `poolName` is a
   field the broker writes.
 

@@ -21,3 +21,19 @@ tests:
             resources: ["leases"]
             verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
         documentIndex: 1
+  # The signer trusts a fleet identity's own spec.permittedUnderlayCIDRs, so a default install must
+  # trust none: every identity is then a pool, constrained by its ClusterPool's underlayPrefix.
+  - it: trusts no fleet identity by default
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: "-routebus-fleet-identities=edge"
+        documentIndex: 3
+  - it: passes the fleet identities to the signer
+    set:
+      pki.fleetIdentities: ["edge", "wan"]
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "-routebus-fleet-identities=edge,wan"
+        documentIndex: 3

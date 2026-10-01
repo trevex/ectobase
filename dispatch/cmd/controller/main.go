@@ -11,6 +11,7 @@ import (
 	"flag"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"google.golang.org/grpc"
@@ -80,6 +81,7 @@ func main() {
 	csiSecretNS := flag.String("csi-secret-namespace", "rook-ceph", "NetworkFence provisioner secret namespace")
 	routebusCACert := flag.String("routebus-ca-cert", "", "route-bus root CA cert PEM (dispatch cert-manager ectobase-ca secret); empty => RouteBusIdentity signer inactive")
 	routebusCAKey := flag.String("routebus-ca-key", "", "route-bus root CA key PEM")
+	routebusFleet := flag.String("routebus-fleet-identities", "", "comma-separated RouteBusIdentity names that are not pools (e.g. edge) and are signed under their own operator-written spec.permittedUnderlayCIDRs; empty => none, every identity must be a ClusterPool with spec.underlayPrefix")
 
 	flag.Parse()
 
@@ -167,7 +169,8 @@ func main() {
 	// Route-bus PKI signer: signs per-pool intermediate CAs from the root (mounted from the
 	// dispatch cert-manager ectobase-ca secret). Inactive when the root isn't mounted (mTLS off).
 	// It reads the ClusterPool that sets a pool's IP constraint through the uncached API reader, so
-	// a pool the cache has not caught up with never reads as "no ClusterPool".
+	// a pool the cache has not caught up with is not denied as "no ClusterPool". Fleet identities (not
+	// pools; their own permittedUnderlayCIDRs are trusted) are named explicitly, never inferred.
 	root, err := pki.LoadRootCA(*routebusCACert, *routebusCAKey)
 	if err != nil {
 		log.Fatalf("load route-bus root CA: %v", err)
@@ -175,11 +178,22 @@ func main() {
 	if root == nil {
 		log.Printf("route-bus CA not configured (--routebus-ca-cert/key unset); RouteBusIdentity signer inactive")
 	}
-	if err := (&pki.Signer{Client: mgr.GetClient(), Reader: mgr.GetAPIReader(), Root: root}).SetupWithManager(mgr); err != nil {
+	if err := (&pki.Signer{Client: mgr.GetClient(), Reader: mgr.GetAPIReader(), Root: root, FleetIdentities: splitList(*routebusFleet)}).SetupWithManager(mgr); err != nil {
 		log.Fatalf("setup routebus signer controller: %v", err)
 	}
 
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
 		log.Fatalf("manager: %v", err)
 	}
+}
+
+// splitList splits a comma-separated flag value, dropping blanks and surrounding spaces.
+func splitList(v string) []string {
+	var out []string
+	for _, f := range strings.Split(v, ",") {
+		if f = strings.TrimSpace(f); f != "" {
+			out = append(out, f)
+		}
+	}
+	return out
 }

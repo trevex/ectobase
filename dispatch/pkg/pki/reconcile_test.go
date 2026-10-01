@@ -137,23 +137,42 @@ func TestSigner_PoolWithNoRequestedCIDRsGetsThePrefix(t *testing.T) {
 	}
 }
 
-// An identity with no ClusterPool (the WAN edge fleet) is operator-created; its own spec is the range.
-func TestSigner_IdentityWithoutClusterPoolUsesItsSpec(t *testing.T) {
+// A fleet identity (the WAN edge fleet) is named on the dispatch-controller's command line, created
+// by the operator and writable by no broker; its own spec is its range.
+func TestSigner_FleetIdentityUsesItsSpec(t *testing.T) {
 	s, c := testSigner(t, identity(t, "edge", "fd00:ffff::/32"))
+	s.FleetIdentities = []string{"edge"}
 	cert := signedCert(t, reconcileIdentity(t, s, c, "edge"))
 	if r := ranges(cert); len(r) != 1 || r[0] != "fd00:ffff::/32" {
 		t.Fatalf("PermittedIPRanges = %v, want [fd00:ffff::/32]", r)
 	}
 }
 
-func TestSigner_IdentityWithoutClusterPoolOrCIDRsIsDenied(t *testing.T) {
+func TestSigner_FleetIdentityWithoutCIDRsIsDenied(t *testing.T) {
 	s, c := testSigner(t, identity(t, "edge"))
+	s.FleetIdentities = []string{"edge"}
 	requireDenied(t, reconcileIdentity(t, s, c, "edge"), "no spec.permittedUnderlayCIDRs")
+}
+
+// A name that is both a fleet identity and a ClusterPool is ambiguous: the pool's broker writes the
+// identity's spec, so trusting that spec would hand the pool its own constraint. Neither rule wins.
+func TestSigner_FleetIdentityCollidingWithAClusterPoolIsDenied(t *testing.T) {
+	s, c := testSigner(t, clusterPool("edge", poolPrefix), identity(t, "edge", "fd00:ffff::/32"))
+	s.FleetIdentities = []string{"edge"}
+	requireDenied(t, reconcileIdentity(t, s, c, "edge"), "both a fleet identity and a ClusterPool")
+}
+
+// Not being a pool is never inferred from a missing ClusterPool: an identity left behind by a
+// deleted ClusterPool, whose broker can still write its spec, must not be signed on that spec.
+func TestSigner_UnknownIdentityWithoutClusterPoolIsDenied(t *testing.T) {
+	s, c := testSigner(t, identity(t, "k02", "fd00::/8"))
+	s.FleetIdentities = []string{"edge"}
+	requireDenied(t, reconcileIdentity(t, s, c, "k02"), "no ClusterPool k02 and not a fleet identity")
 }
 
 // RBAC scopes a broker to the identity NAMED after its pool, but spec.poolName is a field the
 // broker writes. Signing for a poolName other than the object's name would hand pool k02 the
-// intermediate (DNS domain and underlay range) of k03, or of an identity with no ClusterPool.
+// intermediate (DNS domain and underlay range) of k03, or of a fleet identity.
 func TestSigner_PoolNameMustMatchTheObjectName(t *testing.T) {
 	id := identity(t, "k02", "fd00::/8")
 	id.Spec.PoolName = "edge"

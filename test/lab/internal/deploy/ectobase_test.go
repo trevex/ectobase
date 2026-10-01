@@ -98,9 +98,25 @@ func TestClusterPoolsManifestEmpty(t *testing.T) {
 // The dispatch cluster has no StorageClass until `lab ceph` runs, so the chart's default PVC would
 // sit Pending and `lab up` would never see the dispatch come up.
 func TestDispatchHelmArgsPersistPostgresOnHostPath(t *testing.T) {
-	args := dispatchHelmArgs("/kc", "/chart", "fd00:db8:0:1::1", true, "fd00:db8:0:1::1", "registry:5000", "")
+	args := dispatchHelmArgs("/kc", "/chart", "fd00:db8:0:1::1", true, "fd00:db8:0:1::1", "registry:5000", "", nil)
 	if !containsSubseq(args, []string{"--set", "postgres.persistence.type=hostPath"}) {
 		t.Fatalf("dispatch install does not put postgres on a hostPath:\n%v", args)
+	}
+}
+
+// The dispatch chart trusts no fleet identity by default, so the lab must name its edge identity, or
+// the signer denies it as neither a ClusterPool nor a fleet identity and no edge joins the route bus.
+func TestDispatchHelmArgsTrustTheEdgeFleetIdentity(t *testing.T) {
+	s := EctobaseSpec{RouteBusMTLS: true, EdgePKIDir: "/build/edge/pki"}
+	args := dispatchHelmArgs("/kc", "/chart", "fd00:db8:0:1::1", true, "fd00:db8:0:1::1", "registry:5000", "", fleetIdentities(s))
+	if !containsSubseq(args, []string{"--set", "pki.fleetIdentities={edge}"}) {
+		t.Fatalf("dispatch install does not trust the edge fleet identity:\n%v", args)
+	}
+	// No edge provisioned: nothing to trust.
+	for _, s := range []EctobaseSpec{{RouteBusMTLS: true}, {EdgePKIDir: "/build/edge/pki"}} {
+		if got := fleetIdentities(s); len(got) != 0 {
+			t.Errorf("fleetIdentities(%+v) = %v, want none", s, got)
+		}
 	}
 }
 

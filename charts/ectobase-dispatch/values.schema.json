@@ -19,6 +19,21 @@
       "description": "Address passed to dispatch-controller via -reflector-admin.",
       "minLength": 1
     },
+    "pki": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "fleetIdentities": {
+          "type": "array",
+          "description": "RouteBusIdentity names that are not pools (e.g. edge); the signer constrains them to their own spec.permittedUnderlayCIDRs. Empty trusts none.",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+          }
+        }
+      }
+    },
     "imagePullPolicy": {
       "type": "string",
       "enum": ["Always", "IfNotPresent", "Never"]

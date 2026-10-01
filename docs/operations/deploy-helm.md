@@ -103,6 +103,10 @@ All three values name the same host, and each one ends up somewhere that is chec
 - `dispatchApiserver.serviceIP` becomes an IP SAN on the apiserver's serving certificate. Brokers
   verify that certificate, so it must equal the host in each pool's `dispatchServer`.
 
+If you run WAN edges, also pass `--set 'pki.fleetIdentities={edge}'`. The signer then trusts the
+`edge` identity's own IP ranges; by default it trusts no identity that is not a `ClusterPool`, and
+denies `edge` (see [WAN edges](#wan-edges)).
+
 If the dispatch fences Ceph during failover, also pass `--set-string ceph.clusterID=<fsid>`. An
 empty `clusterID` leaves the storage fence unable to act: the ceph-csi driver rejects a
 `NetworkFence` without one.
@@ -178,9 +182,9 @@ times out, and its agents never join the route bus. Setting the prefix afterward
 without a restart. The same prefix is what failover fences when the pool is lost; see
 [failover](../architecture/failover.md#decide-what-to-fence-coverage).
 
-When you remove a pool, delete its `ClusterPool`, `RouteBusIdentity` and
-`dispatch-broker-pool-<pool>` grant together. An identity whose `ClusterPool` is gone is signed
-with the IP ranges in its own spec, and the broker can still write those while it holds the grant.
+Do not reuse a fleet identity's name for a pool. A name in the dispatch chart's
+`pki.fleetIdentities` (for example `edge`) is signed on its own `spec.permittedUnderlayCIDRs`, and
+the signer denies it outright if a `ClusterPool` of the same name exists.
 
 ## Install the pool chart
 
@@ -269,7 +273,9 @@ passes the broker no dispatch address and the broker exits at startup.
 No chart deploys the WAN edges. An edge is a router, not a Kubernetes node, so its `flowplane`
 (in `--role edge`) and its `mesh-agent` (with `--edge-loopback` and no kubeconfig) run beside the
 router. In the lab they are containerlab nodes sharing each VyOS edge's network namespace, and
-the lab provisions the edge fleet's route-bus identity, a `RouteBusIdentity` named `edge`. See
+the lab provisions the edge fleet's route-bus identity, a `RouteBusIdentity` named `edge`, whose
+`spec.permittedUnderlayCIDRs` is the edge loopback aggregate. The dispatch signs it only if `edge`
+is in the dispatch chart's `pki.fleetIdentities`, which is empty by default; the lab sets it. See
 [The WAN edge](../features/ns-edge.md).
 
 ## Upgrade order

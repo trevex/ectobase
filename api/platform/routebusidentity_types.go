@@ -24,8 +24,8 @@ type RouteBusIdentitySpec struct {
 	// Request is the PEM-encoded PKCS#10 certificate-signing request for the intermediate CA
 	// (the requester keeps the matching private key).
 	Request []byte
-	// PermittedUnderlayCIDRs are the underlay ranges of an identity with no ClusterPool of its name
-	// (the edge fleet's loopback aggregate). The signer name-constrains that intermediate to these
+	// PermittedUnderlayCIDRs are the underlay ranges of a fleet identity, one the dispatch-controller
+	// is told is not a pool (--routebus-fleet-identities), such as the edge fleet's loopback aggregate. The signer name-constrains that intermediate to these
 	// so it can only mint leaves whose IP SAN falls inside them, closing the IP-SAN bypass of the
 	// DNS constraint; the reflector then binds route nexthops to that SAN. For a pool it is
 	// ignored: the constraint is the ClusterPool's spec.underlayPrefix, which no broker can write.

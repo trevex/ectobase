@@ -32,6 +32,7 @@ the fence API all run over mTLS from one root. cert-manager is required in the c
 | `pki.clusterIssuer` | `ectobase-ca` | Name of the CA `ClusterIssuer` both charts issue from. Must match the pool chart. |
 | `pki.caSecretName` | `ectobase-ca` | Secret holding the root CA key pair. cert-manager must run with `--cluster-resource-namespace` set to `namespace` so the `ClusterIssuer` can read it. |
 | `pki.reflectorIP` | `fd00:db8:0:1::1` | The address agents dial, added as an IP SAN on the reflector's server certificate. Must match the host in `reflectorAdmin` and in the pools' `reflectorAddress`. |
+| `pki.fleetIdentities` | `[]` | `RouteBusIdentity` names that are not pools, such as the WAN edge fleet's `edge`, passed to the signer as `--routebus-fleet-identities`. The signer constrains a fleet identity's intermediate to its own `spec.permittedUnderlayCIDRs`, so list only identities the operator creates and no broker can write. Every other identity must be a `ClusterPool` with `spec.underlayPrefix`. Empty trusts none. A name that is also a `ClusterPool` is denied. |
 | `dispatchApiserver.serviceIP` | `fd00:db8:0:1::1` | The address brokers dial `dispatch-apiserver` at, added as an IP SAN on its serving certificate. Must equal the host in each pool's `dispatchServer`. |
 | `dispatchApiserver.grantClusterAdmin` | `false` | Binds the apiserver's ServiceAccount to `cluster-admin`. Off by default: the auth-delegator binding, the extension-apiserver-authentication reader and a scoped informer role are what it needs. |
 

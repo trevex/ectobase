@@ -175,8 +175,9 @@ written by others. The broker reports `lease`, `allocatable`, `nodePrefixes` and
 A `RouteBusIdentity`, named after its pool, carries that pool's intermediate-CA request
 (`spec.request`) and the signed certificate (`status.certificate`). The `dispatch-controller`
 signs it, IP-constrained to the `ClusterPool`'s `spec.underlayPrefix`; the broker's
-`spec.permittedUnderlayCIDRs` is ignored. The WAN edge fleet has one too, named `edge`. It has no
-`ClusterPool`, so it is constrained to its own `spec.permittedUnderlayCIDRs`.
+`spec.permittedUnderlayCIDRs` is ignored. The WAN edge fleet has one too, named `edge`. The dispatch
+chart's `pki.fleetIdentities` lists it as not a pool, so it is constrained to its own
+`spec.permittedUnderlayCIDRs`.
 
 ## Where to go next
 
