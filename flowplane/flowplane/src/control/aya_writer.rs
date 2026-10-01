@@ -260,6 +260,15 @@ impl MapWriter for AyaWriter {
     fn maglev_remove(&mut self, k: &flowplane_common::MaglevKey) -> anyhow::Result<()> {
         self.maglev.remove(k)
     }
+    fn lb_entries(&self) -> Vec<(flowplane_common::LbKey, flowplane_common::LbValue)> {
+        self.lb.entries()
+    }
+    fn lb6_entries(&self) -> Vec<(flowplane_common::LbKey6, flowplane_common::LbValue)> {
+        self.lb6.entries()
+    }
+    fn maglev_entries(&self) -> Vec<(flowplane_common::MaglevKey, flowplane_common::LbBackend)> {
+        self.maglev.entries()
+    }
     fn underlay_upsert(
         &mut self,
         k: [u8; 16],

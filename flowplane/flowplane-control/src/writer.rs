@@ -95,6 +95,11 @@ pub trait MapWriter {
     fn lb6_remove(&mut self, key: &LbKey6) -> anyhow::Result<()>;
     fn maglev_upsert(&mut self, key: MaglevKey, val: LbBackend) -> anyhow::Result<()>;
     fn maglev_remove(&mut self, key: &MaglevKey) -> anyhow::Result<()>;
+    /// Adopt: the service rows and Maglev slots that survived a restart in the pinned `LB`,
+    /// `LB6` and `MAGLEV` maps.
+    fn lb_entries(&self) -> Vec<(LbKey, LbValue)>;
+    fn lb6_entries(&self) -> Vec<(LbKey6, LbValue)>;
+    fn maglev_entries(&self) -> Vec<(MaglevKey, LbBackend)>;
     fn underlay_upsert(&mut self, key: [u8; 16], val: UnderlayValue) -> anyhow::Result<()>;
     fn underlay_remove(&mut self, key: &[u8; 16]) -> anyhow::Result<()>;
     fn underlay_get(&self, key: &[u8; 16]) -> Option<UnderlayValue>;

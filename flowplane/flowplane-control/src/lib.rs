@@ -39,6 +39,9 @@ pub struct ControlCore<W: MapWriter> {
     // LB domain: the load balancers (keyed by id) + the Maglev table-id allocator.
     // The eBPF `detach_interface` VNI-reset reads lb-vni membership via `vni_has_lb`.
     pub(crate) lbs: std::collections::HashMap<Vec<u8>, shadow::LbEntry>,
+    // Load balancers adopt found in the pinned maps, which keep everything but the id: each waits
+    // here until a call names its address (lb.rs `claim_lb`).
+    pub(crate) adopted_lbs: Vec<shadow::LbEntry>,
     pub(crate) next_table_id: u32,
     // Neighbor-NAT blocks, keyed by (nat_ip, port_min): blocks never overlap on one nat_ip, so
     // this order makes an overlap check two neighbour lookups and a delete one removal. The
@@ -68,6 +71,7 @@ impl<W: MapWriter> ControlCore<W> {
             self_routes6: std::collections::HashSet::new(),
             ifaces_meta: std::collections::HashMap::new(),
             lbs: std::collections::HashMap::new(),
+            adopted_lbs: Vec::new(),
             next_table_id: 1,
             neigh_nats: std::collections::BTreeMap::new(),
             neigh_nats6: std::collections::BTreeMap::new(),

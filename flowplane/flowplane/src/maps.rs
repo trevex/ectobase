@@ -175,17 +175,17 @@ bpf_hash_map!(
 
 bpf_hash_map!(
     /// Typed handle over the `LB` BPF map.
-    Lb, "LB", LbKey, LbValue, upsert, remove
+    Lb, "LB", LbKey, LbValue, upsert, remove, entries
 );
 
 bpf_hash_map!(
     /// Typed handle over the `LB6` BPF map (IPv6 LB services, full-address key).
-    Lb6, "LB6", LbKey6, LbValue, upsert, remove
+    Lb6, "LB6", LbKey6, LbValue, upsert, remove, entries
 );
 
 bpf_hash_map!(
     /// Typed handle over the `MAGLEV` BPF map.
-    Maglev, "MAGLEV", MaglevKey, LbBackend, upsert, remove
+    Maglev, "MAGLEV", MaglevKey, LbBackend, upsert, remove, entries
 );
 
 bpf_hash_map!(

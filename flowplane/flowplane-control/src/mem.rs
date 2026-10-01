@@ -205,6 +205,15 @@ impl MapWriter for MemMapWriter {
         self.maglev.remove(k);
         Ok(())
     }
+    fn lb_entries(&self) -> Vec<(LbKey, LbValue)> {
+        self.lb.iter().map(|(k, v)| (*k, *v)).collect()
+    }
+    fn lb6_entries(&self) -> Vec<(LbKey6, LbValue)> {
+        self.lb6.iter().map(|(k, v)| (*k, *v)).collect()
+    }
+    fn maglev_entries(&self) -> Vec<(MaglevKey, LbBackend)> {
+        self.maglev.iter().map(|(k, v)| (*k, *v)).collect()
+    }
     fn underlay_upsert(&mut self, k: [u8; 16], v: UnderlayValue) -> anyhow::Result<()> {
         self.underlay.insert(k, v);
         Ok(())
