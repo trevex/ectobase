@@ -8,7 +8,7 @@ import (
 )
 
 // VPCReference references a VPC by namespace + name (peering may be cross-namespace,
-// since it is central-authored).
+// since it is authored on the dispatch).
 type VPCReference struct {
 	Namespace string `json:"namespace"`
 	Name      string `json:"name"`

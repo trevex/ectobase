@@ -55,7 +55,7 @@ spec:
               vni:
                 description: |-
                   VNI optionally pins the Geneve virtual network identifier. When nil or 0, the VNI is
-                  allocated by the central cluster from the global VNI space.
+                  allocated by the dispatch from the global VNI space.
                 format: int32
                 type: integer
             type: object

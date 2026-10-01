@@ -21,10 +21,10 @@ type ClusterPoolStatusApplyConfiguration struct {
 	// Lease is the broker heartbeat; a stale RenewTime drives Phase to Unknown.
 	Lease *ClusterPoolLeaseApplyConfiguration `json:"lease,omitempty"`
 	// NodePrefixes is the set of node /64 underlay prefixes composing this cluster,
-	// reported by the broker. Central fences these (Ceph NetworkFence + route
+	// reported by the broker. The dispatch fences these (Ceph NetworkFence + route
 	// blocklist) to evacuate a lost pool without reaching it.
 	NodePrefixes []string `json:"nodePrefixes,omitempty"`
-	// FencedPrefixes is the subset of NodePrefixes central has fenced (evacuation).
+	// FencedPrefixes is the subset of NodePrefixes the dispatch has fenced (evacuation).
 	FencedPrefixes []string `json:"fencedPrefixes,omitempty"`
 	// NodeDrain reports, per fenced /64, whether the returning broker has confirmed
 	// its stale VMIs are terminated (safe to release the fence).

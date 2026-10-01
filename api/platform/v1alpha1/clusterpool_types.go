@@ -16,14 +16,14 @@ type ClusterPoolSpec struct {
 	Endpoint string `json:"endpoint,omitempty" protobuf:"bytes,2,opt,name=endpoint"`
 	// UnderlayPrefix is this cluster's underlay aggregate (a CIDR that contains every node's
 	// underlay address, e.g. "fd00:cafe:1a2b::/48"). Declaring it makes Tier-2 fencing COMPLETE by
-	// construction: central fences this one prefix instead of enumerating node /64s, so a node it
+	// construction: the dispatch fences this one prefix instead of enumerating node /64s, so a node it
 	// never observed — one that joined while the pool was unreachable — is fenced too.
 	//
-	// It is central configuration, set when the pool is registered, deliberately NOT reported by
+	// It is dispatch configuration, set when the pool is registered, deliberately NOT reported by
 	// the broker: a fence coordinate must never be derived from the entity being fenced, because
 	// that entity is by definition the one you have lost contact with.
 	//
-	// When empty, central falls back to the broker-reported node /64s, which is only safe while
+	// When empty, the dispatch falls back to the broker-reported node /64s, which is only safe while
 	// every node in the cluster shares one /64 (each node's identity being a /128 inside it). If
 	// the reported set contains MORE than one distinct /64, the cluster spans /64s, an unobserved
 	// node could sit in an unreported one. Failover then fences the /64s it knows about but blocks
@@ -51,11 +51,11 @@ type ClusterPoolStatus struct {
 	// +optional
 	Lease *ClusterPoolLease `json:"lease,omitempty" protobuf:"bytes,4,opt,name=lease"`
 	// NodePrefixes is the set of node /64 underlay prefixes composing this cluster,
-	// reported by the broker. Central fences these (Ceph NetworkFence + route
+	// reported by the broker. The dispatch fences these (Ceph NetworkFence + route
 	// blocklist) to evacuate a lost pool without reaching it.
 	// +optional
 	NodePrefixes []string `json:"nodePrefixes,omitempty" protobuf:"bytes,5,rep,name=nodePrefixes"`
-	// FencedPrefixes is the subset of NodePrefixes central has fenced (evacuation).
+	// FencedPrefixes is the subset of NodePrefixes the dispatch has fenced (evacuation).
 	// +optional
 	FencedPrefixes []string `json:"fencedPrefixes,omitempty" protobuf:"bytes,6,rep,name=fencedPrefixes"`
 	// NodeDrain reports, per fenced /64, whether the returning broker has confirmed

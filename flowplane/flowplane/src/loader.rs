@@ -32,7 +32,7 @@ pub(crate) const RETIRED_PINNED_MAPS: [&str; 8] = [
 /// | Map        | Env var                  | Compile-time default |
 /// |------------|--------------------------|----------------------|
 /// | CONNTRACK  | FLOWPLANE_CONNTRACK_MAX     | 1_048_576            |
-/// | ROUTES     | FLOWPLANE_ROUTES_MAX        | 4_096                |
+/// | ROUTES     | FLOWPLANE_ROUTES_MAX        | 65_536               |
 /// | INTERFACES | FLOWPLANE_INTERFACES_MAX    | 1_024                |
 /// | MAGLEV     | FLOWPLANE_MAGLEV_MAX        | 65_536               |
 /// | NAT        | FLOWPLANE_NAT_MAX           | 1_024                |

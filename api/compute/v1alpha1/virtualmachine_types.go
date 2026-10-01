@@ -74,7 +74,7 @@ type VirtualMachineStatus struct {
 	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type"`
 	// Placement is the VM's actual running location. The pool's broker reports it onto the
 	// matching CompiledVM's status — its RBAC is scoped to its own pool namespace — and a mesh
-	// controller mirrors it here. Central uses NodePrefix as the fence coordinate and to gate
+	// controller mirrors it here. The dispatch uses NodePrefix as the fence coordinate and to gate
 	// recovery drain.
 	// +optional
 	Placement *VMPlacement `json:"placement,omitempty"`

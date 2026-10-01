@@ -6,7 +6,7 @@ package v1alpha1
 // with apply.
 //
 // VPCReference references a VPC by namespace + name (peering may be cross-namespace,
-// since it is central-authored).
+// since it is authored on the dispatch).
 type VPCReferenceApplyConfiguration struct {
 	Namespace *string `json:"namespace,omitempty"`
 	Name      *string `json:"name,omitempty"`

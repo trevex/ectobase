@@ -17,7 +17,7 @@ spec:
         app.kubernetes.io/part-of: mesh
     spec:
       # Programs the host datapath and listens on the node-local loopback, so it
-      # shares the host network namespace (gRPC on 127.0.0.1:1337) and PID ns.
+      # shares the host network namespace (gRPC on the unix socket /run/flowplane/dataplane.sock) and PID ns.
       hostNetwork: true
       hostPID: true
       dnsPolicy: ClusterFirstWithHostNet

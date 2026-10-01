@@ -34,8 +34,8 @@ nav = [
       { "The flowplane CLI" = "architecture/dataplane/cli.md" },
     ] },
     { "Storage and VMs" = "architecture/storage-and-vms.md" },
-    { "Scheduling, rescheduling and failover" = "architecture/failover.md" },
     { "Moving a VM between clusters" = "architecture/vm-moves.md" },
+    { "Failover and rescheduling" = "architecture/failover.md" },
     { "HA and restarts" = "architecture/ha-and-restarts.md" },
   ] },
   { "Networking" = [

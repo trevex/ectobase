@@ -760,7 +760,7 @@ _Appears in:_
 
 
 VPCReference references a VPC by namespace + name (peering may be cross-namespace,
-since it is central-authored).
+since it is authored on the dispatch).
 
 
 
@@ -786,7 +786,7 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `vni` _integer_ | VNI optionally pins the Geneve virtual network identifier. When nil or 0, the VNI is<br />allocated by the central cluster from the global VNI space. |  | Optional: \{\} <br /> |
+| `vni` _integer_ | VNI optionally pins the Geneve virtual network identifier. When nil or 0, the VNI is<br />allocated by the dispatch from the global VNI space. |  | Optional: \{\} <br /> |
 | `defaultPolicy` _string_ | DefaultPolicy sets what happens to traffic no firewall rule matches. Allow: it passes (rules<br />carve out denies). Deny: it drops, in every direction (rules carve out allows). Unset keeps<br />Kubernetes NetworkPolicy semantics per direction: a direction no policy governs is open, a<br />governed direction admits only what its rules allow. The VPC's FirewallDefault condition<br />reports the posture in effect. |  | Enum: \[Allow Deny] <br />Optional: \{\} <br /> |
 
 

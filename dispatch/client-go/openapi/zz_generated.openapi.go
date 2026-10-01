@@ -1025,7 +1025,7 @@ func schema_ectobase_api_compiled_v1alpha1_CompiledNICSpec(ref common.ReferenceC
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
-				Description: "CompiledNICSpec is the fully lowered per-NIC STATIC POLICY the control plane hands to a node: identity, VNI, overlay IPs, firewall rules (resolved from FirewallPolicy selectors), egress-SNAT allocations, LB membership, and peer imports — derived from the NetworkInterface + VPC + FirewallPolicy + LoadBalancer + NATGateway + VPCPeering so the agent never reads those directly.\n\nThe source NetworkInterface is recorded in the compiled.ectobase.dev/source-namespace and /source-name annotations and encoded in the object name (<sourceNamespace>-<sourceName>) — so the spec carries no NICRef. There is no ownerReference: the twin is written into a per-pool namespace on the dispatch and Kubernetes forbids a cross-namespace owner, so teardown runs off a finalizer on the NetworkInterface instead. It also deliberately does NOT carry the NIC's underlay address: every interface on a node shares that node's one VTEP, which the dataplane resolves at startup, and the agent obtains it from the local DataplaneNode (ListInterfaces) to announce overlay routes with the correct node nexthop. Keeping node-local state out of this central object avoids a compile->sync round-trip that would lag (and flap) the announced nexthop.",
+				Description: "CompiledNICSpec is the fully lowered per-NIC STATIC POLICY the control plane hands to a node: identity, VNI, overlay IPs, firewall rules (resolved from FirewallPolicy selectors), egress-SNAT allocations, LB membership, and peer imports — derived from the NetworkInterface + VPC + FirewallPolicy + LoadBalancer + NATGateway + VPCPeering so the agent never reads those directly.\n\nThe source NetworkInterface is recorded in the compiled.ectobase.dev/source-namespace and /source-name annotations and encoded in the object name (<sourceNamespace>-<sourceName>) — so the spec carries no NICRef. There is no ownerReference: the twin is written into a per-pool namespace on the dispatch and Kubernetes forbids a cross-namespace owner, so teardown runs off a finalizer on the NetworkInterface instead. It also deliberately does NOT carry the NIC's underlay address: every interface on a node shares that node's one VTEP, which the dataplane resolves at startup, and the agent obtains it from the local DataplaneNode (ListInterfaces) to announce overlay routes with the correct node nexthop. Keeping node-local state out of this dispatch-side object avoids a compile->sync round-trip that would lag (and flap) the announced nexthop.",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
 					"clusterName": {
@@ -2320,7 +2320,7 @@ func schema_ectobase_api_compute_v1alpha1_VirtualMachineStatus(ref common.Refere
 					},
 					"placement": {
 						SchemaProps: spec.SchemaProps{
-							Description: "Placement is the VM's actual running location. The pool's broker reports it onto the matching CompiledVM's status — its RBAC is scoped to its own pool namespace — and a mesh controller mirrors it here. Central uses NodePrefix as the fence coordinate and to gate recovery drain.",
+							Description: "Placement is the VM's actual running location. The pool's broker reports it onto the matching CompiledVM's status — its RBAC is scoped to its own pool namespace — and a mesh controller mirrors it here. The dispatch uses NodePrefix as the fence coordinate and to gate recovery drain.",
 							Ref:         ref(computev1alpha1.VMPlacement{}.OpenAPIModelName()),
 						},
 					},
@@ -4340,7 +4340,7 @@ func schema_ectobase_api_net_v1alpha1_VPCReference(ref common.ReferenceCallback)
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
-				Description: "VPCReference references a VPC by namespace + name (peering may be cross-namespace, since it is central-authored).",
+				Description: "VPCReference references a VPC by namespace + name (peering may be cross-namespace, since it is authored on the dispatch).",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
 					"namespace": {
@@ -4373,7 +4373,7 @@ func schema_ectobase_api_net_v1alpha1_VPCSpec(ref common.ReferenceCallback) comm
 				Properties: map[string]spec.Schema{
 					"vni": {
 						SchemaProps: spec.SchemaProps{
-							Description: "VNI optionally pins the Geneve virtual network identifier. When nil or 0, the VNI is allocated by the central cluster from the global VNI space.",
+							Description: "VNI optionally pins the Geneve virtual network identifier. When nil or 0, the VNI is allocated by the dispatch from the global VNI space.",
 							Type:        []string{"integer"},
 							Format:      "int32",
 						},
@@ -4591,7 +4591,7 @@ func schema_ectobase_api_platform_v1alpha1_ClusterPoolSpec(ref common.ReferenceC
 					},
 					"underlayPrefix": {
 						SchemaProps: spec.SchemaProps{
-							Description: "UnderlayPrefix is this cluster's underlay aggregate (a CIDR that contains every node's underlay address, e.g. \"fd00:cafe:1a2b::/48\"). Declaring it makes Tier-2 fencing COMPLETE by construction: central fences this one prefix instead of enumerating node /64s, so a node it never observed — one that joined while the pool was unreachable — is fenced too.\n\nIt is central configuration, set when the pool is registered, deliberately NOT reported by the broker: a fence coordinate must never be derived from the entity being fenced, because that entity is by definition the one you have lost contact with.\n\nWhen empty, central falls back to the broker-reported node /64s, which is only safe while every node in the cluster shares one /64 (each node's identity being a /128 inside it). If the reported set contains MORE than one distinct /64, the cluster spans /64s, an unobserved node could sit in an unreported one. Failover then fences the /64s it knows about but blocks the rebind, because fencing incompletely must not reattach a disk an unfenced node may still write to. Set this field to unblock it. See docs/architecture/failover.md.",
+							Description: "UnderlayPrefix is this cluster's underlay aggregate (a CIDR that contains every node's underlay address, e.g. \"fd00:cafe:1a2b::/48\"). Declaring it makes Tier-2 fencing COMPLETE by construction: the dispatch fences this one prefix instead of enumerating node /64s, so a node it never observed — one that joined while the pool was unreachable — is fenced too.\n\nIt is dispatch configuration, set when the pool is registered, deliberately NOT reported by the broker: a fence coordinate must never be derived from the entity being fenced, because that entity is by definition the one you have lost contact with.\n\nWhen empty, the dispatch falls back to the broker-reported node /64s, which is only safe while every node in the cluster shares one /64 (each node's identity being a /128 inside it). If the reported set contains MORE than one distinct /64, the cluster spans /64s, an unobserved node could sit in an unreported one. Failover then fences the /64s it knows about but blocks the rebind, because fencing incompletely must not reattach a disk an unfenced node may still write to. Set this field to unblock it. See docs/architecture/failover.md.",
 							Type:        []string{"string"},
 							Format:      "",
 						},
@@ -4662,7 +4662,7 @@ func schema_ectobase_api_platform_v1alpha1_ClusterPoolStatus(ref common.Referenc
 					},
 					"nodePrefixes": {
 						SchemaProps: spec.SchemaProps{
-							Description: "NodePrefixes is the set of node /64 underlay prefixes composing this cluster, reported by the broker. Central fences these (Ceph NetworkFence + route blocklist) to evacuate a lost pool without reaching it.",
+							Description: "NodePrefixes is the set of node /64 underlay prefixes composing this cluster, reported by the broker. The dispatch fences these (Ceph NetworkFence + route blocklist) to evacuate a lost pool without reaching it.",
 							Type:        []string{"array"},
 							Items: &spec.SchemaOrArray{
 								Schema: &spec.Schema{
@@ -4677,7 +4677,7 @@ func schema_ectobase_api_platform_v1alpha1_ClusterPoolStatus(ref common.Referenc
 					},
 					"fencedPrefixes": {
 						SchemaProps: spec.SchemaProps{
-							Description: "FencedPrefixes is the subset of NodePrefixes central has fenced (evacuation).",
+							Description: "FencedPrefixes is the subset of NodePrefixes the dispatch has fenced (evacuation).",
 							Type:        []string{"array"},
 							Items: &spec.SchemaOrArray{
 								Schema: &spec.Schema{
