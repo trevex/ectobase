@@ -422,17 +422,20 @@ func (r *RIB) SetFence(prefix string) {
 // ClearFence releases a fence and re-advertises every route it was hiding, from what the
 // RIB still stores — no agent re-announces them.
 //
-// KNOWN WINDOW (follow-up: gate the release on route state). Failover releases a /64 once
-// its broker reports it drained, which means the stale VMI objects are gone — not that the
-// recovered pool's agent has withdrawn their routes. That agent withdraws a route only after
-// the CNI DEL has detached the interface AND its next reconcile tick, so a release can land
-// first and re-advertise a failed-over VM's /32 as {stale source, new pool}. Agents program
-// only Nexthops[0] of that sorted set, so non-origin nodes may send the VM's traffic to the
-// stale source until the withdraw lands, normally seconds. A pool whose kubelet died but whose
-// agent and flowplane kept running can keep announcing such a zombie interface after the
-// release, with no bound. The naive fix — keep hiding every key the fenced source shares with
-// another origin — would also hide the recovered pool's E/W LB anycast addresses, which are
-// shared by design.
+// Whatever the fenced prefix still announces comes back, stale or not, so the caller must not
+// clear a fence while it announces something that has moved away. "Drained" (no VMI left) is not
+// that: the recovered pool's agent withdraws a failed-over VM's /32 only after the CNI DEL has
+// detached the interface AND its next reconcile tick, and a pool whose kubelet died under a
+// running agent and flowplane never does. Released first, the /32 would come back as {stale
+// source, new pool}, and agents program only Nexthops[0] of that sorted set. So failover asks
+// AnnouncedFrom about the addresses of the VMs it moved off the pool and clears the fence only
+// once none is announced from it; a zombie keeps its fence. The question is targeted rather than
+// "anything the fenced source shares with another origin", which would also catch the recovered
+// pool's E/W LB anycast addresses — shared by design.
+//
+// What remains: a stale key that belongs to no VM failover moved (a VM deleted while its pool was
+// lost, a NIC whose twin is gone or whose addresses changed since) is re-advertised on release, as
+// before.
 //
 // Neither fence change reaches a key's own origins (see refilter).
 func (r *RIB) ClearFence(prefix string) {

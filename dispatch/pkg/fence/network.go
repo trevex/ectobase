@@ -9,11 +9,13 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/trevex/ectobase/dispatch/pkg/failover"
 	pb "github.com/trevex/ectobase/mesh/gen/routebusv1"
 )
 
 // NetworkFencer is the network half of Tier-2 fencing: it withdraws a lost pool's
-// overlay routes by calling the reflector's RouteBusAdmin SetFence/ClearFence.
+// overlay routes by calling the reflector's RouteBusAdmin SetFence/ClearFence. It is also
+// failover's RouteHolder, asking the same reflector what a fenced /64 still announces.
 type NetworkFencer struct {
 	admin pb.RouteBusAdminClient
 }
@@ -37,4 +39,23 @@ func (f *NetworkFencer) Release(ctx context.Context, prefix string) error {
 		return fmt.Errorf("reflector ClearFence %s: %w", prefix, err)
 	}
 	return nil
+}
+
+// AnnouncedFrom asks the reflector which of keys are still announced from inside prefix,
+// fenced or not. Every error is returned — an older reflector without the RPC answers
+// Unimplemented — and failover holds the release on it.
+func (f *NetworkFencer) AnnouncedFrom(ctx context.Context, prefix string, keys []failover.RouteKey) ([]failover.RouteKey, error) {
+	req := &pb.AnnouncedFromRequest{Prefix: prefix, Keys: make([]*pb.RouteKey, 0, len(keys))}
+	for _, k := range keys {
+		req.Keys = append(req.Keys, &pb.RouteKey{Vni: k.VNI, Prefix: k.Prefix})
+	}
+	rep, err := f.admin.AnnouncedFrom(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("reflector AnnouncedFrom %s: %w", prefix, err)
+	}
+	held := make([]failover.RouteKey, 0, len(rep.GetKeys()))
+	for _, k := range rep.GetKeys() {
+		held = append(held, failover.RouteKey{VNI: k.GetVni(), Prefix: k.GetPrefix()})
+	}
+	return held, nil
 }

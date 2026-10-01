@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -21,6 +22,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -52,9 +54,12 @@ func (DenyFencer) Release(context.Context, string) error {
 
 // Reconciler runs Tier-2 fence-gated failover for VMs bound to a lost pool.
 type Reconciler struct {
-	Client            client.Client
-	StorageFencer     PrefixFencer
-	NetworkFencer     PrefixFencer
+	Client        client.Client
+	StorageFencer PrefixFencer
+	NetworkFencer PrefixFencer
+	// Routes gates fence release on route state (see routegate.go). nil holds every release that
+	// has a moved VM's address to check, as an unreachable reflector does.
+	Routes            RouteHolder
 	FailoverThreshold time.Duration
 }
 
@@ -64,10 +69,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, rq ctrl.Request) (ctrl.Resul
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	// Recovery path: release fences for /64s the broker has confirmed drained.
-	if err := r.releaseDrained(ctx, &pool); err != nil {
+	waiting, err := r.releaseDrained(ctx, &pool)
+	if err != nil {
 		return ctrl.Result{}, err
 	}
 	if !poolLost(&pool, time.Now(), r.FailoverThreshold) {
+		if waiting {
+			return ctrl.Result{RequeueAfter: routeRecheck}, nil
+		}
 		return ctrl.Result{RequeueAfter: r.FailoverThreshold}, nil
 	}
 	// Whole-pool fence: every target must confirm BOTH fences active (barrier) before any re-bind.
@@ -220,11 +229,14 @@ func (r *Reconciler) setFencedPrefixes(ctx context.Context, pool *platformv1.Clu
 }
 
 // releaseDrained clears the fence (both backends) for every FencedPrefix the broker
-// has reported Drained, then trims it from FencedPrefixes. Fail-safe: an un-drained
-// /64 stays fenced. Returns nil when there's nothing to release.
-func (r *Reconciler) releaseDrained(ctx context.Context, pool *platformv1.ClusterPool) error {
+// has reported Drained and that no longer announces a VM failover moved away, then trims
+// it from FencedPrefixes. Fail-safe: an un-drained /64 stays fenced, and so does one the
+// reflector still holds a moved VM's route from, or cannot be asked about. waiting reports
+// a prefix held on routes alone, which the caller rechecks soon; the pool's
+// FenceReleaseBlocked condition says which and why.
+func (r *Reconciler) releaseDrained(ctx context.Context, pool *platformv1.ClusterPool) (waiting bool, err error) {
 	if len(pool.Status.FencedPrefixes) == 0 {
-		return nil
+		return false, nil
 	}
 	drained := map[string]bool{}
 	for _, d := range pool.Status.NodeDrain {
@@ -232,11 +244,32 @@ func (r *Reconciler) releaseDrained(ctx context.Context, pool *platformv1.Cluste
 			drained[d.Prefix] = true
 		}
 	}
-	var remain []string
+	// Only look up moved VMs when a release is actually on the table.
+	var keys []RouteKey
+	var owner map[RouteKey]string
+	for _, p := range pool.Status.FencedPrefixes {
+		if drained[p] {
+			if keys, owner, err = r.movedRoutes(ctx, pool.Name); err != nil {
+				return false, err
+			}
+			break
+		}
+	}
+	var remain, blocked []string
+	reason := ""
 	changed := false
 	for _, p := range pool.Status.FencedPrefixes {
 		if !drained[p] {
 			remain = append(remain, p)
+			continue
+		}
+		// Before either fence lifts: a stale source still announcing a moved VM may well still be
+		// running it, so storage stays fenced as long as the route does.
+		if ok, why, msg := r.routesGone(ctx, p, keys, owner); !ok {
+			remain, blocked = append(remain, p), append(blocked, msg)
+			if reason != "RouteCheckFailed" {
+				reason = why // one reason per condition; a failed check needs fixing first
+			}
 			continue
 		}
 		if err := r.StorageFencer.Release(ctx, p); err != nil {
@@ -249,11 +282,35 @@ func (r *Reconciler) releaseDrained(ctx context.Context, pool *platformv1.Cluste
 		}
 		changed = true
 	}
-	if !changed {
-		return nil
+	if changed {
+		pool.Status.FencedPrefixes = remain
 	}
-	pool.Status.FencedPrefixes = remain
-	return r.Client.Status().Update(ctx, pool)
+	if setReleaseBlocked(pool, reason, blocked) {
+		changed = true
+		if len(blocked) > 0 {
+			log.FromContext(ctx).Info("holding fence release on route state", "pool", pool.Name, "reason", reason, "detail", blocked)
+		}
+	}
+	if !changed {
+		return len(blocked) > 0, nil
+	}
+	return len(blocked) > 0, r.Client.Status().Update(ctx, pool)
+}
+
+// setReleaseBlocked records on the pool why a drained prefix is still fenced, or — once nothing is
+// held on routes — that it no longer is. A pool that never waited gets no condition at all.
+// Reports whether the status changed.
+func setReleaseBlocked(pool *platformv1.ClusterPool, reason string, blocked []string) bool {
+	c := metav1.Condition{Type: ConditionFenceReleaseBlocked, ObservedGeneration: pool.Generation}
+	switch {
+	case len(blocked) > 0:
+		c.Status, c.Reason, c.Message = metav1.ConditionTrue, reason, strings.Join(blocked, "; ")
+	case meta.IsStatusConditionTrue(pool.Status.Conditions, ConditionFenceReleaseBlocked):
+		c.Status, c.Reason, c.Message = metav1.ConditionFalse, "RoutesWithdrawn", "no fenced prefix is waiting on a moved VM's route"
+	default:
+		return false
+	}
+	return meta.SetStatusCondition(&pool.Status.Conditions, c)
 }
 
 // block records a FailoverBlocked=True condition on the VM and writes ONLY status
