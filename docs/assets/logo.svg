@@ -1,0 +1,8 @@
+<svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="ectobase">
+  <!-- Three clusters joined by one overlay: three nodes on a ring. Drawn in white to sit on
+       the brand-teal header bar. -->
+  <circle cx="16" cy="16" r="11" stroke="#FFFFFF" stroke-width="2" opacity="0.55"/>
+  <circle cx="16" cy="5" r="3.5" fill="#FFFFFF"/>
+  <circle cx="6.5" cy="21.5" r="3.5" fill="#FFFFFF"/>
+  <circle cx="25.5" cy="21.5" r="3.5" fill="#FFFFFF"/>
+</svg>

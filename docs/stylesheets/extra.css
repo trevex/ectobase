@@ -1,0 +1,134 @@
+/* ectobase docs theme
+ * Brand teal (#0D9488) applied over the Material base so the header, links and
+ * accents hold in both light and dark. */
+
+:root {
+  --eb-teal:        #0D9488;
+  --eb-teal-dark:   #0F766E;
+  --eb-teal-bright: #2DD4BF;
+}
+
+/* Light scheme */
+[data-md-color-scheme="default"] {
+  --md-primary-fg-color:        var(--eb-teal);
+  --md-primary-fg-color--light: var(--eb-teal-bright);
+  --md-primary-fg-color--dark:  var(--eb-teal-dark);
+  --md-accent-fg-color:         var(--eb-teal-dark);
+  --md-typeset-a-color:         var(--eb-teal-dark);
+}
+
+/* Dark (slate) scheme: brighten links and accents for contrast on dark surfaces */
+[data-md-color-scheme="slate"] {
+  --md-primary-fg-color:        var(--eb-teal);
+  --md-primary-fg-color--light: var(--eb-teal-bright);
+  --md-primary-fg-color--dark:  var(--eb-teal-dark);
+  --md-accent-fg-color:         var(--eb-teal-bright);
+  --md-typeset-a-color:         var(--eb-teal-bright);
+}
+
+/* Slightly tighter, more editorial headings */
+.md-typeset h1,
+.md-typeset h2 {
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+/* Landing hero */
+.eb-hero {
+  padding: 1.2rem 0 0.4rem;
+}
+.eb-hero .eb-tagline {
+  font-size: 1.15rem;
+  line-height: 1.6;
+  max-width: 46rem;
+  color: var(--md-default-fg-color--light);
+}
+
+/* Grid cards: a touch more lift and a brand-tinted hover */
+.md-typeset .grid.cards > ul > li,
+.md-typeset .grid > .card {
+  border-radius: 0.6rem;
+  transition: border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
+}
+.md-typeset .grid.cards > ul > li:hover {
+  border-color: var(--eb-teal);
+  box-shadow: 0 4px 18px rgba(13, 148, 136, 0.14);
+  transform: translateY(-2px);
+}
+
+/* Inline code reads as brand-adjacent without shouting */
+.md-typeset code {
+  border-radius: 0.28rem;
+}
+
+/* ── Mermaid fullscreen + pan/zoom (docs/javascripts/mermaid-zoom.js) ── */
+
+.eb-mermaid-wrap {
+  position: relative;
+}
+
+/* "open fullscreen" affordance, revealed on hover over the diagram */
+.eb-zoom-btn {
+  position: absolute;
+  top: 0.45rem;
+  right: 0.45rem;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.7rem;
+  height: 1.7rem;
+  padding: 0;
+  font-size: 0.95rem;
+  line-height: 1;
+  cursor: pointer;
+  color: var(--md-default-fg-color--light);
+  background: var(--md-default-bg-color);
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 0.35rem;
+  opacity: 0;
+  transition: opacity 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+.eb-mermaid-wrap:hover .eb-zoom-btn,
+.eb-zoom-btn:focus-visible {
+  opacity: 0.9;
+}
+.eb-zoom-btn:hover {
+  color: var(--eb-teal);
+  border-color: var(--eb-teal);
+}
+
+/* fullscreen presentation of the wrapped diagram */
+.eb-mermaid-wrap:fullscreen {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: var(--md-default-bg-color);
+}
+.eb-mermaid-wrap:fullscreen .mermaid {
+  transform-origin: center center;
+  will-change: transform;
+  cursor: grab;
+  max-width: none;
+}
+.eb-mermaid-wrap:fullscreen.is-dragging .mermaid {
+  cursor: grabbing;
+}
+.eb-mermaid-wrap:fullscreen .eb-zoom-btn {
+  display: none;
+}
+.eb-mermaid-wrap:fullscreen::after {
+  content: "scroll to zoom · drag to pan · Esc to exit";
+  position: fixed;
+  bottom: 1rem;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 0.3rem 0.7rem;
+  font-size: 0.7rem;
+  color: var(--md-default-fg-color--light);
+  background: var(--md-default-bg-color);
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 1rem;
+  pointer-events: none;
+}

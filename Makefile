@@ -24,12 +24,12 @@ release: ## Build the flowplane binary in release mode
 	cargo build -p flowplane --release
 
 .PHONY: docs
-docs: ## Build the mkdocs site (strict: broken links/nav fail the build)
-	mkdocs build --strict
+docs: ## Build the docs site into ./site (zensical; strict: broken links/nav fail the build)
+	zensical build --clean --strict
 
 .PHONY: docs-serve
-docs-serve: ## Serve the docs locally with live reload
-	mkdocs serve
+docs-serve: ## Serve the docs with live reload at http://127.0.0.1:8000/
+	zensical serve
 
 .PHONY: docs-crd-ref
 docs-crd-ref: ## Generate the per-group CRD API reference (crd-ref-docs)
