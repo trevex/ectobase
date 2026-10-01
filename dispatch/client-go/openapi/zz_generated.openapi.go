@@ -3713,7 +3713,7 @@ func schema_ectobase_api_net_v1alpha1_NetworkInterfaceStatus(ref common.Referenc
 				Properties: map[string]spec.Schema{
 					"vni": {
 						SchemaProps: spec.SchemaProps{
-							Description: "VNI is the effective VXLAN network identifier resolved from the VPC.",
+							Description: "VNI is the effective Geneve virtual network identifier resolved from the VPC.",
 							Type:        []string{"integer"},
 							Format:      "int32",
 						},
@@ -4373,7 +4373,7 @@ func schema_ectobase_api_net_v1alpha1_VPCSpec(ref common.ReferenceCallback) comm
 				Properties: map[string]spec.Schema{
 					"vni": {
 						SchemaProps: spec.SchemaProps{
-							Description: "VNI optionally pins the VXLAN network identifier. When nil or 0, the VNI is allocated by the central cluster from the global VNI space.",
+							Description: "VNI optionally pins the Geneve virtual network identifier. When nil or 0, the VNI is allocated by the central cluster from the global VNI space.",
 							Type:        []string{"integer"},
 							Format:      "int32",
 						},
@@ -4400,7 +4400,7 @@ func schema_ectobase_api_net_v1alpha1_VPCStatus(ref common.ReferenceCallback) co
 				Properties: map[string]spec.Schema{
 					"vni": {
 						SchemaProps: spec.SchemaProps{
-							Description: "VNI is the effective, allocated VXLAN network identifier.",
+							Description: "VNI is the effective, allocated Geneve virtual network identifier.",
 							Type:        []string{"integer"},
 							Format:      "int32",
 						},

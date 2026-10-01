@@ -11,7 +11,7 @@ import (
 //
 // VPCStatus is the observed state of a VPC.
 type VPCStatusApplyConfiguration struct {
-	// VNI is the effective, allocated VXLAN network identifier.
+	// VNI is the effective, allocated Geneve virtual network identifier.
 	VNI *int32 `json:"vni,omitempty"`
 	// State is the current lifecycle state (e.g. Pending, Ready).
 	State *string `json:"state,omitempty"`

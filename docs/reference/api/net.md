@@ -541,7 +541,7 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `vni` _integer_ | VNI is the effective VXLAN network identifier resolved from the VPC. |  | Optional: \{\} <br /> |
+| `vni` _integer_ | VNI is the effective Geneve virtual network identifier resolved from the VPC. |  | Optional: \{\} <br /> |
 | `underlayRoute` _string_ | UnderlayRoute is the underlay address this interface is reached at: the host node's<br />single VTEP, shared by every interface on that node. |  | Optional: \{\} <br /> |
 | `port` _[PortStatus](#portstatus)_ | Port describes the dataplane port allocated for this interface. |  | Optional: \{\} <br /> |
 | `state` _string_ | State is the current lifecycle state (e.g. Pending, Ready). |  | Optional: \{\} <br /> |
@@ -786,7 +786,7 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `vni` _integer_ | VNI optionally pins the VXLAN network identifier. When nil or 0, the VNI is<br />allocated by the central cluster from the global VNI space. |  | Optional: \{\} <br /> |
+| `vni` _integer_ | VNI optionally pins the Geneve virtual network identifier. When nil or 0, the VNI is<br />allocated by the central cluster from the global VNI space. |  | Optional: \{\} <br /> |
 | `defaultPolicy` _string_ | DefaultPolicy sets what happens to traffic no firewall rule matches. Allow: it passes (rules<br />carve out denies). Deny: it drops, in every direction (rules carve out allows). Unset keeps<br />Kubernetes NetworkPolicy semantics per direction: a direction no policy governs is open, a<br />governed direction admits only what its rules allow. The VPC's FirewallDefault condition<br />reports the posture in effect. |  | Enum: \[Allow Deny] <br />Optional: \{\} <br /> |
 
 
@@ -803,7 +803,7 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `vni` _integer_ | VNI is the effective, allocated VXLAN network identifier. |  | Optional: \{\} <br /> |
+| `vni` _integer_ | VNI is the effective, allocated Geneve virtual network identifier. |  | Optional: \{\} <br /> |
 | `state` _string_ | State is the current lifecycle state (e.g. Pending, Ready). |  | Optional: \{\} <br /> |
 | `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30/#condition-v1-meta) array_ | Conditions report observations about the VPC. FirewallDefault states the default firewall<br />posture in effect (reason Allow, Deny or PerDirection). |  | Optional: \{\} <br /> |
 
