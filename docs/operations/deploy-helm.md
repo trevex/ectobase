@@ -371,6 +371,10 @@ adds three ordering hazards on top of the rules above:
     kubectl get clusterpools -o 'custom-columns=NAME:.metadata.name,DENIED:.status.conditions[?(@.type=="RouteBusIdentityDenied")].status,WHY:.status.conditions[?(@.type=="RouteBusIdentityDenied")].message'
     ```
 
+Check every existing `ClusterPool`'s `spec.underlayPrefix` against the admission rules (canonical,
+no IPv4-mapped form, at least /32 for IPv6 or /16 for IPv4). A prefix stored before those rules is
+still served, but the signer denies the pool's intermediate until it is corrected.
+
 The reflector also refuses an intermediate with no IP constraint, which is what a pool installed
 with an empty `pki.underlayCIDRs` holds. Such a pool loses its route-bus sessions as soon as the new
 reflector runs, until it is re-signed and its agents present the new chain; see

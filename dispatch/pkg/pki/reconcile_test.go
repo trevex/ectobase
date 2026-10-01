@@ -338,16 +338,31 @@ func TestSigner_DisjointPoolPrefixesAreSigned(t *testing.T) {
 	signedCert(t, reconcileIdentity(t, s, c, "k03"))
 }
 
-// An IPv4-mapped prefix (stored before admission refused one) must sign once and then read as
-// already signed. Unmapping only the certificate's side made every reconcile re-sign, and each
-// re-sign's status write triggered the next.
-func TestSigner_IPv4MappedPrefixDoesNotReSignInALoop(t *testing.T) {
-	s, c := testSigner(t, clusterPool("k02", "::ffff:10.20.0.0/112"), identity(t, "k02"))
-	first := signedCert(t, reconcileIdentity(t, s, c, "k02"))
+// A prefix stored before admission validated underlayPrefix (or written past it) is not signed:
+// the signer applies the same rules, so a /8 or a non-canonical spelling never becomes a constraint.
+func TestSigner_DeniesAStoredPrefixAdmissionWouldRefuse(t *testing.T) {
+	for prefix, why := range map[string]string{
+		"fd00::/8":             "at least /32",
+		"fd00:cafe:1914::1/48": "host bits",
+		"::ffff:10.20.0.0/112": "IPv4-mapped",
+		"fd00:CAFE:1914::/48":  "canonical",
+	} {
+		s, c := testSigner(t, clusterPool("k02", prefix), identity(t, "k02"))
+		requireDenied(t, reconcileIdentity(t, s, c, "k02"), why)
+	}
+}
+
+// An IPv4-mapped range (admission refuses one in a pool's prefix, but a fleet identity's ranges are
+// operator-written) must sign once and then read as already signed. Unmapping only the
+// certificate's side made every reconcile re-sign, and each re-sign's status write triggered the next.
+func TestSigner_IPv4MappedRangeDoesNotReSignInALoop(t *testing.T) {
+	s, c := testSigner(t, identity(t, "edge", "::ffff:10.20.0.0/112"))
+	s.FleetIdentities = []string{"edge"}
+	first := signedCert(t, reconcileIdentity(t, s, c, "edge"))
 	if r := ranges(first); len(r) != 1 || r[0] != "10.20.0.0/16" {
 		t.Fatalf("PermittedIPRanges = %v, want the unmapped [10.20.0.0/16]", r)
 	}
-	again := reconcileIdentity(t, s, c, "k02")
+	again := reconcileIdentity(t, s, c, "edge")
 	if string(again.Status.Certificate) != string(pemOf(first)) {
 		t.Fatal("an unchanged 4in6 constraint was re-signed")
 	}

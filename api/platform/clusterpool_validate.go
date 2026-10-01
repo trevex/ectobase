@@ -32,7 +32,7 @@ const (
 // 200-character name and then fail later at namespace creation.
 func (o *ClusterPool) Validate(ctx context.Context) field.ErrorList {
 	errs := validate.ClusterName(field.NewPath("metadata", "name"), o.Name)
-	return append(errs, validateUnderlayPrefix(field.NewPath("spec", "underlayPrefix"), o.Spec.UnderlayPrefix)...)
+	return append(errs, ValidateUnderlayPrefix(field.NewPath("spec", "underlayPrefix"), o.Spec.UnderlayPrefix)...)
 }
 
 // ValidateUpdate implements the kit rest.ValidateUpdater hook. The status subresource runs it too,
@@ -50,8 +50,9 @@ func (o *ClusterPool) ValidateUpdate(ctx context.Context, old runtime.Object) fi
 // the spelling netip prints, with no host bits: the prefix is compared as a string in places
 // (status.fencedPrefixes, NetworkFence names), so two spellings of one prefix must not exist.
 // IPv4-mapped IPv6 (::ffff:a.b.c.d/n) is refused: the signer and the reflector would each have to
-// guess which family it means.
-func validateUnderlayPrefix(path *field.Path, s string) field.ErrorList {
+// guess which family it means. The dispatch signer applies it too, to a prefix stored before this
+// check existed.
+func ValidateUnderlayPrefix(path *field.Path, s string) field.ErrorList {
 	if s == "" {
 		return nil
 	}

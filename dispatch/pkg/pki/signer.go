@@ -30,6 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -41,6 +42,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	"github.com/trevex/ectobase/api/platform"
 	platformv1 "github.com/trevex/ectobase/api/platform/v1alpha1"
 )
 
@@ -315,6 +317,11 @@ func (s *Signer) constraint(ctx context.Context, id *platformv1.RouteBusIdentity
 	if pool.Spec.UnderlayPrefix == "" {
 		return nil, "", fmt.Sprintf("ClusterPool %s has no spec.underlayPrefix; a pool intermediate is only signed "+
 			"with an operator-declared IP constraint", pool.Name), nil
+	}
+	// Admission refuses such a prefix now, but one stored before it did (or written past it) must
+	// not become a constraint either.
+	if errs := platform.ValidateUnderlayPrefix(field.NewPath("spec", "underlayPrefix"), pool.Spec.UnderlayPrefix); len(errs) > 0 {
+		return nil, "", fmt.Sprintf("ClusterPool %s: %s", pool.Name, errs.ToAggregate()), nil
 	}
 	prefix, perr := netip.ParsePrefix(pool.Spec.UnderlayPrefix)
 	if perr != nil {
