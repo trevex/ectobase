@@ -3,6 +3,7 @@ package reflector
 import (
 	"io"
 	"log"
+	"slices"
 	"sync"
 
 	pb "github.com/trevex/ectobase/mesh/gen/routebusv1"
@@ -86,11 +87,15 @@ func (s *Server) Session(stream pb.RouteBus_SessionServer) error {
 			s.rib.Unsubscribe(m.Unsubscribe.Vni, sink.id)
 		case *pb.ClientMsg_Announce:
 			a := m.Announce
-			if !guard.permits(a.NexthopUnderlay) {
-				log.Printf("reflector: reject Announce from %s: nexthop %q not authorized by client cert", sink.id, a.NexthopUnderlay)
+			// Every nexthop is checked, not just the primary: agents program the first of the
+			// reflector's sorted nexthop set, so an unchecked extra could name a peer's VTEP and
+			// draw its traffic. One bad nexthop rejects the whole Announce rather than leaving a
+			// partial route set. (The RIB dedups and sorts on advertise, so nothing else to do.)
+			nh := append([]string{a.NexthopUnderlay}, a.ExtraNexthops...)
+			if bad := slices.IndexFunc(nh, func(n string) bool { return !guard.permits(n) }); bad >= 0 {
+				log.Printf("reflector: reject Announce from %s: nexthop %q not authorized by client cert", sink.id, nh[bad])
 				continue
 			}
-			nh := append([]string{a.NexthopUnderlay}, a.ExtraNexthops...)
 			s.rib.Announce(sink.id, a.Vni, a.Prefix, nh, a.External)
 		case *pb.ClientMsg_Withdraw:
 			s.rib.Withdraw(sink.id, m.Withdraw.Vni, m.Withdraw.Prefix)
@@ -114,6 +119,12 @@ func (s *Server) Session(stream pb.RouteBus_SessionServer) error {
 			p := m.AnnouncePublic
 			if !guard.permits(p.OwnerUnderlay) {
 				log.Printf("reflector: reject AnnouncePublic from %s: owner %q not authorized by client cert", sink.id, p.OwnerUnderlay)
+				continue
+			}
+			// An EDGE_UNDERLAY record's prefix is an underlay address too (the edge's anycast
+			// datapath /128, which agents map to the owner loopback), so the cert must cover it.
+			if p.Kind == pb.PublicKind_PUBLIC_KIND_EDGE_UNDERLAY && !guard.permits(hostAddr(p.Prefix)) {
+				log.Printf("reflector: reject AnnouncePublic from %s: EDGE_UNDERLAY prefix %q not authorized by client cert", sink.id, p.Prefix)
 				continue
 			}
 			s.rib.AnnouncePublic(sink.id, publicRecordFromPB(p))
