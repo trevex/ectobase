@@ -26,6 +26,8 @@ use flowplane_common::{
 /// - `get_owned`      — `get(key: $key)  -> Option<$val>`
 /// - `entries`        — `pub fn entries() -> Vec<($key, $val)>`
 /// - `entries_crate`  — `pub(crate) fn entries() -> Vec<($key, $val)>`
+/// - `lookup`         — `lookup(key: &$key) -> anyhow::Result<Option<$val>>`: like `get`, but an
+///   absent key is `Ok(None)` and any other failure an error
 /// - `walk`           — `pub fn walk() -> Walk<($key, $val)>`: like `entries`, but keeps the
 ///   first read error instead of dropping it, for an adopt that must know its walk was whole
 ///
@@ -59,6 +61,15 @@ macro_rules! bpf_hash_map {
     (@entries $key:ty, $val:ty, $name:literal) => {
         pub fn entries(&self) -> Vec<($key, $val)> {
             self.map.iter().filter_map(|r| r.ok()).collect()
+        }
+    };
+    (@lookup $key:ty, $val:ty, $name:literal) => {
+        pub fn lookup(&self, key: &$key) -> anyhow::Result<Option<$val>> {
+            match self.map.get(key, 0) {
+                Ok(v) => Ok(Some(v)),
+                Err(MapError::KeyNotFound) => Ok(None),
+                Err(e) => Err(anyhow::Error::from(e).context(concat!("read ", $name))),
+            }
         }
     };
     (@walk $key:ty, $val:ty, $name:literal) => {
@@ -205,7 +216,7 @@ bpf_hash_map!(
 
 bpf_hash_map!(
     /// Typed handle over the `MAGLEV` BPF map.
-    Maglev, "MAGLEV", MaglevKey, LbBackend, upsert, remove, walk
+    Maglev, "MAGLEV", MaglevKey, LbBackend, upsert, remove, lookup, walk
 );
 
 bpf_hash_map!(
@@ -434,8 +445,8 @@ impl Routes {
         absent_ok(self.map.remove(&key)).context("remove route")
     }
 
-    /// Every `(vni, prefix, prefix_len, route)` in the trie (adopt). A read error is logged, not
-    /// returned: what was read is still worth adopting.
+    /// Every `(vni, prefix, prefix_len, route)` in the trie (adopt), and the first read error (see
+    /// `route_entries`).
     pub fn walk(&self) -> flowplane_control::Walk<(u32, [u8; 4], u32, RouteValue)> {
         route_entries(self.map.iter(), "ROUTES", |d: RouteLpmData| (d.vni, d.ipv4))
     }
@@ -541,7 +552,7 @@ impl Routes6 {
         absent_ok(self.map.remove(&key)).context("remove route6")
     }
 
-    /// v6 sibling of [`Routes::entries`].
+    /// v6 sibling of [`Routes::walk`].
     pub fn walk(&self) -> flowplane_control::Walk<(u32, [u8; 16], u32, RouteValue)> {
         route_entries(self.map.iter(), "ROUTES6", |d: RouteLpmData6| {
             (d.vni, d.ipv6)

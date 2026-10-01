@@ -78,6 +78,7 @@ impl<W: MapWriter> ControlCore<W> {
     /// interface that later reuses the ifindex starts unbound (deny) instead of inheriting these
     /// rules — freeing any scope nothing else references.
     pub fn remove_fw_rules(&mut self, ifindex: u32) {
+        self.fw_heal();
         if let Some(old) = self.fw_binds.remove(&ifindex) {
             let _ = self.w.fw_bind_remove(ifindex);
             let _ = self.w.fw_epoch_bump();
@@ -99,6 +100,7 @@ impl<W: MapWriter> ControlCore<W> {
         ingress: Option<Scope>,
         egress: Option<Scope>,
     ) -> Result<(), FwError> {
+        self.fw_heal();
         let id = |s: &Option<Scope>| s.as_ref().map_or(FW_SCOPE_NONE, |s| s.id);
         let (in_id, eg_id) = (id(&ingress), id(&egress));
         let old = self.fw_binds.get(&ifindex).copied();
@@ -137,7 +139,13 @@ impl<W: MapWriter> ControlCore<W> {
         bumped.map_err(Into::into)
     }
 
+    /// Discard the scopes a failed bind created. Not while a cut adopt stands: a scope only an
+    /// unread binding uses is not referenced, so a bind compiling to its content "creates" it again
+    /// over the live one, and discarding it would leave that binding pointing at nothing.
     fn fw_discard_scopes(&mut self, ids: &[u64]) {
+        if self.fw_partial {
+            return;
+        }
         for &id in ids {
             let _ = self.w.fw_scope_delete(id);
         }
@@ -167,9 +175,9 @@ impl<W: MapWriter> ControlCore<W> {
     /// scopes nothing binds (leaked by a process that died between a create and its binding).
     ///
     /// A `FW_BIND` walk a read error cut short makes a live binding's scopes look unbound. Then
-    /// the bindings read are adopted, no scope is deleted, here or later when its references run
-    /// out (`fw_partial`, until the next whole adopt), and the error is returned. Scopes leak
-    /// instead; a scope's id is its content, so a rebind to one is still found.
+    /// the bindings read are adopted, no scope is deleted (`fw_partial`), and the error is
+    /// returned; the next change walks again (`fw_heal`). A scope's id is its content, so a rebind
+    /// to one is still found meanwhile.
     pub fn adopt_fw_classifier(&mut self) -> anyhow::Result<()> {
         let binds = self.w.fw_bind_entries();
         self.fw_partial = binds.error.is_some();
@@ -190,9 +198,24 @@ impl<W: MapWriter> ControlCore<W> {
                 }
             }
         }
-        match binds.error.or(scopes.error) {
-            None => Ok(()),
-            Some(e) => Err(e.context("a walk was cut short: adopted the bindings read")),
+        match (binds.error, scopes.error) {
+            (None, None) => Ok(()),
+            (Some(e), _) => Err(e.context(
+                "FW_BIND walk cut short: adopted the bindings read; no scope is deleted until a \
+                 later firewall change walks it whole",
+            )),
+            (None, Some(e)) => Err(e.context(
+                "scope walk cut short: unbound scopes it did not list stay until the next adopt",
+            )),
+        }
+    }
+
+    /// While a cut adopt stands, walk the maps again before a change. Safe at any point between
+    /// changes: `FW_BIND` is the bindings' truth, and a scope is only ever unbound inside a change.
+    /// A whole walk restores every reference and collects the scopes the cut leaked.
+    fn fw_heal(&mut self) {
+        if self.fw_partial {
+            let _ = self.adopt_fw_classifier();
         }
     }
 
@@ -476,5 +499,78 @@ mod tests {
             scopes.iter().all(|s| c.w.fw_scopes.contains_key(s)),
             "the unread binding's scope survives"
         );
+    }
+    /// Two interfaces on different rules, plus a scope nothing binds, adopted through a FW_BIND
+    /// walk cut after one binding. Returns the core and the ifindex of the binding it read.
+    fn cut_bind_adopt() -> (ControlCore<MemMapWriter>, u32) {
+        let mut before = core_with(&[(b"a", 1), (b"b", 2)]);
+        replace(&mut before, b"a", &[allow_from(1, 0)]).unwrap();
+        replace(&mut before, b"b", &[allow_from(2, 0)]).unwrap();
+        let mut w = before.w;
+        let orphan = crate::fwclass::Scope {
+            id: 0xdead,
+            ..Default::default()
+        };
+        w.fw_scope_create(&orphan).unwrap();
+        w.walk_cut.insert("FW_BIND", 1);
+        let mut c = ControlCore::new(w);
+        for (id, ifindex) in [(&b"a"[..], 1), (b"b", 2)] {
+            c.register_iface_meta(
+                id.to_vec(),
+                IfaceMeta {
+                    vni: 1,
+                    ipv4: [10, 0, 0, ifindex as u8],
+                    ipv6: [0u8; 16],
+                    underlay: [1u8; 16],
+                    ifindex,
+                },
+            );
+        }
+        assert!(c.adopt_fw_classifier().is_err());
+        let read = *c.fw_binds.keys().next().unwrap();
+        (c, read)
+    }
+
+    fn iface_id(ifindex: u32) -> &'static [u8] {
+        if ifindex == 1 {
+            b"a"
+        } else {
+            b"b"
+        }
+    }
+
+    // After a cut adopt the next firewall change walks FW_BIND again; a whole walk heals what the
+    // cut left: every binding's references are back, and the scope nothing binds is collected.
+    #[test]
+    fn the_next_change_after_a_cut_adopt_heals_it() {
+        let (mut c, read) = cut_bind_adopt();
+        c.w.walk_cut.clear();
+        replace(&mut c, iface_id(read), &[allow_from(3, 0)]).unwrap();
+        assert!(!c.fw_partial);
+        assert!(
+            !c.w.fw_scopes.contains_key(&0xdead),
+            "the leak is collected"
+        );
+        assert_eq!(c.w.fw_scopes.len(), 2, "one scope per interface");
+        let unread = 3 - read;
+        replace(&mut c, iface_id(unread), &[allow_from(3, 0)]).unwrap();
+        assert_eq!(
+            c.w.fw_scopes.len(),
+            1,
+            "the unread binding's scope is freed with it"
+        );
+    }
+
+    // While a cut adopt stands, a scope only an unread binding uses is not referenced, so a replace
+    // compiling to the same rules writes it again. If the binding write then fails, discarding
+    // what the replace "created" must not delete that live scope.
+    #[test]
+    fn a_failed_bind_while_partial_deletes_no_live_scope() {
+        let (mut c, read) = cut_bind_adopt();
+        let scopes: Vec<u64> = c.w.fw_scopes.keys().copied().collect();
+        c.w.fw_bind_fault = true;
+        let unread_rules = [allow_from(if read == 1 { 2 } else { 1 }, 0)];
+        assert!(replace(&mut c, iface_id(read), &unread_rules).is_err());
+        assert!(scopes.iter().all(|s| c.w.fw_scopes.contains_key(s)));
     }
 }

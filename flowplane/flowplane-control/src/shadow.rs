@@ -42,7 +42,8 @@ pub struct LbEntry {
     pub ports: Vec<(u16, u8)>,
     pub table_id: u32,
     /// Tables some of an adopted LB's rows point at besides `table_id` (left by the counter reset
-    /// adopt fixes): they forward as they were and go with the LB.
+    /// adopt fixes). Only after a cut adopt; a whole one moves those rows onto `table_id`. They
+    /// forward as they were and go with the LB.
     pub other_tables: Vec<u32>,
     pub backends: Vec<flowplane_common::LbBackend>,
 }

@@ -104,6 +104,8 @@ pub trait MapWriter {
     fn lb6_remove(&mut self, key: &LbKey6) -> anyhow::Result<()>;
     fn maglev_upsert(&mut self, key: MaglevKey, val: LbBackend) -> anyhow::Result<()>;
     fn maglev_remove(&mut self, key: &MaglevKey) -> anyhow::Result<()>;
+    /// One Maglev slot, `None` if absent: adopt reads a table by key, independent of a walk.
+    fn maglev_get(&self, key: &MaglevKey) -> anyhow::Result<Option<LbBackend>>;
     /// Adopt: the service rows and Maglev slots that survived a restart in the pinned `LB`,
     /// `LB6` and `MAGLEV` maps.
     fn lb_entries(&self) -> Walk<(LbKey, LbValue)>;

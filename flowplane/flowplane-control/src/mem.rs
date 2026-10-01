@@ -43,6 +43,8 @@ pub struct MemMapWriter {
     /// Call counters, so tests can assert an unchanged replace writes nothing.
     pub fw_scope_creates: usize,
     pub fw_bind_writes: usize,
+    /// Test knob: fail every `FW_BIND` write.
+    pub fw_bind_fault: bool,
     pub fw_epoch: u32,
     pub meter: HashMap<u32, MeterState>,
     pub dhcp_config: Option<DhcpConfig>,
@@ -215,6 +217,9 @@ impl MapWriter for MemMapWriter {
         self.maglev.remove(k);
         Ok(())
     }
+    fn maglev_get(&self, k: &MaglevKey) -> anyhow::Result<Option<LbBackend>> {
+        Ok(self.maglev.get(k).copied())
+    }
     fn lb_entries(&self) -> Walk<(LbKey, LbValue)> {
         self.walk("LB", self.lb.iter().map(|(k, v)| (*k, *v)))
     }
@@ -245,6 +250,9 @@ impl MapWriter for MemMapWriter {
         Ok(())
     }
     fn fw_bind_upsert(&mut self, ifindex: u32, val: FwBind) -> anyhow::Result<()> {
+        if self.fw_bind_fault {
+            anyhow::bail!("injected FW_BIND write failure");
+        }
         self.fw_bind_writes += 1;
         self.fw_bind.insert(ifindex, val);
         Ok(())

@@ -214,9 +214,7 @@ impl Control {
             // The classifier's bindings and scopes survived in the pinned maps; rebuild the scope
             // references from them (and collect scopes nothing binds) before any replace runs.
             if let Err(e) = inner.core.adopt_fw_classifier() {
-                eprintln!(
-                    "adopt: WARNING firewall: {e:#}; no scope is deleted until a clean restart"
-                );
+                eprintln!("adopt: WARNING firewall: {e:#}");
             }
             // Likewise the neighbor-NAT blocks in the pinned `NAT_OWNERS{,6}` tries: rebuild their
             // lists (repairing any a crash left partial) so a withdraw or overlap check sees them.

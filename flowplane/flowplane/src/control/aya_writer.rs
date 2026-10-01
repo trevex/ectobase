@@ -254,6 +254,12 @@ impl MapWriter for AyaWriter {
     fn maglev_remove(&mut self, k: &flowplane_common::MaglevKey) -> anyhow::Result<()> {
         self.maglev.remove(k)
     }
+    fn maglev_get(
+        &self,
+        k: &flowplane_common::MaglevKey,
+    ) -> anyhow::Result<Option<flowplane_common::LbBackend>> {
+        self.maglev.lookup(k)
+    }
     fn lb_entries(&self) -> Walk<(flowplane_common::LbKey, flowplane_common::LbValue)> {
         self.lb.walk()
     }

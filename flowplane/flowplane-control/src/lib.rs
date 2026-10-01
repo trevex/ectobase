@@ -40,6 +40,9 @@ pub struct ControlCore<W: MapWriter> {
     // Set when adopt's `IFACE_META` walk was cut short: a live interface may be missing from the
     // recovered set, so its absence proves nothing until the next whole adopt.
     pub(crate) ifaces_partial: bool,
+    // The (vni, address) keys that cut walk did read: those interfaces' absence is real.
+    pub(crate) journal_read4: std::collections::HashSet<(u32, [u8; 4])>,
+    pub(crate) journal_read6: std::collections::HashSet<(u32, [u8; 16])>,
     // LB domain: the load balancers (keyed by id) + the Maglev table-id allocator.
     // The eBPF `detach_interface` VNI-reset reads lb-vni membership via `keeps_vni`.
     pub(crate) lbs: std::collections::HashMap<Vec<u8>, shadow::LbEntry>,
@@ -47,6 +50,9 @@ pub struct ControlCore<W: MapWriter> {
     // here until a call names its address (lb.rs `claim_lb`).
     pub(crate) adopted_lbs: Vec<shadow::LbEntry>,
     pub(crate) next_table_id: u32,
+    // After a cut LB adopt, the counter's value after its jump: no table below it is deleted, as
+    // a row the walk never read may point at it. 0 after a whole adopt.
+    pub(crate) unread_tables_below: u32,
     // Neighbor-NAT blocks, keyed by (nat_ip, port_min): blocks never overlap on one nat_ip, so
     // this order makes an overlap check two neighbour lookups and a delete one removal. The
     // NAT_OWNERS tries store each block as its port prefixes.
@@ -77,9 +83,12 @@ impl<W: MapWriter> ControlCore<W> {
             self_routes6: std::collections::HashSet::new(),
             ifaces_meta: std::collections::HashMap::new(),
             ifaces_partial: false,
+            journal_read4: std::collections::HashSet::new(),
+            journal_read6: std::collections::HashSet::new(),
             lbs: std::collections::HashMap::new(),
             adopted_lbs: Vec::new(),
             next_table_id: 1,
+            unread_tables_below: 0,
             neigh_nats: std::collections::BTreeMap::new(),
             neigh_nats6: std::collections::BTreeMap::new(),
             nat_owner_count4: 0,
@@ -108,10 +117,13 @@ impl<W: MapWriter> ControlCore<W> {
     /// Adopt: the `IFACE_META` restart journal the caller rebuilds its interfaces from. A walk a
     /// read error cut short (its `error` set) may miss live interfaces, so the core stops taking an
     /// interface's absence for its removal: [`Self::keeps_vni`] keeps every VNI and
-    /// `adopt_routes` holds orphan-looking self-routes, until the next whole adopt.
+    /// `adopt_routes` holds the orphan-looking self-routes the walk did not list, until the next
+    /// whole adopt.
     pub fn read_iface_journal(&mut self) -> Walk<(IfaceMetaKey, IfaceMetaVal)> {
         let walk = self.w.iface_meta_entries();
         self.ifaces_partial = walk.error.is_some();
+        self.journal_read4 = walk.entries.iter().map(|(_, v)| (v.vni, v.ipv4)).collect();
+        self.journal_read6 = walk.entries.iter().map(|(_, v)| (v.vni, v.ipv6)).collect();
         walk
     }
     /// Whether something besides the caller's own interfaces keeps `vni` in use, so the detach
