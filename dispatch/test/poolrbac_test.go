@@ -278,8 +278,21 @@ func TestPerPoolRBAC_ScopesABroker(t *testing.T) {
 			t.Fatalf("broker get own RouteBusIdentity: %v", err)
 		}
 		own.Spec.Request = []byte("csr")
+		own.Spec.ClientRequest = []byte("client csr")
 		if err := broker.Update(ctx, &own); err != nil {
-			t.Fatalf("broker must file its CSR into its own RouteBusIdentity: %v", err)
+			t.Fatalf("broker must file its CSRs (intermediate and dispatch client) into its own RouteBusIdentity: %v", err)
+		}
+		// Another pool's identity is out of reach for a client CSR too: the signer would issue a
+		// certificate for that pool's name.
+		var theirs platformv1.RouteBusIdentity
+		if err := admin.Get(ctx, client.ObjectKey{Name: foreignPool}, &theirs); err != nil {
+			t.Fatal(err)
+		}
+		theirs.Spec.ClientRequest = []byte("client csr")
+		if err := broker.Update(ctx, &theirs); err == nil {
+			t.Fatal("broker filed a client CSR on ANOTHER pool's RouteBusIdentity")
+		} else if !apierrors.IsForbidden(err) {
+			t.Fatalf("want Forbidden updating a foreign RouteBusIdentity, got: %v", err)
 		}
 		// The status carries the signed certificate; it is the signer's to write.
 		own.Status.Certificate = []byte("forged")
