@@ -328,6 +328,15 @@ func TestReconcile_SyncAndReleaseFailApart(t *testing.T) {
 	}
 }
 
+// The sync and the release check must never run at once: a release reported between a sync's read
+// of a live twin and its create would let two pools run the VM. The controller states its single
+// worker itself, so a manager-wide concurrency default cannot override it.
+func TestBrokerController_OneWorker(t *testing.T) {
+	if n := brokerControllerOptions().MaxConcurrentReconciles; n != 1 {
+		t.Fatalf("MaxConcurrentReconciles = %d, want 1", n)
+	}
+}
+
 func isReleased(ctx context.Context, t *testing.T, c client.Client, twin *compiledv1.CompiledVM) bool {
 	t.Helper()
 	var got compiledv1.CompiledVM

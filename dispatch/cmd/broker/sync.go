@@ -58,8 +58,9 @@ var (
 //   - every resyncPeriod after a successful pass (releasePollInterval for the release check while
 //     a release is pending).
 //
-// The sync is enqueued first, so a twin's retirement is acted on (its VM stopped) before the
-// release check first looks at it.
+// The two passes may run in either order. Should the release check look before the sync has
+// stopped a retired twin's VM, it finds the VM still held and looks again releasePollInterval later.
+// They must never run at the same time, though; see brokerControllerOptions.
 //
 // Pruning on an empty desired set is safe because empty here is authoritative: the dispatch reads
 // go through the manager's cache, which serves nothing until it has synced, and a failed list fails
@@ -78,19 +79,34 @@ func setupSync(mgr ctrl.Manager, r *brokerReconciler) error {
 	})
 	return ctrl.NewControllerManagedBy(mgr).
 		Named("broker").
-		// A failed pass is retried with a backoff that doubles from 5ms, as by default, but stops at
-		// resyncPeriod rather than the default 1000s. resyncPeriod is the promised bound on downstream
-		// drift, and a pass that keeps failing should not be retried less often than a healthy one runs.
-		WithOptions(controller.Options{
-			RateLimiter: workqueue.NewTypedItemExponentialFailureRateLimiter[reconcile.Request](
-				5*time.Millisecond, resyncPeriod),
-		}).
+		WithOptions(brokerControllerOptions()).
 		Watches(&compiledv1.CompiledNIC{}, enqueue).
 		Watches(&compiledv1.CompiledVM{}, enqueue).
 		Watches(&compiledv1.CompiledVolumeAttachment{}, enqueue).
 		Watches(&compiledv1.CompiledContainer{}, enqueue).
 		WatchesRawSource(atStart).
 		Complete(r)
+}
+
+// brokerControllerOptions are the broker controller's options.
+//
+// MaxConcurrentReconciles is pinned to 1, because a sync pass and a release pass must never
+// overlap. The sync reads a twin as live and, finding nothing downstream, goes on to create its VM.
+// Were a release pass to run in between, it could see the same twin retired with nothing
+// downstream yet and report it released; the sync's create would then start the VM on this pool
+// after the move was told it is safe to start it on the new one, and two pools would run it. With
+// one worker, each pass sees the other's writes complete. 1 is controller-runtime's default too,
+// but a manager-wide default would override that default, so the controller states its own.
+//
+// A failed pass is retried with a backoff that doubles from 5ms, as by default, but stops at
+// resyncPeriod rather than the default 1000s. resyncPeriod is the promised bound on downstream
+// drift, and a pass that keeps failing should not be retried less often than a healthy one runs.
+func brokerControllerOptions() controller.Options {
+	return controller.Options{
+		MaxConcurrentReconciles: 1,
+		RateLimiter: workqueue.NewTypedItemExponentialFailureRateLimiter[reconcile.Request](
+			5*time.Millisecond, resyncPeriod),
+	}
 }
 
 // brokerReconciler wraps the broker engine so it satisfies reconcile.Reconciler.
