@@ -389,8 +389,9 @@ func (r *Reconciler) block(ctx context.Context, vm *computev1.VirtualMachine, ms
 //
 //   - `spec.underlayPrefix` declared — one aggregate, complete BY CONSTRUCTION: it contains every
 //     node's underlay whether or not central ever saw the node. The correct coordinate, and central
-//     configuration rather than reported state. Unless a reported node /64 lies outside it: then
-//     the declaration is wrong, the stray /64s are fenced too, and coverage is incomplete.
+//     configuration rather than reported state. Unless a reported node prefix lies outside it: then
+//     coverage is incomplete and the rebind blocked, but only the aggregate is fenced, since the
+//     report comes from the pool being fenced.
 //   - not declared, reported prefixes collapse to ONE distinct /64 — complete for the same reason:
 //     in the single-/64-per-cluster topology every node's identity is a /128 inside that /64, so
 //     fencing it covers unobserved nodes too. Each node reports the /64 itself, so the raw list
@@ -429,9 +430,14 @@ func fenceCoverage(pool *platformv1.ClusterPool) (targets []string, complete boo
 }
 
 // aggregateCoverage is fenceCoverage for a declared aggregate. It is complete by construction only if
-// the declaration is right: a reported node /64 outside it is a node the aggregate does not cover,
-// which stays writable. Then the stray /64s are fenced too (containment is free), and the coverage is
-// incomplete, which blocks the rebind. An aggregate that does not parse covers nothing provably.
+// the declaration is right: a reported node prefix outside it may be a node the aggregate does not
+// cover, which stays writable, so the coverage is incomplete and the rebind blocked.
+//
+// Only the operator's aggregate is ever fenced, never a reported prefix. status.nodePrefixes is
+// written by the very broker being fenced: fencing what it reports would let a lying or buggy pool
+// fence ::/0, or another pool's /64, at Ceph and the reflector and take that down. What a lie can
+// still do is block its own pool's rebind, which harms only that pool's tenants. An aggregate that
+// does not parse covers nothing provably.
 func aggregateCoverage(pool *platformv1.ClusterPool, aggregate string) (targets []string, complete bool, why string) {
 	agg, err := netip.ParsePrefix(aggregate)
 	if err != nil {
@@ -452,9 +458,9 @@ func aggregateCoverage(pool *platformv1.ClusterPool, aggregate string) (targets 
 	if len(outside) == 0 {
 		return targets, true, ""
 	}
-	return append(targets, outside...), false, fmt.Sprintf("fenced spec.underlayPrefix %s and the reported node prefixes "+
-		"outside it (%v), but coverage is not provably complete: those nodes sit outside the declared aggregate, so it "+
-		"does not contain every node. Correct spec.underlayPrefix", aggregate, outside)
+	return targets, false, fmt.Sprintf("fenced spec.underlayPrefix %s, but coverage is not provably complete: the pool "+
+		"reports node prefixes outside it (%v), which are not fenced because the pool reports them itself. Either "+
+		"spec.underlayPrefix misses those nodes (correct it) or the report is wrong", aggregate, outside)
 }
 
 // poolLost reports whether pool is Unknown and its lease has been stale longer than threshold.

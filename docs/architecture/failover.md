@@ -117,10 +117,17 @@ decides explicitly.
 | Situation | What is fenced | Coverage | Outcome |
 |---|---|---|---|
 | `spec.underlayPrefix` set | that one aggregate, e.g. `fd00:cafe:1a2b::/48` | complete by construction | proceeds |
-| set, but a reported node /64 lies outside it | the aggregate and each stray /64 | not provable: the declaration misses a node | fences, then blocks the rebind |
+| set, but a reported node prefix lies outside it | the aggregate only | not provable: the declaration may miss a node | fences, then blocks the rebind |
 | unset, reported prefixes collapse to one distinct /64 | that /64 | complete: every node's VTEP is a /128 inside it | proceeds |
 | unset, several distinct /64s | every reported /64 | not provable | fences, then blocks the rebind |
 | unset, nothing reported | nothing | none | blocks |
+
+A reported prefix outside the aggregate is never fenced. `status.nodePrefixes` comes from the
+broker of the pool being fenced, so fencing it would let a lying or buggy pool report `::/0`, or
+another pool's /64, and fence that at Ceph and the route bus. The worst such a report can do is
+block its own pool's rebind, which harms only that pool's tenants. Without `spec.underlayPrefix`, failover has
+nothing else to fence and fences the reported /64s themselves, so that protection holds only for a
+pool that declares its prefix (which a pool needs to join the route bus anyway).
 
 The third row fences first and blocks second on purpose. Containing the nodes the dispatch knows
 about costs nothing; the step that can corrupt a filesystem is attaching a disk elsewhere while an
@@ -162,7 +169,7 @@ spec is never touched.
 | `storage fence unconfirmed for <prefix>: NetworkFence <name> was unfenced; replacing it with a fresh Fenced one` or `... is being deleted; awaiting it to re-fence` | Normal for one pass while a spent CR is replaced. |
 | `network fence unconfirmed for <prefix>` | The reflector admin API is unreachable or not configured. |
 | `fenced the N reported node /64s ... coverage is not provably complete` | Several /64s and no `spec.underlayPrefix`. |
-| `fenced spec.underlayPrefix ... outside it ... coverage is not provably complete` | A reported node /64 lies outside the declared aggregate. Correct `spec.underlayPrefix`. |
+| `fenced spec.underlayPrefix ..., but coverage is not provably complete: the pool reports node prefixes outside it` | A reported node prefix lies outside the declared aggregate. Correct `spec.underlayPrefix`, or find out why the pool reports it. |
 | `no pool to fail over to: ...` | Fenced and complete, but no `Ready` pool fits this VM. |
 
 ### Rebind
