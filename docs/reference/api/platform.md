@@ -107,8 +107,9 @@ _Appears in:_
 
 
 
-RouteBusIdentity is a pool's route-bus intermediate-CA request + signed response, served
-by the dispatch aggregated apiserver. The operator pre-creates it when enrolling the pool, the
+RouteBusIdentity is a pool's route-bus intermediate-CA request + signed response, and its
+broker's dispatch client-certificate request + signed response, served by the dispatch
+aggregated apiserver. The operator pre-creates it when enrolling the pool, the
 broker files its CSR into it, and the dispatch signer fills status.
 
 
@@ -146,6 +147,7 @@ _Appears in:_
 | `poolName` _string_ | PoolName is the identity this intermediate belongs to — a ClusterPool name, or `edge` for<br />the WAN edge fleet. It must equal the object's name. The signed intermediate is<br />name-constrained to it so it can only mint leaves within it. |  |  |
 | `request` _integer array_ | Request is the PEM-encoded PKCS#10 certificate-signing request for the pool's<br />intermediate CA (the pool keeps the matching private key). |  |  |
 | `permittedUnderlayCIDRs` _string array_ | PermittedUnderlayCIDRs are the underlay ranges of a FLEET identity: one the dispatch-controller<br />is told is not a pool (--routebus-fleet-identities, the dispatch chart's pki.fleetIdentities),<br />such as the edge fleet (its loopback aggregate). The signer name-constrains that identity's<br />intermediate to these, so it can only mint leaves whose IP SAN falls inside them; the<br />reflector then binds route nexthops to that SAN. This constraint, not the minting code, is<br />what bounds a holder of the intermediate, which matters most for the edge, where an agent<br />signs its own leaf locally. Empty there means the signer denies the request.<br />For a pool it is IGNORED: a pool's broker writes this object, so the signer constrains the<br />pool's intermediate to its ClusterPool's spec.underlayPrefix instead, and only names any<br />requested range outside that prefix in the Signed condition. |  | Optional: \{\} <br /> |
+| `clientRequest` _integer array_ | ClientRequest is a pool broker's PEM-encoded PKCS#10 CSR for its dispatch client<br />certificate. The broker generates the key locally and keeps it. The signer uses only the<br />CSR's public key: the certificate's subject is always CN=ectobase:cluster:<name>,<br />O=ectobase:brokers, whatever the CSR asks for, with client-auth usage only. Only a pool (an<br />identity named after a ClusterPool, not a fleet identity) gets one. |  | Optional: \{\} <br /> |
 
 
 #### RouteBusIdentityStatus
@@ -164,6 +166,7 @@ _Appears in:_
 | --- | --- | --- | --- |
 | `certificate` _integer array_ | Certificate is the PEM-encoded signed intermediate CA certificate (the CSR response). |  | Optional: \{\} <br /> |
 | `caBundle` _integer array_ | CABundle is the PEM-encoded root CA the reflector trusts, so the pool can present the<br />full chain (leaf -> intermediate -> root). |  | Optional: \{\} <br /> |
-| `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30/#condition-v1-meta) array_ | Conditions represent the latest observations (e.g. Signed / Denied). |  | Optional: \{\} <br /> |
+| `clientCertificate` _integer array_ | ClientCertificate is the PEM-encoded dispatch client certificate signed by the dispatch<br />client CA in response to spec.clientRequest. The dispatch apiserver trusts only that CA for<br />client certificates, never the route-bus root the pool intermediates chain to. |  | Optional: \{\} <br /> |
+| `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30/#condition-v1-meta) array_ | Conditions represent the latest observations: Signed for the intermediate, ClientSigned for<br />the client certificate. |  | Optional: \{\} <br /> |
 
 

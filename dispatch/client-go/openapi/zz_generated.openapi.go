@@ -4753,7 +4753,7 @@ func schema_ectobase_api_platform_v1alpha1_RouteBusIdentity(ref common.Reference
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
-				Description: "RouteBusIdentity is a pool's route-bus intermediate-CA request + signed response, served by the dispatch aggregated apiserver. The operator pre-creates it when enrolling the pool, the broker files its CSR into it, and the dispatch signer fills status.",
+				Description: "RouteBusIdentity is a pool's route-bus intermediate-CA request + signed response, and its broker's dispatch client-certificate request + signed response, served by the dispatch aggregated apiserver. The operator pre-creates it when enrolling the pool, the broker files its CSR into it, and the dispatch signer fills status.",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
 					"kind": {
@@ -4881,6 +4881,13 @@ func schema_ectobase_api_platform_v1alpha1_RouteBusIdentitySpec(ref common.Refer
 							},
 						},
 					},
+					"clientRequest": {
+						SchemaProps: spec.SchemaProps{
+							Description: "ClientRequest is a pool broker's PEM-encoded PKCS#10 CSR for its dispatch client certificate. The broker generates the key locally and keeps it. The signer uses only the CSR's public key: the certificate's subject is always CN=ectobase:cluster:<name>, O=ectobase:brokers, whatever the CSR asks for, with client-auth usage only. Only a pool (an identity named after a ClusterPool, not a fleet identity) gets one.",
+							Type:        []string{"string"},
+							Format:      "byte",
+						},
+					},
 				},
 			},
 		},
@@ -4908,6 +4915,13 @@ func schema_ectobase_api_platform_v1alpha1_RouteBusIdentityStatus(ref common.Ref
 							Format:      "byte",
 						},
 					},
+					"clientCertificate": {
+						SchemaProps: spec.SchemaProps{
+							Description: "ClientCertificate is the PEM-encoded dispatch client certificate signed by the dispatch client CA in response to spec.clientRequest. The dispatch apiserver trusts only that CA for client certificates, never the route-bus root the pool intermediates chain to.",
+							Type:        []string{"string"},
+							Format:      "byte",
+						},
+					},
 					"conditions": {
 						VendorExtensible: spec.VendorExtensible{
 							Extensions: spec.Extensions{
@@ -4920,7 +4934,7 @@ func schema_ectobase_api_platform_v1alpha1_RouteBusIdentityStatus(ref common.Ref
 							},
 						},
 						SchemaProps: spec.SchemaProps{
-							Description: "Conditions represent the latest observations (e.g. Signed / Denied).",
+							Description: "Conditions represent the latest observations: Signed for the intermediate, ClientSigned for the client certificate.",
 							Type:        []string{"array"},
 							Items: &spec.SchemaOrArray{
 								Schema: &spec.Schema{

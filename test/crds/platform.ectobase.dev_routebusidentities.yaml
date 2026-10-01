@@ -18,8 +18,9 @@ spec:
     schema:
       openAPIV3Schema:
         description: |-
-          RouteBusIdentity is a pool's route-bus intermediate-CA request + signed response, served
-          by the dispatch aggregated apiserver. The operator pre-creates it when enrolling the pool, the
+          RouteBusIdentity is a pool's route-bus intermediate-CA request + signed response, and its
+          broker's dispatch client-certificate request + signed response, served by the dispatch
+          aggregated apiserver. The operator pre-creates it when enrolling the pool, the
           broker files its CSR into it, and the dispatch signer fills status.
         properties:
           apiVersion:
@@ -51,6 +52,15 @@ spec:
               cert-manager — it is modelled as an ordinary identity named `edge`, permitted the edge loopback
               aggregate, and each edge agent mints its own leaf from that intermediate in process.
             properties:
+              clientRequest:
+                description: |-
+                  ClientRequest is a pool broker's PEM-encoded PKCS#10 CSR for its dispatch client
+                  certificate. The broker generates the key locally and keeps it. The signer uses only the
+                  CSR's public key: the certificate's subject is always CN=ectobase:cluster:<name>,
+                  O=ectobase:brokers, whatever the CSR asks for, with client-auth usage only. Only a pool (an
+                  identity named after a ClusterPool, not a fleet identity) gets one.
+                format: byte
+                type: string
               permittedUnderlayCIDRs:
                 description: |-
                   PermittedUnderlayCIDRs are the underlay ranges of a FLEET identity: one the dispatch-controller
@@ -96,9 +106,17 @@ spec:
                   certificate (the CSR response).
                 format: byte
                 type: string
+              clientCertificate:
+                description: |-
+                  ClientCertificate is the PEM-encoded dispatch client certificate signed by the dispatch
+                  client CA in response to spec.clientRequest. The dispatch apiserver trusts only that CA for
+                  client certificates, never the route-bus root the pool intermediates chain to.
+                format: byte
+                type: string
               conditions:
-                description: Conditions represent the latest observations (e.g. Signed
-                  / Denied).
+                description: |-
+                  Conditions represent the latest observations: Signed for the intermediate, ClientSigned for
+                  the client certificate.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.

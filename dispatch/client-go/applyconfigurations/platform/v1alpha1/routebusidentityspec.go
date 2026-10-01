@@ -34,6 +34,12 @@ type RouteBusIdentitySpecApplyConfiguration struct {
 	// pool's intermediate to its ClusterPool's spec.underlayPrefix instead, and only names any
 	// requested range outside that prefix in the Signed condition.
 	PermittedUnderlayCIDRs []string `json:"permittedUnderlayCIDRs,omitempty"`
+	// ClientRequest is a pool broker's PEM-encoded PKCS#10 CSR for its dispatch client
+	// certificate. The broker generates the key locally and keeps it. The signer uses only the
+	// CSR's public key: the certificate's subject is always CN=ectobase:cluster:<name>,
+	// O=ectobase:brokers, whatever the CSR asks for, with client-auth usage only. Only a pool (an
+	// identity named after a ClusterPool, not a fleet identity) gets one.
+	ClientRequest []byte `json:"clientRequest,omitempty"`
 }
 
 // RouteBusIdentitySpecApplyConfiguration constructs a declarative configuration of the RouteBusIdentitySpec type for use with
@@ -66,6 +72,16 @@ func (b *RouteBusIdentitySpecApplyConfiguration) WithRequest(values ...byte) *Ro
 func (b *RouteBusIdentitySpecApplyConfiguration) WithPermittedUnderlayCIDRs(values ...string) *RouteBusIdentitySpecApplyConfiguration {
 	for i := range values {
 		b.PermittedUnderlayCIDRs = append(b.PermittedUnderlayCIDRs, values[i])
+	}
+	return b
+}
+
+// WithClientRequest adds the given value to the ClientRequest field in the declarative configuration
+// and returns the receiver, so that objects can be build by chaining "With" function invocations.
+// If called multiple times, values provided by each call will be appended to the ClientRequest field.
+func (b *RouteBusIdentitySpecApplyConfiguration) WithClientRequest(values ...byte) *RouteBusIdentitySpecApplyConfiguration {
+	for i := range values {
+		b.ClientRequest = append(b.ClientRequest, values[i])
 	}
 	return b
 }

@@ -17,7 +17,12 @@ type RouteBusIdentityStatusApplyConfiguration struct {
 	// CABundle is the PEM-encoded root CA the reflector trusts, so the pool can present the
 	// full chain (leaf -> intermediate -> root).
 	CABundle []byte `json:"caBundle,omitempty"`
-	// Conditions represent the latest observations (e.g. Signed / Denied).
+	// ClientCertificate is the PEM-encoded dispatch client certificate signed by the dispatch
+	// client CA in response to spec.clientRequest. The dispatch apiserver trusts only that CA for
+	// client certificates, never the route-bus root the pool intermediates chain to.
+	ClientCertificate []byte `json:"clientCertificate,omitempty"`
+	// Conditions represent the latest observations: Signed for the intermediate, ClientSigned for
+	// the client certificate.
 	Conditions []v1.ConditionApplyConfiguration `json:"conditions,omitempty"`
 }
 
@@ -43,6 +48,16 @@ func (b *RouteBusIdentityStatusApplyConfiguration) WithCertificate(values ...byt
 func (b *RouteBusIdentityStatusApplyConfiguration) WithCABundle(values ...byte) *RouteBusIdentityStatusApplyConfiguration {
 	for i := range values {
 		b.CABundle = append(b.CABundle, values[i])
+	}
+	return b
+}
+
+// WithClientCertificate adds the given value to the ClientCertificate field in the declarative configuration
+// and returns the receiver, so that objects can be build by chaining "With" function invocations.
+// If called multiple times, values provided by each call will be appended to the ClientCertificate field.
+func (b *RouteBusIdentityStatusApplyConfiguration) WithClientCertificate(values ...byte) *RouteBusIdentityStatusApplyConfiguration {
+	for i := range values {
+		b.ClientCertificate = append(b.ClientCertificate, values[i])
 	}
 	return b
 }

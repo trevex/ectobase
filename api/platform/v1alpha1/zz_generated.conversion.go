@@ -337,6 +337,7 @@ func autoConvert_v1alpha1_RouteBusIdentitySpec_To_platform_RouteBusIdentitySpec(
 	out.PoolName = in.PoolName
 	out.Request = *(*[]byte)(unsafe.Pointer(&in.Request))
 	out.PermittedUnderlayCIDRs = *(*[]string)(unsafe.Pointer(&in.PermittedUnderlayCIDRs))
+	out.ClientRequest = *(*[]byte)(unsafe.Pointer(&in.ClientRequest))
 	return nil
 }
 
@@ -349,6 +350,7 @@ func autoConvert_platform_RouteBusIdentitySpec_To_v1alpha1_RouteBusIdentitySpec(
 	out.PoolName = in.PoolName
 	out.Request = *(*[]byte)(unsafe.Pointer(&in.Request))
 	out.PermittedUnderlayCIDRs = *(*[]string)(unsafe.Pointer(&in.PermittedUnderlayCIDRs))
+	out.ClientRequest = *(*[]byte)(unsafe.Pointer(&in.ClientRequest))
 	return nil
 }
 
@@ -360,6 +362,7 @@ func Convert_platform_RouteBusIdentitySpec_To_v1alpha1_RouteBusIdentitySpec(in *
 func autoConvert_v1alpha1_RouteBusIdentityStatus_To_platform_RouteBusIdentityStatus(in *RouteBusIdentityStatus, out *platform.RouteBusIdentityStatus, s conversion.Scope) error {
 	out.Certificate = *(*[]byte)(unsafe.Pointer(&in.Certificate))
 	out.CABundle = *(*[]byte)(unsafe.Pointer(&in.CABundle))
+	out.ClientCertificate = *(*[]byte)(unsafe.Pointer(&in.ClientCertificate))
 	out.Conditions = *(*[]v1.Condition)(unsafe.Pointer(&in.Conditions))
 	return nil
 }
@@ -372,6 +375,7 @@ func Convert_v1alpha1_RouteBusIdentityStatus_To_platform_RouteBusIdentityStatus(
 func autoConvert_platform_RouteBusIdentityStatus_To_v1alpha1_RouteBusIdentityStatus(in *platform.RouteBusIdentityStatus, out *RouteBusIdentityStatus, s conversion.Scope) error {
 	out.Certificate = *(*[]byte)(unsafe.Pointer(&in.Certificate))
 	out.CABundle = *(*[]byte)(unsafe.Pointer(&in.CABundle))
+	out.ClientCertificate = *(*[]byte)(unsafe.Pointer(&in.ClientCertificate))
 	out.Conditions = *(*[]v1.Condition)(unsafe.Pointer(&in.Conditions))
 	return nil
 }

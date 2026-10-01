@@ -37,6 +37,13 @@ type RouteBusIdentitySpec struct {
 	// requested range outside that prefix in the Signed condition.
 	// +optional
 	PermittedUnderlayCIDRs []string `json:"permittedUnderlayCIDRs,omitempty" protobuf:"bytes,3,rep,name=permittedUnderlayCIDRs"`
+	// ClientRequest is a pool broker's PEM-encoded PKCS#10 CSR for its dispatch client
+	// certificate. The broker generates the key locally and keeps it. The signer uses only the
+	// CSR's public key: the certificate's subject is always CN=ectobase:cluster:<name>,
+	// O=ectobase:brokers, whatever the CSR asks for, with client-auth usage only. Only a pool (an
+	// identity named after a ClusterPool, not a fleet identity) gets one.
+	// +optional
+	ClientRequest []byte `json:"clientRequest,omitempty" protobuf:"bytes,4,opt,name=clientRequest"`
 }
 
 // RouteBusIdentityStatus carries the signer's response: the signed intermediate and the
@@ -49,7 +56,13 @@ type RouteBusIdentityStatus struct {
 	// full chain (leaf -> intermediate -> root).
 	// +optional
 	CABundle []byte `json:"caBundle,omitempty" protobuf:"bytes,2,opt,name=caBundle"`
-	// Conditions represent the latest observations (e.g. Signed / Denied).
+	// ClientCertificate is the PEM-encoded dispatch client certificate signed by the dispatch
+	// client CA in response to spec.clientRequest. The dispatch apiserver trusts only that CA for
+	// client certificates, never the route-bus root the pool intermediates chain to.
+	// +optional
+	ClientCertificate []byte `json:"clientCertificate,omitempty" protobuf:"bytes,4,opt,name=clientCertificate"`
+	// Conditions represent the latest observations: Signed for the intermediate, ClientSigned for
+	// the client certificate.
 	// +optional
 	// +patchMergeKey=type
 	// +patchStrategy=merge
@@ -62,8 +75,9 @@ type RouteBusIdentityStatus struct {
 // +genclient:nonNamespaced
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
-// RouteBusIdentity is a pool's route-bus intermediate-CA request + signed response, served
-// by the dispatch aggregated apiserver. The operator pre-creates it when enrolling the pool, the
+// RouteBusIdentity is a pool's route-bus intermediate-CA request + signed response, and its
+// broker's dispatch client-certificate request + signed response, served by the dispatch
+// aggregated apiserver. The operator pre-creates it when enrolling the pool, the
 // broker files its CSR into it, and the dispatch signer fills status.
 type RouteBusIdentity struct {
 	metav1.TypeMeta   `json:",inline"`

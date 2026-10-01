@@ -30,6 +30,9 @@ type RouteBusIdentitySpec struct {
 	// DNS constraint; the reflector then binds route nexthops to that SAN. For a pool it is
 	// ignored: the constraint is the ClusterPool's spec.underlayPrefix, which no broker can write.
 	PermittedUnderlayCIDRs []string
+	// ClientRequest is a pool broker's PEM-encoded CSR for its dispatch client certificate (the
+	// broker keeps the key). Only the public key is used: the signer forces the subject.
+	ClientRequest []byte
 }
 
 // RouteBusIdentityStatus carries the signer's response: the signed intermediate and the
@@ -40,7 +43,10 @@ type RouteBusIdentityStatus struct {
 	// CABundle is the PEM-encoded root CA the reflector trusts, so the pool can present the
 	// full chain (leaf -> intermediate -> root).
 	CABundle []byte
-	// Conditions represent the latest observations (e.g. Signed / Denied).
+	// ClientCertificate is the broker's dispatch client certificate, signed by the dispatch
+	// client CA in response to spec.clientRequest.
+	ClientCertificate []byte
+	// Conditions represent the latest observations (Signed, ClientSigned).
 	Conditions []metav1.Condition
 }
 
