@@ -88,8 +88,11 @@ needs editing. The pools themselves must be recreated, because an `LBPool` canno
 On the dispatch nothing else is needed: the aggregated apiserver serves the `net` group, and the
 kind stops being served once the new image rolls out. On a pool, the chart rendered the
 `lbpools.net.ectobase.dev` CRD from `templates/crds.yaml`, so the pool-chart upgrade that drops it
-deletes it, along with any `LBPool` objects. Only a pool whose CRDs were installed outside the
-chart (`installCRDs=false`) needs it removed by hand:
+deletes it, along with any `LBPool` objects. That holds even when the upgrade goes straight to a
+chart whose CRDs carry `helm.sh/resource-policy: keep`: Helm checks for `keep` on the live object
+it drops, and the chart stopped rendering `lbpools` before it added the annotation, so no
+`lbpools` CRD ever carried it. Only a pool whose CRDs were installed outside the chart
+(`installCRDs=false`) needs it removed by hand:
 
 ```sh
 kubectl delete crd lbpools.net.ectobase.dev

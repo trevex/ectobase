@@ -42,7 +42,8 @@ apiserverAddress: "https://[fd00:db8:0:1::1]:6443"
 # (mTLS mode). Host MUST match the serving cert's IP SAN (dispatchApiserver.serviceIP).
 dispatchServer: "https://[fd00:db8:0:1::1]:6444"
 
-# Install the net.ectobase.dev CRDs with the chart (managed on helm upgrade).
+# Install the net and compiled CRDs with the chart (updated on helm upgrade). They carry
+# helm.sh/resource-policy: keep, so helm uninstall or setting this to false leaves them in place.
 installCRDs: true
 
 # Per-cluster broker (kubelet-analog): syncs compiled objects from the dispatch down into this

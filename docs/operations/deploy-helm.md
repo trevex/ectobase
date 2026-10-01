@@ -298,17 +298,38 @@ self-route, and a later withdraw deletes it, which cuts the guest off on its own
 node; the new `flowplane` repairs any self-route damaged that way when it adopts its maps at
 startup. Never upgrade the `mesh` image on a pool on its own.
 
+## What happens to the pool CRDs
+
+Every `net` and `compiled` CRD the pool chart renders carries `helm.sh/resource-policy: keep`,
+added by `templates/crds.yaml` on top of the annotations controller-gen writes. Helm still updates
+the CRDs on every upgrade, but never deletes them, so three operations leave the CRDs and every
+object of their kinds in place:
+
+- `helm uninstall` of the pool release;
+- an upgrade to `installCRDs=false`;
+- an upgrade to a chart version whose `crd-bases/` no longer contains a CRD.
+
+The CRDs keep Helm's release annotations, so reinstalling under the same release name and
+namespace, or setting `installCRDs=true` again, takes them back under the release.
+
+!!! warning "Deleting a CRD by hand still deletes the workloads"
+    Removing a CRD is a deliberate `kubectl delete crd`, and it deletes every object of that kind.
+    For a `compiled` CRD that is every twin, and garbage collection then deletes the KubeVirt VMs,
+    Pods and DataVolumes the materializers own through their controller owner references. Drain
+    the pool before deleting one.
+
 ## Upgrading an existing release
 
-!!! warning "Never drop the CRDs from a live pool"
-    The pool chart renders the `net` and `compiled` CRDs from `templates/crds.yaml` as ordinary
-    chart resources, without `helm.sh/resource-policy: keep`. Helm updates them on upgrade and
-    deletes any it no longer renders. Never upgrade a live pool to `installCRDs=false`, and never
-    `helm uninstall` it: removing the compiled CRDs deletes every twin, and garbage collection
-    then deletes the KubeVirt VMs, Pods and DataVolumes the materializers own through their
-    controller owner references.
+Four one-time steps apply to releases installed by older chart versions.
 
-Three one-time steps apply to releases installed by older chart versions.
+### Protecting the CRDs of an older pool release
+
+A pool release installed by a chart from before the annotation has CRDs without `keep`, and Helm
+checks for `keep` in two places: an upgrade looks at the live object it is about to drop, and
+`helm uninstall` looks at the manifest stored with the release. Neither carries the annotation
+until the release has been upgraded once with `installCRDs=true`. That upgrade writes `keep` onto
+the live CRDs and into the stored manifest. Until it has run, an uninstall or an upgrade straight
+to `installCRDs=false` still deletes the CRDs and, through the twins, the pool's workloads.
 
 ### Switching Deployments to Recreate
 

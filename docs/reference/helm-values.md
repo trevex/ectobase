@@ -108,7 +108,7 @@ up as `--extra-uplink`, so returns arriving over a second top-of-rack switch are
 
 | Value | Default | Meaning |
 | --- | --- | --- |
-| `installCRDs` | `true` | Install the `net` and `compiled` CRDs from `crd-bases/` as ordinary chart resources. Helm updates them on upgrade and deletes any it no longer renders. Never upgrade a live pool to `installCRDs=false`, and never `helm uninstall` it: removing the compiled CRDs deletes every twin, and garbage collection then deletes the VMs, Pods and DataVolumes the materializers own. |
+| `installCRDs` | `true` | Install the `net` and `compiled` CRDs from `crd-bases/`. Helm updates them on upgrade. Each CRD carries `helm.sh/resource-policy: keep`, so `helm uninstall`, setting this to `false`, or a chart version that drops a CRD leaves the CRDs and their objects in place. Removing one takes a deliberate `kubectl delete crd`, which still deletes every object of that kind; for a compiled CRD that is every twin, and garbage collection then deletes the VMs, Pods and DataVolumes the materializers own. A release installed by a chart from before the annotation is protected only after one upgrade with this set to `true`; see [Protecting the CRDs of an older pool release](../operations/deploy-helm.md#protecting-the-crds-of-an-older-pool-release). |
 | `vmMaterializer.enabled` | `false` | Deploy `vm-materializer`, which turns `CompiledVM`s into KubeVirt VMs and `CompiledVolumeAttachment`s into CDI `DataVolume`s. Enable only on pools with KubeVirt and CDI. |
 
 ### Tier-1 failover
