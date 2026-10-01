@@ -333,20 +333,24 @@ func (b *Broker) ReportStatus(ctx context.Context, nodes []NodeFact, vmNode map[
 	orig := pool.DeepCopy()
 	pool.Status.NodePrefixes = NodePrefixesFromNodes(nodes)
 
-	// A fenced /64 is "busy" if any VM still runs on a node in it: map each node to
-	// its prefix, then mark a prefix busy if any vmNode target lands on such a node.
+	// A node /64 is "busy" if any VM still runs on a node in it: map each node to its prefix,
+	// then mark a prefix busy if any vmNode target lands on such a node. A VM on a node with no
+	// known prefix is unplaced, and DrainStatus holds every fence for it.
 	nodePrefix := make(map[string]string, len(nodes))
 	for _, n := range nodes {
 		nodePrefix[n.Name] = n.Prefix
 	}
 	busy := map[string]bool{}
+	unplaced := false
 	for _, nodeName := range vmNode {
 		if p := nodePrefix[nodeName]; p != "" {
 			busy[p] = true
+		} else {
+			unplaced = true
 		}
 	}
 	if vmsKnown {
-		pool.Status.NodeDrain = DrainStatus(pool.Status.FencedPrefixes, busy)
+		pool.Status.NodeDrain = DrainStatus(pool.Status.FencedPrefixes, busy, unplaced)
 	}
 	// Merge Patch (not Update): the Heartbeater concurrently writes Lease/Allocatable and the
 	// pool-health controller writes Phase on this same status subresource. A full Update from a

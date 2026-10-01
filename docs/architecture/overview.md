@@ -163,43 +163,70 @@ the WAN; see [The WAN edge](../features/ns-edge.md).
 
 ## Trust boundaries
 
-This section covers who can prove what to whom. Three facts frame it: one certificate root signs
+This section covers who can prove what to whom. Three facts frame it: two certificate roots sign
 everything, every cross-cluster link is mutual TLS, and a pool's credential reaches only that
 pool's objects.
 
-### One PKI
+### Two roots
 
-The dispatch chart creates a self-signed root, `ectobase-ca` (ECDSA P-256, ten-year lifetime), with
-cert-manager, and a `ClusterIssuer` of the same name. Each pool gets its own intermediate CA
-signed from that root. The pool generates the intermediate's key itself and only ever sends a CSR.
+The dispatch chart creates two self-signed roots with cert-manager (ECDSA P-256, ten-year
+lifetime), both in the dispatch namespace:
+
+- `ectobase-ca`, the route-bus root, with a `ClusterIssuer` of the same name. It signs the
+  reflector's and the dispatch apiserver's serving certificates, the dispatch-controller's
+  reflector client certificate, and each pool's intermediate CA. The pool generates the
+  intermediate's key itself and only ever sends a CSR.
+- `ectobase-dispatch-client-ca`, the dispatch client CA. It signs only the brokers' client
+  certificates for the dispatch apiserver, and it is the only CA that apiserver accepts client
+  certificates from. It has no cert-manager `Issuer`: only the dispatch-controller's signer issues
+  from it.
+
+They are separate because every pool intermediate chains to the route-bus root, and an
+intermediate's name constraints bind its leaves' SANs, not their subject. If the apiserver trusted
+that root for clients, a pool could mint itself a certificate with `O=system:masters` (which the
+apiserver authorizes unconditionally) or with another pool's CN.
 
 ```mermaid
 flowchart TB
-    root["ectobase-ca root<br>dispatch, namespace system"]
+    root["ectobase-ca route-bus root<br>dispatch, namespace system"]
     root --> rsrv["reflector serving cert<br>IP SAN = fabric loopback"]
     root --> dsrv["dispatch-apiserver serving cert<br>IP SAN = dispatchApiserver.serviceIP"]
-    root --> dctl["dispatch-controller client cert<br>CN = dispatch-controller"]
-    root -->|"RouteBusIdentity CSR<br>signed by dispatch-controller"| inter["pool intermediate · 90 days<br>path length 0<br>name-constrained to the pool"]
+    root --> dctl["dispatch-controller reflector client cert<br>CN = dispatch-controller"]
+    root -->|"RouteBusIdentity spec.request<br>signed by dispatch-controller"| inter["pool intermediate · 90 days<br>path length 0<br>name-constrained to the pool"]
     root -->|"RouteBusIdentity 'edge'"| einter["edge fleet intermediate"]
-    inter --> bcert["broker client cert · 90 days<br>CN = ectobase:cluster:&lt;pool&gt;<br>O = ectobase:brokers"]
     inter --> ncert["agent node leaf · 90 days<br>CN = node · IP SAN = underlay /128"]
     einter --> ecert["edge agent leaf<br>minted in-process by the agent"]
+    croot["ectobase-dispatch-client-ca<br>dispatch, namespace system"]
+    croot -->|"RouteBusIdentity spec.clientRequest<br>signed by dispatch-controller"| bcert["broker client cert · 90 days<br>CN = ectobase:cluster:&lt;pool&gt;<br>O = ectobase:brokers (forced)"]
 ```
 
 The pool intermediate is a CA with path length 0, so it signs leaves but no further CAs. It is
-name-constrained to the DNS domain `<pool>.routebus.ectobase.dev`. When the pool chart sets
-`pki.underlayCIDRs`, it is also constrained to those underlay ranges, so it cannot issue a leaf
-with an IP SAN in another pool's underlay. The pool's cert-manager `Issuer` `ectobase-pool-ca`
-issues the broker's client cert and each agent's node leaf from it.
+name-constrained to the DNS domain `<pool>.routebus.ectobase.dev` and to the IP range in the
+pool's `ClusterPool` `spec.underlayPrefix`, so it cannot issue a leaf with an IP SAN in another
+pool's underlay. The operator sets that prefix; the broker cannot write it, and the range the
+broker sends with its CSR is ignored. A pool without the prefix gets no intermediate. The edge
+fleet's intermediate is constrained to its own `RouteBusIdentity`'s ranges instead, which the
+signer trusts only because the operator names `edge` in the dispatch chart's
+`pki.fleetIdentities`. The pool's
+cert-manager `Issuer` `ectobase-pool-ca` issues each agent's node leaf from it.
+
+The broker's client certificate comes from the dispatch signer instead. The broker generates the
+key, files a CSR as its `RouteBusIdentity`'s `spec.clientRequest`, and writes the signed certificate
+from `status.clientCertificate` into its `broker-dispatch-tls` Secret. The signer takes only the
+public key from the CSR. Subject `CN=ectobase:cluster:<pool>`, `O=ectobase:brokers`, client-auth
+usage only, not a CA, no SANs and a 90-day lifetime are its own, whatever the CSR asks for. It
+signs one only for a pool: an identity named after an existing `ClusterPool`, never a fleet
+identity such as `edge`. The broker renews at two thirds of the lifetime, over its current
+certificate.
 Pool and edge PKI are covered in more depth in [The route bus](route-bus.md).
 
 ### Mutual TLS on every cross-cluster link
 
 | Link | The client checks | The server checks | Authorization |
 |---|---|---|---|
-| broker to dispatch-apiserver, port 6444 | the serving cert chains to `ectobase-ca` | the client cert chains to `ectobase-ca`; its CN becomes the username `ectobase:cluster:<pool>` | per-pool RBAC, delegated to the host kube-apiserver |
+| broker to dispatch-apiserver, port 6444 | the serving cert chains to `ectobase-ca` | the client cert chains to `ectobase-dispatch-client-ca`, and to nothing else; its CN becomes the username `ectobase:cluster:<pool>`, its O the group `ectobase:brokers` | per-pool RBAC, delegated to the host kube-apiserver |
 | agent to reflector, port 1338 | the reflector cert chains to the root | the node leaf chains through the pool intermediate, with its name constraints enforced | every announced nexthop must equal one of the leaf's IP SANs exactly |
-| dispatch-controller to reflector admin, port 1339 | the reflector cert | the client cert's CN must be `dispatch-controller` | only that CN may fence |
+| dispatch-controller to reflector admin, port 1339 | the reflector cert | the client cert's CN must be `dispatch-controller`, issued directly by the root | only that identity may fence |
 
 The broker dials the dispatch apiserver directly and does not go through the host
 kube-apiserver. The host kube-apiserver serves the host cluster's CA and authenticates its
@@ -208,8 +235,9 @@ callers by the aggregation front-proxy, so a broker going through it could neith
 dispatch-controller, still use APIService aggregation with their ServiceAccount identities.
 
 The reflector registers the fence API only on its admin listener, port 1339, never on the session
-port. That listener also rejects every client whose CN is not `dispatch-controller`, so an agent's
-valid session cert cannot drive a fence.
+port. That listener also rejects every client whose CN is not `dispatch-controller` or whose
+certificate the root did not issue directly, so neither an agent's session cert nor a leaf a pool
+intermediate mints with that CN can drive a fence.
 
 ### Per-pool RBAC on the dispatch
 
@@ -220,10 +248,12 @@ lab generates them in `clusterPoolsManifest` (`test/lab/internal/deploy/ectobase
 | Object | Grants |
 |---|---|
 | `Role` `dispatch-broker` in `pool-<pool>` | `get`, `list`, `watch` on `compilednics`, `compiledvms`, `compiledvolumeattachments`, `compiledcontainers`; `get`, `update`, `patch` on `compiledvms/status` and `compiledvolumeattachments/status` |
-| `ClusterRole` `dispatch-broker-pool-<pool>` | with `resourceNames: [<pool>]`: `get`, `update` on `routebusidentities` and their status; `get` on `clusterpools`; `get`, `update`, `patch` on `clusterpools/status` |
+| `ClusterRole` `dispatch-broker-pool-<pool>` | with `resourceNames: [<pool>]`: `get`, `update` on `routebusidentities` (not their status, which only the signer writes); `get` on `clusterpools`; `get`, `update`, `patch` on `clusterpools/status` |
 
 Both are bound to the user `ectobase:cluster:<pool>`. The `ClusterRole` is also bound to the
-bootstrap ServiceAccount `dispatch-broker-bootstrap-<pool>`.
+bootstrap ServiceAccount `dispatch-broker-bootstrap-<pool>`, which is how the bootstrap token can
+file the broker's first client CSR on its own `RouteBusIdentity`. Nothing is bound to the group
+`ectobase:brokers`; it only marks the certificate as a broker's.
 
 Each scope follows from a constraint:
 
@@ -233,10 +263,15 @@ Each scope follows from a constraint:
   filter.
 - `resourceNames` matches only requests that name an object, and a list or watch names none. So
   the broker reads its `ClusterPool` and `RouteBusIdentity` through an uncached client, by name.
-- Apart from the CSR it writes into its own `RouteBusIdentity`, writes go to status subresources
-  only. A broker can never rewrite a workload's spec (for example `spec.clusterName`), and it
+- Apart from the CSRs it writes into its own `RouteBusIdentity` (`spec.request` and
+  `spec.clientRequest`), writes go to status subresources only. A broker can never rewrite a workload's spec (for example `spec.clusterName`), and it
   cannot create or delete a twin.
-- `RouteBusIdentity` `<pool>` is pre-created, because RBAC cannot scope `create` by name.
+- `RouteBusIdentity` `<pool>` is pre-created, because RBAC cannot scope `create` by name. The
+  signer would deny an identity a broker created anyway: only names in the dispatch chart's
+  `pki.fleetIdentities` are signed on their own `spec.permittedUnderlayCIDRs`, and every other
+  identity must be a `ClusterPool` with `spec.underlayPrefix`.
+- The broker cannot write its `ClusterPool`'s spec, so `spec.underlayPrefix`, its route-bus
+  certificate constraint and its fence coordinate, stays the operator's.
 
 The dispatch apiserver has no broker-specific admission plugin; RBAC alone draws the boundary.
 Writes that cross into tenant namespaces, such as a VM's placement or a `Volume`'s disk identity,
@@ -244,9 +279,8 @@ go onto the pool's own twin first. A mesh-controller mirror then copies them acr
 
 ### The token bootstrap
 
-A fresh pool faces a chicken-and-egg problem. Its steady-state client cert comes from its
-intermediate CA, and the broker obtains that intermediate over the dispatch connection. A
-short-lived token breaks the loop.
+A fresh pool has no credential for the dispatch apiserver: its client certificate is issued over
+that very connection. A short-lived token breaks the loop.
 
 ```mermaid
 sequenceDiagram
@@ -255,22 +289,20 @@ sequenceDiagram
     participant B as broker (pool k02)
     participant D as dispatch-apiserver
     participant S as dispatch-controller signer
-    participant CM as cert-manager (pool)
     Op->>B: Secrets dispatch-root-ca and broker-dispatch-bootstrap<br>(token for dispatch-broker-bootstrap-k02)
-    Note over B: no client cert on disk: first boot
-    B->>B: generate ECDSA key + CSR locally
-    B->>D: update RouteBusIdentity k02 with the CSR (bootstrap token)
-    S->>D: sign the pool intermediate, write it to status
+    Note over B: no usable dispatch-issued cert in broker-dispatch-tls
+    B->>B: generate the client key + CSR locally
+    B->>D: update RouteBusIdentity k02 spec.clientRequest (bootstrap token)
+    S->>D: sign CN=ectobase:cluster:k02, O=ectobase:brokers from the client CA,<br>write status.clientCertificate
     B->>D: poll status until the cert matches the key
-    B->>CM: write Secret ectobase-pool-ca (intermediate, key, root)
-    CM->>B: issue broker-dispatch-tls (CN ectobase:cluster:k02)
-    Note over B: wait up to 5 min for the leaf, then run on mTLS
-    B->>D: all further traffic and intermediate renewals over mTLS
+    B->>B: write broker-dispatch-tls, wait until the kubelet mounts it
+    B->>D: everything else over mTLS, incl. the intermediate CSR and renewals
 ```
 
-The token is used once. After that the broker authenticates with its leaf, and client-go re-reads
-the cert files from disk, so a cert-manager rotation needs no restart. The operator steps are in
-[Deploy with Helm](../operations/deploy-helm.md).
+After enrollment the broker authenticates with its certificate. client-go re-reads the mounted
+files, so a renewal needs no restart. If the dispatch ever rejects the certificate (401), the broker
+enrolls again with the bootstrap token, if the Secret still holds a valid one. The operator steps
+are in [Deploy with Helm](../operations/deploy-helm.md).
 
 ### Where trust is weaker
 
@@ -283,6 +315,16 @@ A few links are not authenticated the same way. Know them before you run this ou
 - The agent's kubeconfig for its own pool apiserver sets `insecure-skip-tls-verify`, because the
   apiserver's serving cert has no SAN for the fabric address it is dialled on. The agent still
   authenticates with its ServiceAccount token.
+- Nothing revokes a route-bus intermediate. The reflector refuses one with no IP constraint at
+  all, but an intermediate signed with a wider constraint than its pool's current
+  `spec.underlayPrefix` stays valid until it expires (90 days). The signer re-signs and the broker
+  adopts the new one, but a compromised pool keeps the old one. Rotating the root is the only way
+  to cut it off sooner.
+- The dispatch apiserver still authorizes the group `system:masters` unconditionally (the generic
+  apiserver default; the apiserver kit exposes no way to change it, and the delegated check against
+  the host kube-apiserver would allow that group anyway). No certificate a pool can obtain carries
+  it: the client CA is the only one trusted, and its key sits only with the dispatch-controller,
+  which forces the subject.
 - flowplane's gRPC socket has no authentication. It is a `0600` unix socket on the node, so only
   root on that node can reach it, and the CNI and the agent both run as root.
 

@@ -16,16 +16,26 @@ type ClusterPoolSpecApplyConfiguration struct {
 	// construction: the dispatch fences this one prefix instead of enumerating node /64s, so a node it
 	// never observed — one that joined while the pool was unreachable — is fenced too.
 	//
-	// It is dispatch configuration, set when the pool is registered, deliberately NOT reported by
-	// the broker: a fence coordinate must never be derived from the entity being fenced, because
-	// that entity is by definition the one you have lost contact with.
+	// It is also the pool's route-bus certificate constraint: the dispatch signer IP-name-constrains
+	// the pool's intermediate CA to exactly this prefix, so the pool can only mint node leaves whose
+	// IP SAN lies inside it, and the reflector only trusts nexthops equal to such a SAN. A pool must
+	// declare it to join the route bus: with it empty, the signer denies the pool's intermediate.
 	//
-	// When empty, the dispatch falls back to the broker-reported node /64s, which is only safe while
-	// every node in the cluster shares one /64 (each node's identity being a /128 inside it). If
-	// the reported set contains MORE than one distinct /64, the cluster spans /64s, an unobserved
-	// node could sit in an unreported one. Failover then fences the /64s it knows about but blocks
-	// the rebind, because fencing incompletely must not reattach a disk an unfenced node may still
-	// write to. Set this field to unblock it. See docs/architecture/failover.md.
+	// It must be a CIDR in canonical form (no host bits, no IPv4-mapped IPv6), at least /32 for
+	// IPv6 or /16 for IPv4. The signer also denies a prefix that overlaps another ClusterPool's
+	// (the pool enrolled later is denied) or a fleet identity's permitted ranges. If a reported node
+	// /64 lies outside it, failover treats its coverage as incomplete and blocks the rebind.
+	//
+	// It is dispatch configuration, set when the pool is registered, deliberately NOT reported by
+	// the broker: neither a fence coordinate nor a certificate constraint may be derived from the
+	// entity it bounds. A fenced pool is by definition the one you have lost contact with, and a
+	// constraint the pool chooses itself constrains nothing.
+	//
+	// It is the ONLY coordinate failover fences: broker-reported status.nodePrefixes never are. A
+	// pool that declares no prefix (or one that fails these rules, stored before they existed) is
+	// neither fenced nor rebound when lost; failover blocks its VMs with FailoverBlocked. A reported
+	// node prefix outside the declared one also blocks the rebind, since the prefix then may miss a
+	// node. See docs/architecture/failover.md.
 	UnderlayPrefix *string `json:"underlayPrefix,omitempty"`
 }
 

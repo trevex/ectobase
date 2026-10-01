@@ -179,16 +179,73 @@ flowchart TB
 
 Each pool's broker generates an intermediate key locally and sends only a CSR to the dispatch. The
 signer (`dispatch/pkg/pki`) returns a CA certificate that cannot sign further CAs and is
-name-constrained to the pool's DNS domain and, if they are set, its underlay ranges
-(`pki.underlayCIDRs` in the pool chart). Go's TLS verification enforces those constraints. Each agent then mints its own leaf from the pool's
-cert-manager `Issuer` (`mesh/agent/nodecert.go`). A WAN edge has no cert-manager; its agent mints its
-leaf in-process from an edge CA directory (`--routebus-intermediate`).
+name-constrained to the pool's DNS domain and to its underlay range. Go's TLS verification enforces
+those constraints. Each agent then mints its own leaf from the pool's cert-manager `Issuer`
+(`mesh/agent/nodecert.go`). A WAN edge has no cert-manager; its agent mints its leaf in-process from
+an edge CA directory (`--routebus-intermediate`).
 
-!!! warning "Set `pki.underlayCIDRs` in production"
-    The IP name constraint exists only when `pki.underlayCIDRs` is set; with no ranges the signer adds
-    none (`dispatch/pkg/pki/signer.go`). The pool chart's default is empty. Without it, one pool's
-    intermediate can mint a valid leaf for another pool's addresses, and the reflector's exact-match
-    check would accept it. The lab sets it to each pool's `/48`.
+The same signer also issues the broker's dispatch client certificate, but from a different root,
+the dispatch client CA, which is the only CA the dispatch apiserver accepts client certificates
+from. A pool intermediate chains to `ectobase-ca`, and its name constraints bind SANs, not the
+subject, so it could otherwise mint an apiserver identity such as `O=system:masters`. See
+[the two roots](overview.md#two-roots).
+
+The IP constraint is what stops one pool from minting a valid leaf for another pool's VTEP, which
+the reflector's exact-match nexthop check would then accept. So the signer takes it from the
+operator, never from the pool:
+
+- A **fleet identity** is constrained to its own `spec.permittedUnderlayCIDRs`. Fleet identities
+  are the names in the dispatch chart's `pki.fleetIdentities` (`--routebus-fleet-identities`), such
+  as the WAN edge fleet's `edge`: the operator creates them and no broker can write them. The list
+  is empty by default. A fleet identity with no ranges is denied, and so is a name that is also a
+  `ClusterPool`.
+- Every other identity must be a pool, and its constraint is exactly its `ClusterPool`'s
+  `spec.underlayPrefix`. The broker writes its own `RouteBusIdentity`, so the
+  `spec.permittedUnderlayCIDRs` it sends (from the pool chart's `pki.underlayCIDRs`) is ignored; a
+  requested range outside the prefix is only named in the `Signed` condition.
+- A `ClusterPool` without `spec.underlayPrefix` gets no intermediate: the signer sets `Signed=False`
+  and says why. Setting the prefix later wakes the signer.
+- Whenever the signer denies a pool's identity, it also sets `RouteBusIdentityDenied=True` with the
+  reason on the `ClusterPool`, and turns it `False` once the pool is signed again. A denied pool
+  keeps running on the intermediate it holds and only fails at renewal, so this is where to look.
+- A pool prefix that overlaps another `ClusterPool`'s, or a fleet identity's ranges, is denied: two
+  holders could otherwise mint leaves for the same VTEPs. Between two pools the one enrolled later
+  is denied, so a mistake on a new pool cannot take a running one off the route bus at renewal.
+  Admission already refuses a non-canonical prefix and one shorter than /32 (IPv6) or /16 (IPv4),
+  and the signer applies the same rules to a prefix stored before them.
+- No range, a pool's or a fleet identity's, may cover the reflector's or the dispatch apiserver's
+  IP (`pki.reflectorIP`, `dispatchApiserver.serviceIP`, passed as `--routebus-server-ips`). Their
+  serving certificates carry that IP SAN under the same root, so an intermediate permitted it could
+  mint a leaf the agents and brokers would take for that server.
+- An identity that is neither is denied: `no ClusterPool <name> and not a fleet identity`. A missing
+  `ClusterPool` never makes an identity trusted, so one left behind by a deleted pool, still
+  writable by that pool's broker, gets nothing.
+- `spec.poolName` must equal the object's name. RBAC scopes a broker by name, and `poolName` is a
+  field the broker writes.
+
+The signer re-signs whenever the constraint on the current certificate differs from the one it
+would issue now, and the broker copies a re-signed intermediate for its current key into the pool's
+Secret at its next check (when it starts, then every 12 hours).
+
+The reflector also refuses any client chain that passes through an intermediate with no IP name
+constraint (`mesh/routebus/tls.go`). The signer no longer issues one, but an intermediate signed
+before this rule had none when the pool chart left `pki.underlayCIDRs` empty, and it would
+otherwise stay valid for up to 90 days. A leaf the root issues directly, the dispatch-controller's,
+has no intermediate and is unaffected. An intermediate signed earlier with a *wider* constraint than
+the pool's `spec.underlayPrefix` still verifies until the pool adopts the re-signed one or it
+expires, because nothing revokes an intermediate.
+
+!!! warning "Upgrading a pool whose intermediate has no IP constraint"
+    Once the reflector runs this rule, a pool whose intermediate predates it and carries no IP
+    constraint loses its route-bus sessions: its agents' leaves chain through that intermediate.
+    They come back only once the agents present a re-signed intermediate:
+
+    1. The pool's `ClusterPool` declares `spec.underlayPrefix`, so the signer re-signs.
+    2. The broker adopts the re-signed intermediate into the pool CA Secret. It checks when it
+       starts and then every 12 hours; restart it to adopt at once.
+    3. Each agent's leaf Secret (`agent-<node>-routebus-tls`) still carries the old intermediate,
+       copied in when cert-manager issued the leaf, and the agent reads it only at start-up.
+       Reissue the leaves (`cmctl renew`, or delete those Secrets) and then restart the agents.
 
 ## Fences
 

@@ -115,7 +115,9 @@ the record. They store the mapping, but no forwarding decision reads it yet.
 
 The edge cannot use a pool node's certificate path, which needs cert-manager and an apiserver.
 Instead the edge fleet shares one route-bus intermediate: a `RouteBusIdentity` named `edge` whose
-`permittedUnderlayCIDRs` cover the edge loopbacks. Each edge agent reads it from
+`permittedUnderlayCIDRs` cover the edge loopbacks. The signer takes the constraint from that field,
+which only the operator writes, because `edge` is listed in the dispatch chart's
+`pki.fleetIdentities`; without that it would deny `edge` as an unknown pool. Each edge agent reads it from
 `--routebus-intermediate` and mints its own leaf in-process, with both the underlay and the loopback
 as IP SANs. The intermediate's IP name constraint is the boundary: the reflector rejects a leaf
 whose address lies outside it, so a compromised edge cannot claim a pool node's VTEP.

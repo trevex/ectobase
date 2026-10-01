@@ -16,18 +16,30 @@ package v1alpha1
 // aggregate, and each edge agent mints its own leaf from that intermediate in process.
 type RouteBusIdentitySpecApplyConfiguration struct {
 	// PoolName is the identity this intermediate belongs to — a ClusterPool name, or `edge` for
-	// the WAN edge fleet. The signed intermediate is name-constrained to it so it can only mint
-	// leaves within it.
+	// the WAN edge fleet. It must equal the object's name. The signed intermediate is
+	// name-constrained to it so it can only mint leaves within it.
 	PoolName *string `json:"poolName,omitempty"`
 	// Request is the PEM-encoded PKCS#10 certificate-signing request for the pool's
 	// intermediate CA (the pool keeps the matching private key).
 	Request []byte `json:"request,omitempty"`
-	// PermittedUnderlayCIDRs are this identity's underlay IPv6 ranges — a pool's /48, or the edge
-	// loopback aggregate for the edge fleet. The signer name-constrains the intermediate to these
-	// so it can only mint leaves whose IP SAN falls inside them; the reflector then binds route
-	// nexthops to that SAN. This constraint, not the minting code, is what bounds a holder of the
-	// intermediate — which matters most for the edge, where an agent signs its own leaf locally.
+	// PermittedUnderlayCIDRs are the underlay ranges of a FLEET identity: one the dispatch-controller
+	// is told is not a pool (--routebus-fleet-identities, the dispatch chart's pki.fleetIdentities),
+	// such as the edge fleet (its loopback aggregate). The signer name-constrains that identity's
+	// intermediate to these, so it can only mint leaves whose IP SAN falls inside them; the
+	// reflector then binds route nexthops to that SAN. This constraint, not the minting code, is
+	// what bounds a holder of the intermediate, which matters most for the edge, where an agent
+	// signs its own leaf locally. Empty there means the signer denies the request.
+	//
+	// For a pool it is IGNORED: a pool's broker writes this object, so the signer constrains the
+	// pool's intermediate to its ClusterPool's spec.underlayPrefix instead, and only names any
+	// requested range outside that prefix in the Signed condition.
 	PermittedUnderlayCIDRs []string `json:"permittedUnderlayCIDRs,omitempty"`
+	// ClientRequest is a pool broker's PEM-encoded PKCS#10 CSR for its dispatch client
+	// certificate. The broker generates the key locally and keeps it. The signer uses only the
+	// CSR's public key: the certificate's subject is always CN=ectobase:cluster:<name>,
+	// O=ectobase:brokers, whatever the CSR asks for, with client-auth usage only. Only a pool (an
+	// identity named after a ClusterPool, not a fleet identity) gets one.
+	ClientRequest []byte `json:"clientRequest,omitempty"`
 }
 
 // RouteBusIdentitySpecApplyConfiguration constructs a declarative configuration of the RouteBusIdentitySpec type for use with
@@ -60,6 +72,16 @@ func (b *RouteBusIdentitySpecApplyConfiguration) WithRequest(values ...byte) *Ro
 func (b *RouteBusIdentitySpecApplyConfiguration) WithPermittedUnderlayCIDRs(values ...string) *RouteBusIdentitySpecApplyConfiguration {
 	for i := range values {
 		b.PermittedUnderlayCIDRs = append(b.PermittedUnderlayCIDRs, values[i])
+	}
+	return b
+}
+
+// WithClientRequest adds the given value to the ClientRequest field in the declarative configuration
+// and returns the receiver, so that objects can be build by chaining "With" function invocations.
+// If called multiple times, values provided by each call will be appended to the ClientRequest field.
+func (b *RouteBusIdentitySpecApplyConfiguration) WithClientRequest(values ...byte) *RouteBusIdentitySpecApplyConfiguration {
+	for i := range values {
+		b.ClientRequest = append(b.ClientRequest, values[i])
 	}
 	return b
 }

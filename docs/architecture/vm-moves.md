@@ -177,7 +177,7 @@ pool's broker cannot report anything.
 | Source pool | healthy and reachable | lost: lease stale beyond 2 minutes |
 | Proof that the source let go | the source broker's `letGo` | the fence: Ceph blocklist plus reflector route fence, with complete coverage |
 | Who sets `status.released` | the source broker (`ReportReleases`) | failover (`releaseFencedTwins`) |
-| Source VM afterwards | stopped before the target starts | may still run, cut off from Ceph and from the overlay; the pool's broker removes it when the pool returns; the fence is held until the broker reports the /64 drained and its routes are withdrawn (in `spec.underlayPrefix` mode only the route gate holds; see [Known gaps](failover.md#known-gaps)) |
+| Source VM afterwards | stopped before the target starts | may still run, cut off from Ceph and from the overlay; the pool's broker removes it when the pool returns; the fence is held until the broker reports the fenced prefix drained and its routes are withdrawn |
 
 The failover path and its release gates are described in
 [Failover and rescheduling](failover.md). A planned move whose source pool dies mid-move

@@ -103,6 +103,10 @@ All three values name the same host, and each one ends up somewhere that is chec
 - `dispatchApiserver.serviceIP` becomes an IP SAN on the apiserver's serving certificate. Brokers
   verify that certificate, so it must equal the host in each pool's `dispatchServer`.
 
+If you run WAN edges, also pass `--set 'pki.fleetIdentities={edge}'`. The signer then trusts the
+`edge` identity's own IP ranges; by default it trusts no identity that is not a `ClusterPool`, and
+denies `edge` (see [WAN edges](#wan-edges)).
+
 If the dispatch fences Ceph during failover, also pass `--set-string ceph.clusterID=<fsid>`. An
 empty `clusterID` leaves the storage fence unable to act: the ceph-csi driver rejects a
 `NetworkFence` without one.
@@ -142,7 +146,7 @@ them, because each one is scoped to a single pool. The lab generates them in
 | Object | Purpose |
 |---|---|
 | Namespace `pool-<pool>` | Where the compiler writes this pool's `Compiled*` twins. |
-| `ClusterPool` `<pool>` | The pool's inventory entry. Its name must be a DNS-1123 label of at most 58 characters, so that `pool-<pool>` is itself a legal namespace name. |
+| `ClusterPool` `<pool>` | The pool's inventory entry. Its name must be a DNS-1123 label of at most 58 characters, so that `pool-<pool>` is itself a legal namespace name. Its `spec.underlayPrefix` is required: see below. |
 | `RouteBusIdentity` `<pool>` | Carries the pool's intermediate-CA request and the signed certificate. |
 | Role and RoleBinding `dispatch-broker` in `pool-<pool>` | The broker's access to this pool's twins. Bound to the user `ectobase:cluster:<pool>`. |
 | ServiceAccount `dispatch-broker-bootstrap-<pool>` in `system` | The identity behind the short-lived first-boot token. |
@@ -157,6 +161,48 @@ for that pool's nodes. The identity is created ahead of time because RBAC cannot
 by name. Apart from filing its own CSR, a broker writes only status subresources, so it can
 never change a workload's spec, create a twin or delete one.
 
+Set `spec.underlayPrefix` on the `ClusterPool` before the pool's broker starts. It is the pool's
+underlay aggregate, a CIDR that contains every node's underlay address, for example the pool's
+`/48`:
+
+```yaml
+apiVersion: platform.ectobase.dev/v1alpha1
+kind: ClusterPool
+metadata:
+  name: k02
+spec:
+  region: eu
+  underlayPrefix: "fd00:cafe:2::/48"
+```
+
+The dispatch signer constrains the pool's route-bus intermediate to exactly this prefix, so the
+pool can only mint node certificates whose IP SAN lies inside it. A `ClusterPool` without it gets
+no intermediate: its `RouteBusIdentity` shows `Signed=False` with the reason, the broker's CSR
+times out, and its agents never join the route bus. Setting the prefix afterwards unblocks it
+without a restart. The same prefix is what failover fences when the pool is lost; see
+[failover](../architecture/failover.md#decide-what-to-fence-coverage).
+
+Do not reuse a fleet identity's name for a pool. A name in the dispatch chart's
+`pki.fleetIdentities` (for example `edge`) is signed on its own `spec.permittedUnderlayCIDRs`, and
+the signer denies it outright if a `ClusterPool` of the same name exists.
+
+### Decommission a pool
+
+Removing a pool means removing everything enrollment created for it, not only its `ClusterPool`:
+
+- the `ClusterRole` and `ClusterRoleBinding` `dispatch-broker-pool-<pool>`, the `Role` and
+  `RoleBinding` `dispatch-broker` in `pool-<pool>`, and the ServiceAccount
+  `dispatch-broker-bootstrap-<pool>`;
+- the `RouteBusIdentity` `<pool>`;
+- the namespace `pool-<pool>`, once its twins are gone.
+
+Nothing revokes the old broker's credentials. Its dispatch client certificate
+(`CN=ectobase:cluster:<pool>`, from the dispatch client CA) stays valid for up to 90 days, and so does the pool's intermediate,
+which can mint route-bus leaves for `<pool>.routebus.ectobase.dev` inside its old prefix. While the
+per-pool grant exists, that certificate still acts as the pool. Do not give a new pool the same
+name until the old broker certificate has expired, or unless every grant above was deleted first:
+a reused name re-creates the grant, and the old certificate then authenticates as the new pool.
+
 ## Install the pool chart
 
 The pool chart does not manage its release namespace, so create it first:
@@ -168,8 +214,8 @@ kubectl label namespace ectobase-system pod-security.kubernetes.io/enforce=privi
 
 ### Fresh-pool enrollment (bootstrap)
 
-The broker's steady-state certificate comes from the pool's own intermediate CA, and the broker
-obtains that CA over its connection to the dispatch. A new pool therefore needs two Secrets in
+The broker's dispatch client certificate is issued by the dispatch signer, and the broker requests
+it over its connection to the dispatch. A new pool therefore needs two Secrets in
 `ectobase-system` before the broker first starts:
 
 - `dispatch-root-ca`, key `ca.crt`: the `ectobase-ca` root certificate, copied from the
@@ -180,11 +226,13 @@ obtains that CA over its connection to the dispatch. A new pool therefore needs 
   `https://[<dispatch-ip>]:6444`. Mint the token with
   `kubectl create token dispatch-broker-bootstrap-<pool> -n system --duration=1h` on the dispatch.
 
-On first boot the broker generates the pool key, submits its CSR through the bootstrap token, and
-writes the signed intermediate into the `pki.intermediateSecret` Secret. cert-manager then issues
-`broker-dispatch-tls` from it, and the broker switches to mTLS for everything after that,
-including later renewals of the intermediate. The lab (`installPool` in the same file) creates
-both Secrets for you.
+On first boot the broker generates its client key, files a CSR on its `RouteBusIdentity` through
+the bootstrap token, and writes the certificate the signer returns into `broker-dispatch-tls`. It
+then switches to mTLS for everything else: the route-bus intermediate (written into the
+`pki.intermediateSecret` Secret), and renewals of both. If the dispatch ever stops accepting its
+certificate, the broker enrolls again with the bootstrap token, so a pool that has to re-enroll
+needs only a fresh token in `broker-dispatch-bootstrap`. The lab (`installPool` in the same file)
+creates both Secrets for you, with a fresh token on every deploy.
 
 Then install the chart:
 
@@ -211,12 +259,14 @@ helm upgrade --install ectobase-pool charts/ectobase-pool \
   `dispatch-apiserver` on 6444.
 - `underlayWithin` tells `flowplane` which host address is the underlay, past management and
   host-DNS addresses.
-- `pki.underlayCIDRs` name-constrains the pool intermediate, so it can only issue node
-  certificates whose IP SAN lies inside the pool's underlay.
+- `pki.underlayCIDRs` is advisory. The broker sends it with its CSR, but the signer constrains the
+  pool intermediate to the `ClusterPool`'s `spec.underlayPrefix` and ignores it; a range outside
+  the prefix is only named in the `RouteBusIdentity`'s `Signed` condition. The flag stays for
+  compatibility.
 
-The lab gives `--wait` twelve minutes because the agent's readiness waits on a chain: broker CSR,
-dispatch signer, intermediate Secret, pool `Issuer`, then cert-manager issuing each node's agent
-certificate.
+The lab gives `--wait` twelve minutes because the agent's readiness waits on a chain: broker
+enrollment, intermediate CSR, dispatch signer, intermediate Secret, pool `Issuer`, then cert-manager
+issuing each node's agent certificate.
 
 When both sides are up, the `ClusterPool` reaches phase `Ready` with a non-empty
 `status.nodePrefixes`.
@@ -224,9 +274,14 @@ When both sides are up, the `ClusterPool` reaches phase `Ready` with a non-empty
 ### The broker's dispatch credential
 
 The broker authenticates to the dispatch with a client certificate, not a token.
-`broker-dispatch-tls` has `CN=ectobase:cluster:<pool>` and `O=ectobase:brokers`, is issued by
-the pool's `ectobase-pool-ca` `Issuer` with a 90-day lifetime, and is renewed by cert-manager.
-The broker reloads the files as they rotate, so there is nothing to re-mint.
+`broker-dispatch-tls` holds a certificate with `CN=ectobase:cluster:<pool>` and
+`O=ectobase:brokers`, signed by the dispatch client CA (`ectobase-dispatch-client-ca`) with a
+90-day lifetime. The signer forces that subject whatever the CSR asks for. The broker writes the
+Secret itself and renews the certificate, with a new key, at two thirds of its lifetime; client-go
+reloads the mounted files, so a renewal needs no restart.
+
+The dispatch apiserver accepts client certificates only from that CA. Pool intermediates chain to
+`ectobase-ca`, which signs the apiserver's serving certificate but is not trusted for clients.
 
 The broker dials `dispatch-apiserver` directly on port 6444 rather than through the host
 kube-apiserver's aggregation layer, because the host apiserver on 6443 serves the host cluster's
@@ -242,7 +297,9 @@ passes the broker no dispatch address and the broker exits at startup.
 No chart deploys the WAN edges. An edge is a router, not a Kubernetes node, so its `flowplane`
 (in `--role edge`) and its `mesh-agent` (with `--edge-loopback` and no kubeconfig) run beside the
 router. In the lab they are containerlab nodes sharing each VyOS edge's network namespace, and
-the lab provisions the edge fleet's route-bus identity, a `RouteBusIdentity` named `edge`. See
+the lab provisions the edge fleet's route-bus identity, a `RouteBusIdentity` named `edge`, whose
+`spec.permittedUnderlayCIDRs` is the edge loopback aggregate. The dispatch signs it only if `edge`
+is in the dispatch chart's `pki.fleetIdentities`, which is empty by default; the lab sets it. See
 [The WAN edge](../features/ns-edge.md).
 
 ## Upgrade order
@@ -297,6 +354,56 @@ self-route, and a later withdraw deletes it, which cuts the guest off on its own
 `helm upgrade` of the pool chart can briefly run the new agent against the old dataplane on a
 node; the new `flowplane` repairs any self-route damaged that way when it adopts its maps at
 startup. Never upgrade the `mesh` image on a pool on its own.
+
+### Moving to operator-declared route-bus constraints
+
+A release whose signer constrains a pool intermediate to its `ClusterPool`'s `spec.underlayPrefix`
+adds three ordering hazards on top of the rules above:
+
+1. **Set `spec.underlayPrefix` only after every pool's broker is upgraded.** The prefix also turns
+   on aggregate fencing: failover fences the whole prefix. An old broker reports drain per node
+   /64 and matches it to the fenced prefix by equality, so it reports the aggregate drained the
+   moment the pool is back, while its VMs may still run. A new broker holds the aggregate while
+   any node /64 inside it is busy.
+2. **Pass `pki.fleetIdentities={edge}` in the same dispatch `helm upgrade`** if you run WAN edges.
+   The new signer trusts no identity that is not a `ClusterPool` unless it is named there, and
+   denies `edge` otherwise.
+3. **A pool without `spec.underlayPrefix` keeps running but is denied at renewal.** Its broker
+   already holds an intermediate, so nothing breaks at the upgrade. The signer denies its next
+   request, which comes when that intermediate nears expiry, and the pool then drops off the
+   route bus. Watch for the `RouteBusIdentityDenied` condition on the `ClusterPool`; the signer
+   sets it with the reason whenever it denies the pool's identity:
+
+    ```sh
+    kubectl get clusterpools -o 'custom-columns=NAME:.metadata.name,DENIED:.status.conditions[?(@.type=="RouteBusIdentityDenied")].status,WHY:.status.conditions[?(@.type=="RouteBusIdentityDenied")].message'
+    ```
+
+Check every existing `ClusterPool`'s `spec.underlayPrefix` against the admission rules (canonical,
+no IPv4-mapped form, at least /32 for IPv6 or /16 for IPv4). A prefix stored before those rules is
+still served, but the signer denies the pool's intermediate until it is corrected.
+
+The reflector also refuses an intermediate with no IP constraint, which is what a pool installed
+with an empty `pki.underlayCIDRs` holds. Such a pool loses its route-bus sessions as soon as the new
+reflector runs, until it is re-signed and its agents present the new chain; see
+[Where the certificates come from](../architecture/route-bus.md#where-the-certificates-come-from).
+
+### Cutting over to the dispatch client CA
+
+A release whose dispatch apiserver trusts only `ectobase-dispatch-client-ca` for client
+certificates is a hard cutover. No release trusts both CAs. The moment the dispatch chart is
+upgraded, every broker's old certificate (minted by cert-manager from its pool intermediate) is
+rejected, and each pool is off the dispatch until it re-enrolls:
+
+1. Upgrade the dispatch chart.
+2. For each pool, write a fresh bootstrap token into `broker-dispatch-bootstrap`, as for a new
+   pool (see [Fresh-pool enrollment](#fresh-pool-enrollment-bootstrap)).
+3. Delete the pool's old `broker-dispatch-tls` cert-manager Certificate
+   (`kubectl -n ectobase-system delete certificates.cert-manager.io broker-dispatch-tls`), so
+   cert-manager does not re-mint the Secret the broker now writes.
+4. Upgrade the pool chart. The new broker finds no dispatch-issued certificate and enrolls with
+   the token.
+
+The lab does all of this on every `lab deploy`.
 
 ## What happens to the pool CRDs
 

@@ -177,9 +177,11 @@ spec:
             # We serve no admission policies here, so disable those plugins.
             - "--disable-admission-plugins=MutatingAdmissionPolicy,ValidatingAdmissionPolicy"
             {{- if .Values.pki.enabled }}
-            # Serve the cert-manager cert (bypasses the self-signed --cert-dir path) and trust
-            # the ectobase root as a client CA. Unioned with the existing delegated token authn,
-            # so bearer-token brokers keep working during migration.
+            # Serve the cert-manager cert (bypasses the self-signed --cert-dir path). Client
+            # certificates are accepted ONLY from the dedicated dispatch client CA, never from the
+            # ectobase route-bus root: every pool intermediate chains to that root, and name
+            # constraints do not bind the subject, so a pool could mint itself O=system:masters
+            # or another pool's CN. Unioned with delegated token authn (the bootstrap token).
             - "--tls-cert-file=/secrets/serving/tls.crt"
             - "--tls-private-key-file=/secrets/serving/tls.key"
             - "--client-ca-file=/secrets/client-ca/tls.crt"
@@ -221,5 +223,9 @@ spec:
             secretName: dispatch-apiserver-tls
         - name: client-ca
           secret:
-            secretName: {{ .Values.pki.caSecretName }}
+            secretName: {{ .Values.pki.clientCASecretName }}
+            # Only the certificate: the apiserver never needs the CA's key.
+            items:
+              - key: tls.crt
+                path: tls.crt
         {{- end }}

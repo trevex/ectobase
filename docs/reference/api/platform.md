@@ -61,7 +61,7 @@ _Appears in:_
 | --- | --- | --- | --- |
 | `region` _string_ | Region is the region the attached cluster resides in. |  |  |
 | `endpoint` _string_ | Endpoint is the reachable API endpoint of the attached cluster. |  |  |
-| `underlayPrefix` _string_ | UnderlayPrefix is this cluster's underlay aggregate (a CIDR that contains every node's<br />underlay address, e.g. "fd00:cafe:1a2b::/48"). Declaring it makes Tier-2 fencing COMPLETE by<br />construction: the dispatch fences this one prefix instead of enumerating node /64s, so a node it<br />never observed — one that joined while the pool was unreachable — is fenced too.<br />It is dispatch configuration, set when the pool is registered, deliberately NOT reported by<br />the broker: a fence coordinate must never be derived from the entity being fenced, because<br />that entity is by definition the one you have lost contact with.<br />When empty, the dispatch falls back to the broker-reported node /64s, which is only safe while<br />every node in the cluster shares one /64 (each node's identity being a /128 inside it). If<br />the reported set contains MORE than one distinct /64, the cluster spans /64s, an unobserved<br />node could sit in an unreported one. Failover then fences the /64s it knows about but blocks<br />the rebind, because fencing incompletely must not reattach a disk an unfenced node may still<br />write to. Set this field to unblock it. See docs/architecture/failover.md. |  | Optional: \{\} <br /> |
+| `underlayPrefix` _string_ | UnderlayPrefix is this cluster's underlay aggregate (a CIDR that contains every node's<br />underlay address, e.g. "fd00:cafe:1a2b::/48"). Declaring it makes Tier-2 fencing COMPLETE by<br />construction: the dispatch fences this one prefix instead of enumerating node /64s, so a node it<br />never observed — one that joined while the pool was unreachable — is fenced too.<br />It is also the pool's route-bus certificate constraint: the dispatch signer IP-name-constrains<br />the pool's intermediate CA to exactly this prefix, so the pool can only mint node leaves whose<br />IP SAN lies inside it, and the reflector only trusts nexthops equal to such a SAN. A pool must<br />declare it to join the route bus: with it empty, the signer denies the pool's intermediate.<br />It must be a CIDR in canonical form (no host bits, no IPv4-mapped IPv6), at least /32 for<br />IPv6 or /16 for IPv4. The signer also denies a prefix that overlaps another ClusterPool's<br />(the pool enrolled later is denied) or a fleet identity's permitted ranges. If a reported node<br />/64 lies outside it, failover treats its coverage as incomplete and blocks the rebind.<br />It is dispatch configuration, set when the pool is registered, deliberately NOT reported by<br />the broker: neither a fence coordinate nor a certificate constraint may be derived from the<br />entity it bounds. A fenced pool is by definition the one you have lost contact with, and a<br />constraint the pool chooses itself constrains nothing.<br />It is the ONLY coordinate failover fences: broker-reported status.nodePrefixes never are. A<br />pool that declares no prefix (or one that fails these rules, stored before they existed) is<br />neither fenced nor rebound when lost; failover blocks its VMs with FailoverBlocked. A reported<br />node prefix outside the declared one also blocks the rebind, since the prefix then may miss a<br />node. See docs/architecture/failover.md. |  | Optional: \{\} <br /> |
 
 
 #### ClusterPoolStatus
@@ -81,8 +81,8 @@ _Appears in:_
 | `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30/#condition-v1-meta) array_ | Conditions represent the latest available observations of the ClusterPool's state. |  | Optional: \{\} <br /> |
 | `allocatable` _[ResourceList](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30/#resourcelist-v1-core)_ | Allocatable is the schedulable capacity the broker reports for this pool. |  | Optional: \{\} <br /> |
 | `lease` _[ClusterPoolLease](#clusterpoollease)_ | Lease is the broker heartbeat; a stale RenewTime drives Phase to Unknown. |  | Optional: \{\} <br /> |
-| `nodePrefixes` _string array_ | NodePrefixes is the set of node /64 underlay prefixes composing this cluster,<br />reported by the broker. The dispatch fences these (Ceph NetworkFence + route<br />blocklist) to evacuate a lost pool without reaching it. |  | Optional: \{\} <br /> |
-| `fencedPrefixes` _string array_ | FencedPrefixes is the subset of NodePrefixes the dispatch has fenced (evacuation). |  | Optional: \{\} <br /> |
+| `nodePrefixes` _string array_ | NodePrefixes is the set of node /64 underlay prefixes composing this cluster, reported by<br />the broker. They key the drain report. They are never fenced: the pool writes them itself,<br />so failover fences only spec.underlayPrefix, and a reported prefix outside it blocks the<br />rebind. |  | Optional: \{\} <br /> |
+| `fencedPrefixes` _string array_ | FencedPrefixes are the prefixes the dispatch has fenced (spec.underlayPrefix) while<br />evacuating the pool; recovery releases them. |  | Optional: \{\} <br /> |
 | `nodeDrain` _[NodeDrainStatus](#nodedrainstatus) array_ | NodeDrain reports, per fenced /64, whether the returning broker has confirmed<br />its stale VMIs are terminated (safe to release the fence). |  | Optional: \{\} <br /> |
 
 
@@ -107,8 +107,10 @@ _Appears in:_
 
 
 
-RouteBusIdentity is a pool's route-bus intermediate-CA request + signed response, served
-by the dispatch aggregated apiserver. The broker creates it; the dispatch signer fills status.
+RouteBusIdentity is a pool's route-bus intermediate-CA request + signed response, and its
+broker's dispatch client-certificate request + signed response, served by the dispatch
+aggregated apiserver. The operator pre-creates it when enrolling the pool, the
+broker files its CSR into it, and the dispatch signer fills status.
 
 
 
@@ -142,9 +144,10 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `poolName` _string_ | PoolName is the identity this intermediate belongs to — a ClusterPool name, or `edge` for<br />the WAN edge fleet. The signed intermediate is name-constrained to it so it can only mint<br />leaves within it. |  |  |
+| `poolName` _string_ | PoolName is the identity this intermediate belongs to — a ClusterPool name, or `edge` for<br />the WAN edge fleet. It must equal the object's name. The signed intermediate is<br />name-constrained to it so it can only mint leaves within it. |  |  |
 | `request` _integer array_ | Request is the PEM-encoded PKCS#10 certificate-signing request for the pool's<br />intermediate CA (the pool keeps the matching private key). |  |  |
-| `permittedUnderlayCIDRs` _string array_ | PermittedUnderlayCIDRs are this identity's underlay IPv6 ranges — a pool's /48, or the edge<br />loopback aggregate for the edge fleet. The signer name-constrains the intermediate to these<br />so it can only mint leaves whose IP SAN falls inside them; the reflector then binds route<br />nexthops to that SAN. This constraint, not the minting code, is what bounds a holder of the<br />intermediate — which matters most for the edge, where an agent signs its own leaf locally. |  | Optional: \{\} <br /> |
+| `permittedUnderlayCIDRs` _string array_ | PermittedUnderlayCIDRs are the underlay ranges of a FLEET identity: one the dispatch-controller<br />is told is not a pool (--routebus-fleet-identities, the dispatch chart's pki.fleetIdentities),<br />such as the edge fleet (its loopback aggregate). The signer name-constrains that identity's<br />intermediate to these, so it can only mint leaves whose IP SAN falls inside them; the<br />reflector then binds route nexthops to that SAN. This constraint, not the minting code, is<br />what bounds a holder of the intermediate, which matters most for the edge, where an agent<br />signs its own leaf locally. Empty there means the signer denies the request.<br />For a pool it is IGNORED: a pool's broker writes this object, so the signer constrains the<br />pool's intermediate to its ClusterPool's spec.underlayPrefix instead, and only names any<br />requested range outside that prefix in the Signed condition. |  | Optional: \{\} <br /> |
+| `clientRequest` _integer array_ | ClientRequest is a pool broker's PEM-encoded PKCS#10 CSR for its dispatch client<br />certificate. The broker generates the key locally and keeps it. The signer uses only the<br />CSR's public key: the certificate's subject is always CN=ectobase:cluster:<name>,<br />O=ectobase:brokers, whatever the CSR asks for, with client-auth usage only. Only a pool (an<br />identity named after a ClusterPool, not a fleet identity) gets one. |  | Optional: \{\} <br /> |
 
 
 #### RouteBusIdentityStatus
@@ -163,6 +166,7 @@ _Appears in:_
 | --- | --- | --- | --- |
 | `certificate` _integer array_ | Certificate is the PEM-encoded signed intermediate CA certificate (the CSR response). |  | Optional: \{\} <br /> |
 | `caBundle` _integer array_ | CABundle is the PEM-encoded root CA the reflector trusts, so the pool can present the<br />full chain (leaf -> intermediate -> root). |  | Optional: \{\} <br /> |
-| `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30/#condition-v1-meta) array_ | Conditions represent the latest observations (e.g. Signed / Denied). |  | Optional: \{\} <br /> |
+| `clientCertificate` _integer array_ | ClientCertificate is the PEM-encoded dispatch client certificate signed by the dispatch<br />client CA in response to spec.clientRequest. The dispatch apiserver trusts only that CA for<br />client certificates, never the route-bus root the pool intermediates chain to. |  | Optional: \{\} <br /> |
+| `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30/#condition-v1-meta) array_ | Conditions represent the latest observations: Signed for the intermediate, ClientSigned for<br />the client certificate. |  | Optional: \{\} <br /> |
 
 

@@ -61,14 +61,16 @@ func main() {
 	flag.StringVar(&routebusSecret, "routebus-intermediate-secret", "", "if set, bootstrap this pool's route-bus intermediate CA into this Secret (enables the mTLS PKI); empty => disabled")
 	flag.StringVar(&routebusSecretNS, "routebus-intermediate-namespace", os.Getenv("POD_NAMESPACE"), "namespace for the intermediate CA Secret (defaults to POD_NAMESPACE)")
 	var routebusCIDRs string
-	flag.StringVar(&routebusCIDRs, "routebus-underlay-cidrs", "", "comma-separated pool underlay CIDRs (e.g. the pool /48); the intermediate is IP-name-constrained to these so it can only mint node leaves inside the pool's underlay")
+	flag.StringVar(&routebusCIDRs, "routebus-underlay-cidrs", "", "comma-separated pool underlay CIDRs (e.g. the pool /48), sent with the intermediate CSR. Advisory: the dispatch signer constrains a pool intermediate to its ClusterPool's spec.underlayPrefix and ignores these")
 	var dispatchServer, dispatchCA, dispatchCert, dispatchKey string
 	flag.StringVar(&dispatchServer, "dispatch-server", "", "dispatch apiserver URL (mTLS mode); with --dispatch-{ca,client-cert,client-key}")
 	flag.StringVar(&dispatchCA, "dispatch-ca", "", "CA file verifying the dispatch serving cert")
-	flag.StringVar(&dispatchCert, "dispatch-client-cert", "", "broker client cert file (cert-manager-rotated)")
-	flag.StringVar(&dispatchKey, "dispatch-client-key", "", "broker client key file")
+	flag.StringVar(&dispatchCert, "dispatch-client-cert", "", "broker client cert file, mounted from --dispatch-client-secret")
+	flag.StringVar(&dispatchKey, "dispatch-client-key", "", "broker client key file, mounted from --dispatch-client-secret")
+	var dispatchClientSecret string
+	flag.StringVar(&dispatchClientSecret, "dispatch-client-secret", "broker-dispatch-tls", "Secret (in --routebus-intermediate-namespace) the broker keeps its dispatch-issued client certificate and key in")
 	var dispatchBootstrapKubeconfig string
-	flag.StringVar(&dispatchBootstrapKubeconfig, "dispatch-bootstrap-kubeconfig", "", "first-boot bootstrap-token kubeconfig; used to bootstrap the pool intermediate before the steady-state mTLS leaf exists")
+	flag.StringVar(&dispatchBootstrapKubeconfig, "dispatch-bootstrap-kubeconfig", "", "bootstrap-token kubeconfig: used to enroll for a dispatch client certificate when the broker has no usable one")
 	flag.Parse()
 
 	if clusterName == "" {
@@ -121,37 +123,37 @@ func main() {
 		}
 	}
 
-	// FIRST-BOOT BOOTSTRAP (mTLS mode only): a fresh pool has no steady-state client cert yet —
-	// cert-manager only issues the broker's leaf (broker-dispatch-tls) AFTER the pool
-	// intermediate exists, and the intermediate is bootstrapped BY the broker over dispatch.
-	// Break that chicken-and-egg with a short-lived bootstrap-token connection: bootstrap the
-	// intermediate once, then wait for cert-manager to mint the leaf before building the
-	// steady-state dispatch client below.
-	mtls := dispatchServer != ""
-	if mtls && routebusSecret != "" && needsBootstrap(dispatchCert, dispatchKey) {
-		if dispatchBootstrapKubeconfig == "" {
-			log.Fatal("mTLS mode with no client cert present requires --dispatch-bootstrap-kubeconfig for first-boot bootstrap")
+	// DISPATCH CLIENT CERTIFICATE. The broker's credential to the dispatch apiserver is a client
+	// certificate the dispatch signer issues from its client CA (the only CA that apiserver trusts
+	// for clients), for a key generated here. It lives in the Secret the --dispatch-client-cert/key
+	// files are mounted from. When that Secret holds no usable dispatch-issued certificate — first
+	// boot, or a Secret left by the old chart that minted it from the pool intermediate — enroll
+	// through the short-lived bootstrap token, then wait for the kubelet to project the new
+	// certificate into the mounted files before building the steady-state client below.
+	clientCert := &broker.DispatchClientCert{
+		Bootstrap:  bootstrapClient(dispatchBootstrapKubeconfig, scheme),
+		Downstream: downstreamClient,
+		PoolName:   clusterName,
+		SecretName: dispatchClientSecret,
+		SecretNS:   routebusSecretNS,
+	}
+	if usable, uerr := clientCert.Usable(ctx); uerr != nil {
+		log.Fatalf("read dispatch client certificate: %v", uerr)
+	} else if !usable {
+		if clientCert.Bootstrap == nil {
+			log.Fatal("no dispatch client certificate yet, and no --dispatch-bootstrap-kubeconfig to enroll with")
 		}
-		bootCfg, berr := clientcmd.BuildConfigFromFlags("", dispatchBootstrapKubeconfig)
+		boot, berr := clientCert.Bootstrap()
 		if berr != nil {
-			log.Fatalf("build bootstrap dispatch config: %v", berr)
+			log.Fatalf("bootstrap dispatch client: %v", berr)
 		}
-		bootClient, berr := client.New(bootCfg, client.Options{Scheme: scheme})
+		log.Printf("enrolling: requesting a dispatch client certificate with the bootstrap token")
+		certPEM, berr := clientCert.Enroll(ctx, boot)
 		if berr != nil {
-			log.Fatalf("build bootstrap dispatch client: %v", berr)
+			log.Fatalf("enroll dispatch client certificate: %v", berr)
 		}
-		boot := &broker.PoolCertBootstrapper{
-			Dispatch: bootClient, Downstream: downstreamClient,
-			PoolName: clusterName, SecretName: routebusSecret, SecretNS: routebusSecretNS,
-			PermittedCIDRs: cidrs,
-		}
-		log.Printf("first boot: bootstrapping pool intermediate via bootstrap token")
-		if berr := boot.EnsureOnce(ctx); berr != nil {
-			log.Fatalf("bootstrap pool intermediate: %v", berr)
-		}
-		log.Printf("intermediate bootstrapped; waiting for cert-manager to mint the client cert")
-		if berr := waitForLeaf(ctx, dispatchCert, dispatchKey, 5*time.Minute, 3*time.Second); berr != nil {
-			log.Fatalf("waiting for broker client cert: %v", berr)
+		if berr := waitForFile(ctx, dispatchCert, certPEM, 5*time.Minute, 3*time.Second); berr != nil {
+			log.Fatalf("waiting for the dispatch client certificate to be mounted: %v", berr)
 		}
 	}
 
@@ -246,6 +248,14 @@ func main() {
 		if err := mgr.Add(boot); err != nil {
 			log.Fatalf("add routebus cert bootstrapper: %v", err)
 		}
+	}
+
+	// Keep the dispatch client certificate current: renew it over mTLS at two thirds of its life,
+	// adopt a re-signed one, and enroll again with the bootstrap token if the dispatch stops
+	// accepting it. client-go re-reads the mounted files, so a new certificate needs no restart.
+	clientCert.Dispatch = dispatchDirect
+	if err := mgr.Add(clientCert); err != nil {
+		log.Fatalf("add dispatch client certificate runnable: %v", err)
 	}
 
 	if err := mgr.Start(ctx); err != nil {

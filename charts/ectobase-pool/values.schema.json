@@ -152,7 +152,8 @@
           "type": "string"
         },
         "underlayCIDRs": {
-          "type": "string"
+          "type": "string",
+          "description": "Advisory. Sent with the broker's intermediate CSR but ignored by the dispatch signer for a pool, which constrains the intermediate to the ClusterPool's spec.underlayPrefix instead."
         }
       }
     }

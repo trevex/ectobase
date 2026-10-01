@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/netip"
 	"slices"
 	"strings"
 	"time"
@@ -19,6 +20,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -29,6 +31,7 @@ import (
 
 	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	computev1 "github.com/trevex/ectobase/api/compute/v1alpha1"
+	"github.com/trevex/ectobase/api/platform"
 	platformv1 "github.com/trevex/ectobase/api/platform/v1alpha1"
 	"github.com/trevex/ectobase/api/validate"
 	"github.com/trevex/ectobase/dispatch/pkg/clusterpool"
@@ -378,52 +381,64 @@ func (r *Reconciler) block(ctx context.Context, vm *computev1.VirtualMachine, ms
 }
 
 // fenceCoverage decides WHAT to fence for a lost pool and whether that fencing is COMPLETE — i.e.
-// whether it provably covers every node that could still be writing, including nodes central never
-// observed. Returns the targets, completeness, and (when incomplete or empty) the reason.
+// whether it provably covers every node that could still be writing, including nodes the dispatch
+// never observed. Returns the targets, completeness, and (when incomplete or empty) the reason.
 //
-// The hazard: node /64s are reported BY THE BROKER, so the set central holds is frozen at whatever
-// was last seen before contact was lost. A node that joined during the outage is absent from it. A
-// fence coordinate derived from the entity being fenced is precisely what you cannot rely on,
-// because that entity is the one you have lost contact with.
-//
-//   - `spec.underlayPrefix` declared — one aggregate, complete BY CONSTRUCTION: it contains every
-//     node's underlay whether or not central ever saw the node. The correct coordinate, and central
-//     configuration rather than reported state.
-//   - not declared, reported prefixes collapse to ONE distinct /64 — complete for the same reason:
-//     in the single-/64-per-cluster topology every node's identity is a /128 inside that /64, so
-//     fencing it covers unobserved nodes too. Each node reports the /64 itself, so the raw list
-//     repeats it per node; dedup makes "how many distinct coordinates" the real question.
-//   - not declared, SEVERAL distinct /64s — the cluster spans /64s, so an unobserved node may sit
-//     in one never reported. Incomplete: the caller fences what is known (containment is free) but
-//     must not rebind.
+// The only fence target is the operator-declared spec.underlayPrefix: one aggregate, complete BY
+// CONSTRUCTION, since it contains every node's underlay whether or not the dispatch ever saw the
+// node. Broker-reported status.nodePrefixes are never fenced, in any mode. They come from the pool
+// being fenced, which is exactly the entity that cannot be relied on: frozen at the last report
+// before contact was lost (missing any node that joined since), and, from a lying or buggy broker,
+// anything at all, ::/0 or another pool's /64 included. A pool that declares no prefix, or one that
+// fails the admission rules (stored before they existed), is therefore not fenced and not rebound:
+// failover fails closed. Such a pool cannot get a route-bus intermediate either.
 //
 // Callers distinguish "nothing to fence" (empty targets) from "fenced but not provably complete"
 // (targets, complete=false) — the first cannot protect anything, the second protects what it can.
 func fenceCoverage(pool *platformv1.ClusterPool) (targets []string, complete bool, why string) {
-	if p := pool.Spec.UnderlayPrefix; p != "" {
-		return []string{p}, true, ""
+	p := pool.Spec.UnderlayPrefix
+	if p == "" {
+		return nil, false, fmt.Sprintf("ClusterPool %s declares no spec.underlayPrefix; failover fences only an "+
+			"operator-declared prefix, so it neither fences nor rebinds this pool", pool.Name)
 	}
-	seen := map[string]bool{}
-	var distinct []string
+	if errs := platform.ValidateUnderlayPrefix(field.NewPath("spec", "underlayPrefix"), p); len(errs) > 0 {
+		return nil, false, fmt.Sprintf("ClusterPool %s: %s; failover fences only a valid operator-declared prefix, "+
+			"so it neither fences nor rebinds this pool", pool.Name, errs.ToAggregate())
+	}
+	return aggregateCoverage(pool, p)
+}
+
+// aggregateCoverage is fenceCoverage for a declared aggregate. It is complete by construction only if
+// the declaration is right: a reported node prefix outside it may be a node the aggregate does not
+// cover, which stays writable, so the coverage is incomplete and the rebind blocked.
+//
+// Only the operator's aggregate is ever fenced, never a reported prefix. status.nodePrefixes is
+// written by the very broker being fenced: fencing what it reports would let a lying or buggy pool
+// fence ::/0, or another pool's /64, at Ceph and the reflector and take that down. What a lie can
+// still do is block its own pool's rebind, which harms only that pool's tenants.
+func aggregateCoverage(pool *platformv1.ClusterPool, aggregate string) (targets []string, complete bool, why string) {
+	agg, err := netip.ParsePrefix(aggregate)
+	if err != nil { // fenceCoverage validated it; never fence what does not parse
+		return nil, false, fmt.Sprintf("spec.underlayPrefix %q is not a CIDR", aggregate)
+	}
+	agg = agg.Masked()
+	targets = []string{aggregate}
+	var outside []string
 	for _, p := range pool.Status.NodePrefixes {
-		if p == "" || seen[p] {
+		np, err := netip.ParsePrefix(p)
+		if err == nil && np.Bits() >= agg.Bits() && agg.Contains(np.Addr()) {
 			continue
 		}
-		seen[p] = true
-		distinct = append(distinct, p)
+		if p != "" && !slices.Contains(outside, p) {
+			outside = append(outside, p)
+		}
 	}
-	switch len(distinct) {
-	case 0:
-		return nil, false, "no NodePrefixes reported and spec.underlayPrefix unset; cannot fence anything"
-	case 1:
-		return distinct, true, ""
-	default:
-		return distinct, false, fmt.Sprintf("fenced the %d reported node /64s (%v) but coverage is not provably "+
-			"complete with spec.underlayPrefix unset: the reported set is the last seen before contact was lost, "+
-			"so a node that joined during the outage may sit in an unreported /64 and stay writable. Declare "+
-			"spec.underlayPrefix (an aggregate containing every node underlay) to make fencing complete",
-			len(distinct), distinct)
+	if len(outside) == 0 {
+		return targets, true, ""
 	}
+	return targets, false, fmt.Sprintf("fenced spec.underlayPrefix %s, but coverage is not provably complete: the pool "+
+		"reports node prefixes outside it (%v), which are not fenced because the pool reports them itself. Either "+
+		"spec.underlayPrefix misses those nodes (correct it) or the report is wrong", aggregate, outside)
 }
 
 // poolLost reports whether pool is Unknown and its lease has been stale longer than threshold.

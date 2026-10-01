@@ -83,9 +83,10 @@ type EctobaseSpec struct {
 type ComputeCluster struct {
 	Name       string
 	Kubeconfig string
-	// UnderlayCIDRs is this pool's underlay range(s) (its /48); the route-bus intermediate is
-	// IP-name-constrained to these so it can only mint node leaves inside the pool's underlay.
-	// Only used when EctobaseSpec.RouteBusMTLS is set.
+	// UnderlayCIDRs is this pool's underlay range (its /48, a single CIDR). It is the ClusterPool's
+	// spec.underlayPrefix, which the dispatch signer turns into the route-bus intermediate's IP name
+	// constraint and failover fences as one aggregate. With RouteBusMTLS it is also passed to the
+	// pool chart as the advisory pki.underlayCIDRs.
 	UnderlayCIDRs string
 }
 
@@ -134,7 +135,7 @@ func Ectobase(ctx context.Context, s EctobaseSpec) error {
 		return fmt.Errorf("migrate dispatch Deployments to Recreate: %w", err)
 	}
 	slog.Info("installing ectobase-dispatch chart", "chart", s.DispatchChartPath)
-	if err := helmInstallDispatch(ctx, s.DispatchKubeconfig, s.DispatchChartPath, s.DispatchIdentity, s.RouteBusMTLS, s.ReflectorIP, s.ImageRegistry, s.CephClusterID); err != nil {
+	if err := helmInstallDispatch(ctx, s.DispatchKubeconfig, s.DispatchChartPath, s.DispatchIdentity, s.RouteBusMTLS, s.ReflectorIP, s.ImageRegistry, s.CephClusterID, fleetIdentities(s)); err != nil {
 		return fmt.Errorf("helm install ectobase-dispatch: %w", err)
 	}
 	if err := waitAggregatedAPI(ctx, s.DispatchKubeconfig); err != nil {
@@ -197,10 +198,15 @@ func installPool(ctx context.Context, s EctobaseSpec, c ComputeCluster) error {
 	// The fresh-pool enrollment Secrets must exist before the chart's broker
 	// pod starts too: the pre-provisioned dispatch root CA (so the broker can verify the
 	// dispatch server) and a short-lived bootstrap-token kubeconfig (a narrow,
-	// routebusidentities-only credential the broker uses for its first-boot RouteBusIdentity
-	// CSR — cert-manager mints the steady-state mTLS leaf after that). Both are sourced from
-	// the dispatch chart's `system` namespace: the ectobase-ca Secret (root cert) and the
-	// dispatch-broker-bootstrap ServiceAccount (token source).
+	// routebusidentities-only credential the broker enrolls with: it files a client CSR on its
+	// RouteBusIdentity and the dispatch signer answers from the dispatch client CA). Both are
+	// sourced from the dispatch chart's `system` namespace: the ectobase-ca Secret (root cert)
+	// and the dispatch-broker-bootstrap ServiceAccount (token source).
+	//
+	// Both are rewritten on every deploy, the token freshly minted. That is what re-enrolls an
+	// existing pool: a broker whose certificate the dispatch no longer accepts (the cutover to the
+	// dispatch client CA, or a reinstalled dispatch with a new one) enrolls again with this token,
+	// at its next start or within a minute while it runs.
 	if s.RouteBusMTLS {
 		rootCAB64, rootCAPEM, err := dispatchRootCA(ctx, s.DispatchKubeconfig)
 		if err != nil {
@@ -233,6 +239,9 @@ func installPool(ctx context.Context, s EctobaseSpec, c ComputeCluster) error {
 	if s.RouteBusMTLS {
 		if err := CertManager(ctx, nil, c.Kubeconfig, ""); err != nil {
 			return fmt.Errorf("cluster %s: cert-manager: %w", c.Name, err)
+		}
+		if err := retireBrokerCertificate(ctx, nil, c.Kubeconfig); err != nil {
+			return fmt.Errorf("cluster %s: %w", c.Name, err)
 		}
 	}
 	if err := helmInstallPool(ctx, c.Kubeconfig, c.Name, s.PoolChartPath, s.DispatchIdentity, s.UnderlayWithin, s.RouteBusMTLS, c.UnderlayCIDRs, s.ImageRegistry); err != nil {
@@ -398,12 +407,21 @@ func imageSetArgs(registry string, images map[string]string) []string {
 // on the dispatch's fabric identity, so the dispatch-controller's -reflector-admin (a chart value) points
 // there. --create-namespace makes the `system` release namespace unless Ectobase already pre-created it
 // PSA-privileged (mtls); the chart creates the PSA-privileged ectobase-system namespace itself.
-func helmInstallDispatch(ctx context.Context, kubeconfig, chartPath, dispatchIdentity string, mtls bool, reflectorIP, imageRegistry, cephClusterID string) error {
-	return exec.Run(ctx, "helm", dispatchHelmArgs(kubeconfig, chartPath, dispatchIdentity, mtls, reflectorIP, imageRegistry, cephClusterID)...)
+func helmInstallDispatch(ctx context.Context, kubeconfig, chartPath, dispatchIdentity string, mtls bool, reflectorIP, imageRegistry, cephClusterID string, fleet []string) error {
+	return exec.Run(ctx, "helm", dispatchHelmArgs(kubeconfig, chartPath, dispatchIdentity, mtls, reflectorIP, imageRegistry, cephClusterID, fleet)...)
+}
+
+// fleetIdentities are the RouteBusIdentities the lab creates that are not pools: the WAN edge fleet's,
+// when the lab provisions one. The signer trusts only these to carry their own IP constraint.
+func fleetIdentities(s EctobaseSpec) []string {
+	if s.RouteBusMTLS && s.EdgePKIDir != "" {
+		return []string{edgeIdentityName}
+	}
+	return nil
 }
 
 // dispatchHelmArgs is helmInstallDispatch's helm argv, split out so it can be asserted without a cluster.
-func dispatchHelmArgs(kubeconfig, chartPath, dispatchIdentity string, mtls bool, reflectorIP, imageRegistry, cephClusterID string) []string {
+func dispatchHelmArgs(kubeconfig, chartPath, dispatchIdentity string, mtls bool, reflectorIP, imageRegistry, cephClusterID string, fleet []string) []string {
 	args := []string{"upgrade", "--install", "ectobase-dispatch", chartPath,
 		"--kubeconfig", kubeconfig,
 		"--namespace", "system", "--create-namespace",
@@ -431,6 +449,10 @@ func dispatchHelmArgs(kubeconfig, chartPath, dispatchIdentity string, mtls bool,
 			"--set", "pki.reflectorIP="+reflectorIP,
 			"--set", "dispatchApiserver.serviceIP="+dispatchIdentity,
 		)
+		// The chart trusts no fleet identity by default; the lab's edge identity is one.
+		if len(fleet) > 0 {
+			args = append(args, "--set", "pki.fleetIdentities={"+strings.Join(fleet, ",")+"}")
+		}
 	}
 	return args
 }
@@ -518,8 +540,9 @@ func helmInstallPool(ctx context.Context, kubeconfig, clusterName, chartPath, di
 	}
 	timeout := "8m"
 	if mtls {
-		// The intermediate is IP-name-constrained to the pool /48. underlayCIDRs is a single
-		// CIDR (no comma) so helm --set takes it literally. dispatchServer is the URL the
+		// The signer constrains the intermediate to the ClusterPool's underlayPrefix (the same /48);
+		// pki.underlayCIDRs is only advisory. underlayCIDRs is a single CIDR (no comma) so helm
+		// --set takes it literally. dispatchServer is the URL the
 		// broker dials for its dispatch credential; the host MUST match the dispatch-apiserver
 		// serving cert's IP SAN (dispatchIdentity, see helmInstallDispatch's pki.reflectorIP /
 		// dispatchApiserver.serviceIP).
@@ -528,13 +551,27 @@ func helmInstallPool(ctx context.Context, kubeconfig, clusterName, chartPath, di
 			"--set", "pki.underlayCIDRs="+underlayCIDRs,
 			"--set", "dispatchServer=https://["+dispatchIdentity+"]:6444",
 		)
-		// mTLS adds a serial startup chain to agent readiness (broker CSR -> dispatch signer ->
-		// intermediate Secret -> pool Issuer ready -> cert-manager mints the node leaf -> agent
-		// connects), so --wait needs more headroom than the plaintext path.
+		// mTLS adds a serial startup chain to agent readiness (broker enrolls with the token ->
+		// broker intermediate CSR -> dispatch signer -> intermediate Secret -> pool Issuer ready ->
+		// cert-manager mints the node leaf -> agent connects), so --wait needs more headroom than
+		// the plaintext path.
 		timeout = "12m"
 	}
 	args = append(args, "--wait", "--timeout", timeout)
 	return exec.Run(ctx, "helm", args...)
+}
+
+// retireBrokerCertificate deletes the cert-manager Certificate the pool chart used to mint the
+// broker's dispatch client certificate from (broker-dispatch-tls, issued by the pool intermediate).
+// The chart no longer renders it, but helm removes it only after the new broker may already have
+// written its dispatch-issued certificate into the same Secret, and cert-manager would re-mint over
+// that. A no-op once it is gone.
+func retireBrokerCertificate(ctx context.Context, r Runner, kubeconfig string) error {
+	if err := runnerOf(r).Run(ctx, "kubectl", "--kubeconfig", kubeconfig, "-n", "ectobase-system",
+		"delete", "certificates.cert-manager.io", "broker-dispatch-tls", "--ignore-not-found"); err != nil {
+		return fmt.Errorf("delete the old broker-dispatch-tls Certificate: %w", err)
+	}
+	return nil
 }
 
 // waitPoolsReady blocks until every compute pool reports status.phase == Ready
@@ -605,8 +642,8 @@ users:
 }
 
 // clusterPoolsManifest renders one cluster-scoped ClusterPool per compute cluster
-// (spec.region: eu). The broker Gets + heartbeats the pool; the agent stamps
-// status.nodePrefixes.
+// (spec.region: eu, spec.underlayPrefix: the cluster's underlay /48). The broker Gets + heartbeats
+// the pool; the agent stamps status.nodePrefixes.
 func clusterPoolsManifest(compute []ComputeCluster) string {
 	var b strings.Builder
 	for _, c := range compute {
@@ -626,10 +663,14 @@ metadata:
   name: %[1]s
 spec:
   region: eu
+  # The operator-declared underlay aggregate. The dispatch signer constrains this pool's route-bus
+  # intermediate to exactly this prefix (and denies one without it), and failover fences it whole.
+  underlayPrefix: "%[2]s"
 ---
 # Pre-created so this pool's route-bus access can be resourceNames-scoped: RBAC cannot scope
 # `+"`create`"+` by name, so the broker only ever get/updates its own RouteBusIdentity. The signer
-# leaves a stub with no spec.request alone until the broker fills in its CSR.
+# marks a stub with no spec.request Signed=False ("spec.poolName and spec.request are required")
+# and signs it once the broker files its CSR.
 apiVersion: platform.ectobase.dev/v1alpha1
 kind: RouteBusIdentity
 metadata:
@@ -693,12 +734,12 @@ kind: ClusterRole
 metadata:
   name: dispatch-broker-pool-%[1]s
 rules:
+  # The broker files its CSRs into spec.request (its route-bus intermediate) and spec.clientRequest
+  # (its dispatch client certificate), first with the bootstrap token, then with that certificate.
+  # Its status is the signer's alone: the broker only reads it (a plain get returns it) and accepts
+  # a certificate there only if it matches its key.
   - apiGroups: ["platform.ectobase.dev"]
     resources: ["routebusidentities"]
-    resourceNames: ["%[1]s"]
-    verbs: ["get", "update"]
-  - apiGroups: ["platform.ectobase.dev"]
-    resources: ["routebusidentities/status"]
     resourceNames: ["%[1]s"]
     verbs: ["get", "update"]
   # The pool reads its own ClusterPool and reports lease/capacity/fence facts onto its status.
@@ -727,7 +768,7 @@ subjects:
   - kind: ServiceAccount
     name: dispatch-broker-bootstrap-%[1]s
     namespace: system
-`, c.Name)
+`, c.Name, c.UnderlayCIDRs)
 	}
 	return b.String()
 }

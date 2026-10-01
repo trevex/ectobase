@@ -41,8 +41,10 @@ func TestFailover_RebindsOffLostPool(t *testing.T) {
 	c, ctx := startNetEnv(t)
 	const ns = "default"
 
-	// c1: lost — Unknown phase + stale lease (RenewTime an hour ago).
-	c1 := &platformv1.ClusterPool{ObjectMeta: metav1.ObjectMeta{Name: "c1"}}
+	// c1: lost — Unknown phase + stale lease (RenewTime an hour ago). Its declared underlay prefix
+	// is the only thing failover will fence.
+	c1 := &platformv1.ClusterPool{ObjectMeta: metav1.ObjectMeta{Name: "c1"},
+		Spec: platformv1.ClusterPoolSpec{UnderlayPrefix: "2001:db8:0:1::/64"}}
 	if err := c.Create(ctx, c1); err != nil {
 		t.Fatalf("create pool c1: %v", err)
 	}

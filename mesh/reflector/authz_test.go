@@ -17,11 +17,13 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+// peerCtx is a peer whose verified chain is a leaf with cn directly under a root.
 func peerCtx(cn string) context.Context {
 	cert := &x509.Certificate{Subject: pkix.Name{CommonName: cn}}
+	root := &x509.Certificate{Subject: pkix.Name{CommonName: "ectobase-ca"}}
 	return peer.NewContext(context.Background(), &peer.Peer{
 		AuthInfo: credentials.TLSInfo{State: tls.ConnectionState{
-			VerifiedChains: [][]*x509.Certificate{{cert}},
+			VerifiedChains: [][]*x509.Certificate{{cert, root}},
 		}},
 	})
 }

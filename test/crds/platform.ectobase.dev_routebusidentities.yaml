@@ -18,8 +18,10 @@ spec:
     schema:
       openAPIV3Schema:
         description: |-
-          RouteBusIdentity is a pool's route-bus intermediate-CA request + signed response, served
-          by the dispatch aggregated apiserver. The broker creates it; the dispatch signer fills status.
+          RouteBusIdentity is a pool's route-bus intermediate-CA request + signed response, and its
+          broker's dispatch client-certificate request + signed response, served by the dispatch
+          aggregated apiserver. The operator pre-creates it when enrolling the pool, the
+          broker files its CSR into it, and the dispatch signer fills status.
         properties:
           apiVersion:
             description: |-
@@ -50,21 +52,36 @@ spec:
               cert-manager — it is modelled as an ordinary identity named `edge`, permitted the edge loopback
               aggregate, and each edge agent mints its own leaf from that intermediate in process.
             properties:
+              clientRequest:
+                description: |-
+                  ClientRequest is a pool broker's PEM-encoded PKCS#10 CSR for its dispatch client
+                  certificate. The broker generates the key locally and keeps it. The signer uses only the
+                  CSR's public key: the certificate's subject is always CN=ectobase:cluster:<name>,
+                  O=ectobase:brokers, whatever the CSR asks for, with client-auth usage only. Only a pool (an
+                  identity named after a ClusterPool, not a fleet identity) gets one.
+                format: byte
+                type: string
               permittedUnderlayCIDRs:
                 description: |-
-                  PermittedUnderlayCIDRs are this identity's underlay IPv6 ranges — a pool's /48, or the edge
-                  loopback aggregate for the edge fleet. The signer name-constrains the intermediate to these
-                  so it can only mint leaves whose IP SAN falls inside them; the reflector then binds route
-                  nexthops to that SAN. This constraint, not the minting code, is what bounds a holder of the
-                  intermediate — which matters most for the edge, where an agent signs its own leaf locally.
+                  PermittedUnderlayCIDRs are the underlay ranges of a FLEET identity: one the dispatch-controller
+                  is told is not a pool (--routebus-fleet-identities, the dispatch chart's pki.fleetIdentities),
+                  such as the edge fleet (its loopback aggregate). The signer name-constrains that identity's
+                  intermediate to these, so it can only mint leaves whose IP SAN falls inside them; the
+                  reflector then binds route nexthops to that SAN. This constraint, not the minting code, is
+                  what bounds a holder of the intermediate, which matters most for the edge, where an agent
+                  signs its own leaf locally. Empty there means the signer denies the request.
+
+                  For a pool it is IGNORED: a pool's broker writes this object, so the signer constrains the
+                  pool's intermediate to its ClusterPool's spec.underlayPrefix instead, and only names any
+                  requested range outside that prefix in the Signed condition.
                 items:
                   type: string
                 type: array
               poolName:
                 description: |-
                   PoolName is the identity this intermediate belongs to — a ClusterPool name, or `edge` for
-                  the WAN edge fleet. The signed intermediate is name-constrained to it so it can only mint
-                  leaves within it.
+                  the WAN edge fleet. It must equal the object's name. The signed intermediate is
+                  name-constrained to it so it can only mint leaves within it.
                 type: string
               request:
                 description: |-
@@ -89,9 +106,17 @@ spec:
                   certificate (the CSR response).
                 format: byte
                 type: string
+              clientCertificate:
+                description: |-
+                  ClientCertificate is the PEM-encoded dispatch client certificate signed by the dispatch
+                  client CA in response to spec.clientRequest. The dispatch apiserver trusts only that CA for
+                  client certificates, never the route-bus root the pool intermediates chain to.
+                format: byte
+                type: string
               conditions:
-                description: Conditions represent the latest observations (e.g. Signed
-                  / Denied).
+                description: |-
+                  Conditions represent the latest observations: Signed for the intermediate, ClientSigned for
+                  the client certificate.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.

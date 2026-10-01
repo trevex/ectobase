@@ -145,3 +145,16 @@ func TestRIB_AnnouncedFrom_NamesEveryHolderInside(t *testing.T) {
 		t.Fatalf("want holders %v (sorted, only nexthops inside the prefix), got %v", want, got)
 	}
 }
+
+// A pool that declares spec.underlayPrefix is fenced, and asked about, as one aggregate. Nexthops
+// in ANY node /64 inside it count, by containment; one outside it does not.
+func TestRIB_AnnouncedFrom_PoolAggregateMatchesEveryNodeInside(t *testing.T) {
+	r := NewRIB()
+	r.Announce("nodeA", 100, "10.0.0.5/32", []string{"2001:db8:0:1::a"}, false)
+	r.Announce("nodeB", 100, "10.0.0.6/32", []string{"2001:db8:0:7::b"}, false)
+	r.Announce("other", 100, "10.0.0.7/32", []string{"2001:db9::c"}, false)
+	got := announcedFrom(t, r, "2001:db8::/48", key(100, "10.0.0.5/32"), key(100, "10.0.0.6/32"), key(100, "10.0.0.7/32"))
+	if !got["10.0.0.5/32"] || !got["10.0.0.6/32"] || got["10.0.0.7/32"] || len(got) != 2 {
+		t.Fatalf("want the two routes with nexthops inside the /48, got %v", got)
+	}
+}

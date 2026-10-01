@@ -30,10 +30,12 @@ pki:
   # locally ({tls.crt=intermediate, tls.key=pool key, ca.crt=root}); it backs the pool
   # cert-manager Issuer that mints per-node agent leaves, and carries the root the agent trusts.
   intermediateSecret: ectobase-pool-ca
-  # underlayCIDRs (comma-separated) are this pool's underlay range(s), e.g. its /48. The
-  # intermediate is IP-name-constrained to these so it can only mint node leaves whose IP SAN
-  # is inside the pool's underlay; the reflector then binds route nexthops to that SAN. The
-  # deployer sets this (the lab derives it from the cluster prefix). Empty => no IP constraint.
+  # underlayCIDRs (comma-separated) is ADVISORY. The broker sends it with its intermediate CSR,
+  # but the dispatch signer ignores it for a pool: the intermediate is IP-name-constrained to the
+  # pool's ClusterPool spec.underlayPrefix, which the operator sets on the dispatch when enrolling
+  # the pool, so it can only mint node leaves whose IP SAN is inside that prefix. A ClusterPool
+  # without spec.underlayPrefix gets no intermediate at all. A range given here that lies outside
+  # the prefix is only named in the RouteBusIdentity's Signed condition. Kept for compatibility.
   underlayCIDRs: ""
 # Control-plane API server the agent dials over the fabric (kubeconfig server URL).
 apiserverAddress: "https://[fd00:db8:0:1::1]:6443"
