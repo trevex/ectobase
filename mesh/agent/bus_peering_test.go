@@ -79,8 +79,8 @@ func TestPeeringImport_LocalPrecedence(t *testing.T) {
 	if nh, ok := dp.get(100, "10.1.0.5/32"); !ok || nh != "fd00::own" {
 		t.Fatalf("own route must win; got %q ok=%v", nh, ok)
 	}
-	if b.origin[100]["10.1.0.5/32"] != "own" {
-		t.Fatalf("origin must stay own; got %q", b.origin[100]["10.1.0.5/32"])
+	if b.programmed[100]["10.1.0.5/32"].origin != originOwn {
+		t.Fatalf("origin must stay own; got %q", b.programmed[100]["10.1.0.5/32"].origin)
 	}
 }
 
@@ -98,8 +98,8 @@ func TestPeeringImport_EvictAndRestore(t *testing.T) {
 	if nh, ok := dp.get(100, "10.1.0.5/32"); !ok || nh != "fd00::peer" {
 		t.Fatalf("peer import must install first; got %q ok=%v", nh, ok)
 	}
-	if b.origin[100]["10.1.0.5/32"] != "peer" {
-		t.Fatalf("origin must be peer after import; got %q", b.origin[100]["10.1.0.5/32"])
+	if b.programmed[100]["10.1.0.5/32"].origin != originPeer {
+		t.Fatalf("origin must be peer after import; got %q", b.programmed[100]["10.1.0.5/32"].origin)
 	}
 
 	// OWN route arrives -> evicts the import (overwrites with own nexthop).
@@ -107,8 +107,8 @@ func TestPeeringImport_EvictAndRestore(t *testing.T) {
 	if nh, ok := dp.get(100, "10.1.0.5/32"); !ok || nh != "fd00::own" {
 		t.Fatalf("own route must evict peer import; got %q ok=%v", nh, ok)
 	}
-	if b.origin[100]["10.1.0.5/32"] != "own" {
-		t.Fatalf("origin must flip to own after eviction; got %q", b.origin[100]["10.1.0.5/32"])
+	if b.programmed[100]["10.1.0.5/32"].origin != originOwn {
+		t.Fatalf("origin must flip to own after eviction; got %q", b.programmed[100]["10.1.0.5/32"].origin)
 	}
 
 	// OWN route withdraws -> the peer import is restored.
@@ -116,8 +116,8 @@ func TestPeeringImport_EvictAndRestore(t *testing.T) {
 	if nh, ok := dp.get(100, "10.1.0.5/32"); !ok || nh != "fd00::peer" {
 		t.Fatalf("peer import must be restored on own withdraw; got %q ok=%v", nh, ok)
 	}
-	if b.origin[100]["10.1.0.5/32"] != "peer" {
-		t.Fatalf("origin must be peer after restore; got %q", b.origin[100]["10.1.0.5/32"])
+	if b.programmed[100]["10.1.0.5/32"].origin != originPeer {
+		t.Fatalf("origin must be peer after restore; got %q", b.programmed[100]["10.1.0.5/32"].origin)
 	}
 	// Restore must also re-stamp deliveryVNI with the peer's origin vni (200), matching the
 	// original import — not the local table vni (100).
@@ -144,15 +144,15 @@ func TestPeeringImport_DualRoleVNIInstallsBoth(t *testing.T) {
 	if nh, ok := dp.get(100, "10.0.0.5/32"); !ok || nh != "fd00::nh" {
 		t.Fatalf("own install into A's table (vni=100) must happen; got %q ok=%v", nh, ok)
 	}
-	if b.origin[100]["10.0.0.5/32"] != "own" {
-		t.Fatalf("origin in A's table must be own; got %q", b.origin[100]["10.0.0.5/32"])
+	if b.programmed[100]["10.0.0.5/32"].origin != originOwn {
+		t.Fatalf("origin in A's table must be own; got %q", b.programmed[100]["10.0.0.5/32"].origin)
 	}
 	// Peer import into B's table (vni=200).
 	if nh, ok := dp.get(200, "10.0.0.5/32"); !ok || nh != "fd00::nh" {
 		t.Fatalf("peer import into B's table (vni=200) must ALSO happen; got %q ok=%v", nh, ok)
 	}
-	if b.origin[200]["10.0.0.5/32"] != "peer" {
-		t.Fatalf("origin in B's table must be peer; got %q", b.origin[200]["10.0.0.5/32"])
+	if b.programmed[200]["10.0.0.5/32"].origin != originPeer {
+		t.Fatalf("origin in B's table must be peer; got %q", b.programmed[200]["10.0.0.5/32"].origin)
 	}
 
 	// The withdraw must clear BOTH tables (assert via withdrew: the fake never deletes from `added`).

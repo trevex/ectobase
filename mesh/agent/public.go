@@ -139,7 +139,7 @@ type edgeLb struct {
 // each record repeatedly (every backend announces the same ports, and the reflector replays the
 // whole snapshot on every reconnect).
 //
-// Called only from the Bus Run goroutine (handleServerMsg), like the installed/origin bookkeeping,
+// Called only from the Bus Run goroutine (handleServerMsg), like the programmed-route bookkeeping,
 // so b.edgeLbs needs no lock.
 func (b *Bus) addLbBackend(ctx context.Context, pp *rbv1.PublicPrefix) {
 	lbIP := stripMask(pp.GetPrefix())

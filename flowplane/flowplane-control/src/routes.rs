@@ -122,9 +122,9 @@ impl<W: MapWriter> ControlCore<W> {
     /// overwrites it.
     ///
     /// A mesh route a self-route was holding back is lost here: the kernel never had it. The mesh
-    /// agent re-sends a route only when its route-bus session restarts (the subscribe replay) or
-    /// the prefix changes, so until then detaching that interface removes the key instead of
-    /// restoring the route.
+    /// agent re-sends every route it holds when the instance id ListInterfaces reports changes, so
+    /// it is back within one agent reconcile tick; until then detaching that interface removes the
+    /// key instead of restoring the route.
     pub fn adopt_routes(&mut self) {
         let orphan = |iv: Option<IfaceValue>, r: &RouteValue, vni: u32| {
             iv.is_some_and(|iv| {
