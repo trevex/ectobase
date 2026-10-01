@@ -468,3 +468,88 @@ func TestAPersistentlyFailingRouteBacksOff(t *testing.T) {
 		t.Fatalf("a recovered key must leave the tick quiet, got %d calls", got)
 	}
 }
+
+// peered is a desired state where vni 100 imports 10.2.0.0/16 from each of peers, in order.
+func peered(peers ...uint32) DesiredState {
+	ds := DesiredState{Subs: []uint32{100, 200, 300}, PeeringImports: map[uint32][]PeerImport{}}
+	for _, p := range peers {
+		ds.PeeringImports[100] = append(ds.PeeringImports[100], PeerImport{PeerVNI: p, ImportPrefixes: []string{"10.2.0.0/16"}})
+	}
+	return ds
+}
+
+// backOffImport leaves vni 100's import of 10.2.0.5/32 refused and well into its backoff: the
+// peer route moved to fd00::p2 and every AddRoute for the import fails.
+func backOffImport(t *testing.T, b *Bus, dp *recordingDP, ds DesiredState) {
+	t.Helper()
+	ctx := context.Background()
+	tick(t, b, ds)
+	b.apply(ctx, routeAdd(200, "10.2.0.5/32", "fd00::p1"))
+	if nh, ok := dp.get(100, "10.2.0.5/32"); !ok || nh != "fd00::p1" {
+		t.Fatalf("setup: the import must be programmed, got %q ok=%v", nh, ok)
+	}
+	failNextAdd(dp, 100, "10.2.0.5/32", 1000)
+	b.apply(ctx, routeAdd(200, "10.2.0.5/32", "fd00::p2"))
+	for range 4 {
+		tick(t, b, ds)
+	}
+	r := b.retries[routeRef{100, "10.2.0.5/32"}]
+	if r == nil || b.ticks+1 >= r.nextTick {
+		t.Fatalf("setup: the import must be backing off past the next tick, got %+v at tick %d", r, b.ticks)
+	}
+}
+
+// Revoking a peering is a security boundary: the import must leave the kernel on the very next
+// tick, even while the import's AddRoute is backing off. Backoff throttles retrying the route that
+// failed, never a withdraw.
+func TestARevokedPeeringIsWithdrawnAtOnceEvenWhileBackingOff(t *testing.T) {
+	dp := newRecordingDP()
+	b := NewBus("nodeA", selfNH, dp, false)
+	backOffImport(t, b, dp, peered(200))
+
+	tick(t, b, peered())
+	if !withdrewKey(dp, 100, "10.2.0.5/32") {
+		t.Fatal("the import of a revoked peering must be withdrawn on the next tick, backoff or not")
+	}
+}
+
+// A key backs off only while it still wants the route that failed: once the wanted route changes,
+// the new one goes out on the next tick.
+func TestANewWantedRouteIsNotHeldBackByTheOldOnesBackoff(t *testing.T) {
+	dp := newRecordingDP()
+	b := NewBus("nodeA", selfNH, dp, false)
+	b.apply(context.Background(), routeAdd(300, "10.2.0.5/32", "fd00::q"))
+	backOffImport(t, b, dp, peered(200, 300))
+
+	failNextAdd(dp, 100, "10.2.0.5/32", 0) // so the fake records the attempt's route
+	before := attempts(dp)
+	tick(t, b, peered(300, 200)) // vni 300's route now wins the key
+	if got := attempts(dp) - before; got != 1 {
+		t.Fatalf("the newly wanted route must be attempted on the next tick, got %d calls", got)
+	}
+	if got := lastAdd(dp, "10.2.0.5/32"); got == nil || got.vni != 100 || got.deliveryVNI != 300 {
+		t.Fatalf("the attempt must be the new route, got %+v", got)
+	}
+}
+
+// A key the bus withdrew after a full re-send queued it is neither wanted nor programmed: the
+// re-send skips it rather than spend a call on it.
+func TestAFullResendSkipsKeysForgottenSinceItWasQueued(t *testing.T) {
+	ctx := context.Background()
+	dp := newRecordingDP()
+	dp.instanceID = "boot-1"
+	b := NewBus("nodeA", selfNH, dp, false)
+	tick(t, b, subs(100))
+	learnRoutes(b, routeCallsPerTick+10)
+
+	dp.restart()
+	tick(t, b, subs(100))
+	for i := range routeCallsPerTick + 10 {
+		b.apply(ctx, routeWithdraw(100, fmt.Sprintf("1.9.%d.%d/32", i/250, i%250+1)))
+	}
+	before := attempts(dp)
+	tick(t, b, subs(100))
+	if got := attempts(dp) - before; got != 0 {
+		t.Fatalf("a re-send must skip keys neither wanted nor programmed, got %d calls", got)
+	}
+}

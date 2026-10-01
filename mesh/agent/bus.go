@@ -276,9 +276,12 @@ const retrySummaryTicks = 12
 // replays and prunes them anyway.
 const unsubscribeAfterTicks = 3
 
-// routeRetry is a key whose last dataplane call failed: how often in a row, the first tick it may
-// be retried on, and the error, for the summary.
+// routeRetry is a key whose last dataplane call failed: the route that call was for (want, or a
+// withdraw when !wantOK), how often in a row, the first tick it may be retried on, and the error,
+// for the summary. The backoff is for that one call: see backingOff.
 type routeRetry struct {
+	want      dpRoute
+	wantOK    bool
 	failures  int
 	nextTick  int
 	lastError string
@@ -714,7 +717,7 @@ func (b *Bus) resyncRoutes(ctx context.Context) {
 		if budget == 0 {
 			return
 		}
-		if r := b.retries[k]; r != nil && b.ticks < r.nextTick {
+		if r := b.retries[k]; r != nil && b.backingOff(k, r) {
 			continue
 		}
 		sent, err := b.syncKey(ctx, k.Vni, k.Prefix, false)
@@ -729,6 +732,13 @@ func (b *Bus) resyncRoutes(ctx context.Context) {
 	for len(b.resendQueue) > 0 && budget > 0 {
 		k := b.resendQueue[0]
 		b.resendQueue = b.resendQueue[1:]
+		if _, ok := b.desiredRoute(k.Vni, k.Prefix); !ok {
+			// Withdrawn since it was queued, and not programmed: nothing to re-send. A held key is
+			// still withdrawn, since flowplane's shadow may keep a route for it this agent never sent.
+			if _, had := b.programmed[k.Vni][k.Prefix]; !had && !b.localHosts[k.Vni][k.Prefix] {
+				continue
+			}
+		}
 		sent, err := b.syncKey(ctx, k.Vni, k.Prefix, true)
 		if sent {
 			budget--
@@ -1161,7 +1171,7 @@ func (b *Bus) syncKey(ctx context.Context, vni uint32, prefix string, force bool
 			return false, nil
 		}
 		if err := b.dp.WithdrawRoute(ctx, vni, prefix); err != nil {
-			b.noteFailure(k, fmt.Sprintf("WithdrawRoute vni=%d %s", vni, prefix), err)
+			b.noteFailure(k, fmt.Sprintf("WithdrawRoute vni=%d %s", vni, prefix), err, dpRoute{}, false)
 			b.setProgrammed(vni, prefix, dpRoute{})
 			return true, err
 		}
@@ -1174,7 +1184,7 @@ func (b *Bus) syncKey(ctx context.Context, vni uint32, prefix string, force bool
 	}
 	if err := b.dp.AddRoute(ctx, vni, prefix, want.nexthop, want.external, want.deliveryVNI); err != nil {
 		b.noteFailure(k, fmt.Sprintf("AddRoute vni=%d %s -> %s external=%t delivery=%d (%s)",
-			vni, prefix, want.nexthop, want.external, want.deliveryVNI, want.origin), err)
+			vni, prefix, want.nexthop, want.external, want.deliveryVNI, want.origin), err, want, true)
 		b.setProgrammed(vni, prefix, dpRoute{})
 		return true, err
 	}
@@ -1183,19 +1193,20 @@ func (b *Bus) syncKey(ctx context.Context, vni uint32, prefix string, force bool
 	return true, nil
 }
 
-// noteFailure logs a failed call and backs the key off. An unreachable dataplane is not the key's
-// fault: it is logged each time, as before, and not backed off, so the key goes out as soon as the
-// dataplane is back. Any other failure — the dataplane refused this route — is logged once, when
-// the key starts failing or fails differently, and retried 1, 2, 4, ... ticks later, up to
-// retryMaxTicks apart; the summary keeps it visible meanwhile.
-func (b *Bus) noteFailure(k routeRef, call string, err error) {
+// noteFailure logs a failed call — for want, or a withdraw when !wantOK — and backs the key off.
+// An unreachable dataplane is not the key's fault: it is logged each time, as before, and not backed
+// off, so the key goes out as soon as the dataplane is back. Any other failure — the dataplane
+// refused this route — is logged once, when the key starts failing or fails differently, and
+// retried 1, 2, 4, ... ticks later, up to retryMaxTicks apart; the summary keeps it visible
+// meanwhile. A failure for a different route than the last starts the count over.
+func (b *Bus) noteFailure(k routeRef, call string, err error, want dpRoute, wantOK bool) {
 	if transientDataplaneError(err) {
 		log.Printf("%s: %v", call, err)
 		return
 	}
 	r := b.retries[k]
-	if r == nil {
-		r = &routeRetry{}
+	if r == nil || r.want != want || r.wantOK != wantOK {
+		r = &routeRetry{want: want, wantOK: wantOK}
 		b.retries[k] = r
 	}
 	r.failures++
@@ -1204,6 +1215,23 @@ func (b *Bus) noteFailure(k routeRef, call string, err error) {
 		r.lastError = msg
 		log.Printf("%s: %v — retrying with backoff", call, err)
 	}
+}
+
+// backingOff reports whether k is still waiting out its backoff. It waits only while the key wants
+// the very route whose AddRoute failed. A key that wants nothing any more never waits: that
+// withdraw may be a peering revoked, a VNI that no longer needs egress or one forgotten, and a
+// cross-VPC route must not outlive its peering by a backoff. A key that wants a different route
+// starts over, so the new route goes out at once.
+func (b *Bus) backingOff(k routeRef, r *routeRetry) bool {
+	want, ok := b.desiredRoute(k.Vni, k.Prefix)
+	if !ok {
+		return false
+	}
+	if !r.wantOK || want != r.want {
+		delete(b.retries, k)
+		return false
+	}
+	return b.ticks < r.nextTick
 }
 
 // noteSuccess ends a key's backoff, logging the recovery if it had been failing.
