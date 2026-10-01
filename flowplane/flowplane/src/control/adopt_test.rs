@@ -21,7 +21,8 @@ use aya::maps::lpm_trie::{Key, LpmTrie};
 use aya::maps::{of_maps::HashOfMaps, Array, HashMap as AyaHashMap, MapData};
 use aya::programs::{SchedClassifier, TcAttachType};
 use flowplane_common::{
-    FwBind, FwPolKey, NatOwner, NatOwnerKey, NatOwnerKey6, RouteLpmData, RouteLpmData6, RouteValue,
+    FwBind, FwPolKey, LbBackend, LbKey, LbKey6, LbValue, MaglevKey, NatOwner, NatOwnerKey,
+    NatOwnerKey6, RouteLpmData, RouteLpmData6, RouteValue,
 };
 
 use super::{hex_encode, Control, IfaceParams};
@@ -162,6 +163,69 @@ fn drop_nat_owner_pinned(pin: &Path, (plen, key, _): (u32, NatOwnerKey, NatOwner
     nat_owners_trie(pin, "NAT_OWNERS")
         .remove(&Key::new(plen, key))
         .expect("remove one NAT_OWNERS prefix");
+}
+
+/// The pinned `LB{,6}` service rows as `"address:port" -> table id`.
+fn lb_tables_pinned(pin: &Path) -> std::collections::BTreeMap<String, u32> {
+    let open = |name: &str| {
+        let map = MapData::from_pin(pin.join(name)).expect("reopen pinned LB map");
+        aya::maps::Map::HashMap(map)
+    };
+    let mut out = std::collections::BTreeMap::new();
+    let lb: AyaHashMap<_, LbKey, LbValue> = AyaHashMap::try_from(open("LB")).expect("LB");
+    for r in lb.iter() {
+        let (k, v) = r.expect("walk LB");
+        let ip = std::net::Ipv4Addr::from(k.ipv4);
+        out.insert(format!("{ip}:{}", k.port), v.table_id);
+    }
+    let lb6: AyaHashMap<_, LbKey6, LbValue> = AyaHashMap::try_from(open("LB6")).expect("LB6");
+    for r in lb6.iter() {
+        let (k, v) = r.expect("walk LB6");
+        let ip = std::net::Ipv6Addr::from(k.ipv6);
+        out.insert(format!("{ip}:{}", k.port), v.table_id);
+    }
+    out
+}
+
+/// The pinned `MAGLEV` slots, keyed `(table id, slot)`.
+fn maglev_pinned(pin: &Path) -> std::collections::BTreeMap<(u32, u32), LbBackend> {
+    let map = MapData::from_pin(pin.join("MAGLEV")).expect("reopen pinned MAGLEV");
+    let map: AyaHashMap<_, MaglevKey, LbBackend> =
+        AyaHashMap::try_from(aya::maps::Map::HashMap(map)).expect("MAGLEV is a hash map");
+    map.iter()
+        .map(|r| {
+            let (k, b) = r.expect("walk MAGLEV");
+            ((k.table_id, k.slot), b)
+        })
+        .collect()
+}
+
+/// An edge load balancer as the mesh agent registers it: id == its address, WAN VNI 0.
+fn add_lb(ctl: &Control, ip: &str, backend_overlay_ip: &str) {
+    let lb = pb::AddLoadBalancerRequest {
+        id: ip.into(),
+        vni: 0,
+        ip: ip.into(),
+        lb_underlay: "fd00::1".into(),
+        ports: vec![pb::PortProto {
+            port: 443,
+            proto: 6,
+        }],
+    };
+    ctl.with_core(|c| handlers::add_load_balancer(c, &lb))
+        .expect("add_load_balancer");
+    add_lb_backend(ctl, ip, backend_overlay_ip);
+}
+
+fn add_lb_backend(ctl: &Control, ip: &str, backend_overlay_ip: &str) {
+    let backend = pb::AddLbBackendRequest {
+        id: ip.into(),
+        backend_underlay: "fd00::99".into(),
+        backend_overlay_ip: backend_overlay_ip.into(),
+        backend_vni: 7,
+    };
+    ctl.with_core(|c| handlers::add_lb_backend(c, &backend))
+        .expect("add_lb_backend");
 }
 
 fn replace_fw(ctl: &Control, rules: Vec<pb::FwRuleSpec>) {
@@ -351,6 +415,13 @@ fn restart_adopts_pinned_state_and_relinks_guests() {
     );
     assert_eq!(routes_pinned(pin.path()), vec![self_route, r61]);
     assert_eq!(routes6_pinned(pin.path()), vec![r6]);
+
+    // A load balancer per family, each with a backend.
+    add_lb(&ctl, "203.0.113.50", "10.0.0.61");
+    add_lb(&ctl, "2001:db8:50::1", "10.0.0.62");
+    let lb_tables = lb_tables_pinned(pin.path());
+    let maglev = maglev_pinned(pin.path());
+    assert_eq!(lb_tables.len(), 2, "{lb_tables:?}");
 
     // The process "exits": every fd and in-memory structure goes, only pins remain.
     drop(ctl);
@@ -626,6 +697,33 @@ fn restart_adopts_pinned_state_and_relinks_guests() {
         .expect("withdraw the self-route's key again");
     assert!(!removed, "a self-route is not adopted as a route");
     assert_eq!(routes_pinned(pin.path()), vec![self_route]);
+
+    // The load balancers came back through adopt. A new one gets a table of its own: with the
+    // table-id counter back at 1 it was handed the first LB's, and took that LB's traffic.
+    add_lb(&ctl, "198.51.100.50", "10.0.0.63");
+    let new_table = lb_tables_pinned(pin.path())["198.51.100.50:443"];
+    assert!(
+        lb_tables.values().all(|&t| t != new_table),
+        "table {new_table} is already live: {lb_tables:?}"
+    );
+    let now = maglev_pinned(pin.path());
+    assert!(
+        maglev.iter().all(|(k, b)| now.get(k) == Some(b)),
+        "the adopted tables are untouched"
+    );
+    // The agent, which kept running, still manages them by address: a new backend lands, and the
+    // deletes take every row and table with them.
+    add_lb_backend(&ctl, "203.0.113.50", "10.0.0.64");
+    for ip in ["203.0.113.50", "2001:db8:50::1", "198.51.100.50"] {
+        let del = pb::DelLoadBalancerRequest { id: ip.into() };
+        ctl.with_core(|c| handlers::del_load_balancer(c, &del))
+            .expect("del_load_balancer");
+    }
+    assert!(
+        lb_tables_pinned(pin.path()).is_empty(),
+        "no service row left"
+    );
+    assert!(maglev_pinned(pin.path()).is_empty(), "no table left");
 
     // Increment 1's gap, closed. Adopt cannot tell whether a block it found in the trie is still
     // wanted: if the agent restarted too it withdraws only what it installed itself, so a block
