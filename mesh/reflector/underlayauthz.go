@@ -6,6 +6,7 @@ package reflector
 import (
 	"context"
 	"net"
+	"net/netip"
 
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/peer"
@@ -76,4 +77,14 @@ func (g underlayGuard) permits(underlay string) bool {
 		}
 	}
 	return false
+}
+
+// hostAddr returns the address of a single-address prefix ("fd00::e/128" -> "fd00::e"), or "" when
+// prefix is not one, which permits rejects whenever the guard enforces.
+func hostAddr(prefix string) string {
+	p, err := netip.ParsePrefix(prefix)
+	if err != nil || !p.IsSingleIP() {
+		return ""
+	}
+	return p.Addr().String()
 }

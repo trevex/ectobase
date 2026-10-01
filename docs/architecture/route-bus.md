@@ -129,14 +129,16 @@ from announcing another's. Sessions are mutually authenticated with TLS, and eac
 certificate carries its node name as the CN and its VTEP as the only IP SAN.
 
 On every session the reflector builds an **underlay guard** (`underlayGuard` in
-`mesh/reflector/underlayauthz.go`) from the verified certificate's IP SANs. It rejects any `Announce`
-whose primary nexthop (`nexthop_underlay`), and any `AnnounceNat` or `AnnouncePublic` whose owner, is
-not exactly one of those addresses. A rejected announce is logged and dropped; the session stays up.
+`mesh/reflector/underlayauthz.go`) from the verified certificate's IP SANs. Every underlay address an
+announce carries must be exactly one of those addresses:
 
-!!! warning "Known gap: extra nexthops"
-    `Announce` also has an `extra_nexthops` field, which the protocol marks as carried but not yet
-    used and agents never set. The reflector stores those addresses without the guard's check
-    (`mesh/reflector/server.go`), so today the check covers only the primary nexthop.
+- every nexthop of an `Announce`, the primary (`nexthop_underlay`) and each of `extra_nexthops`;
+- the owner of an `AnnounceNat` or `AnnouncePublic`;
+- the prefix of an `EDGE_UNDERLAY` record, which is the edge's anycast underlay `/128`.
+
+A rejected announce is logged with the offending address and dropped whole; the session stays up. An
+`Announce` with one bad extra nexthop is rejected entirely rather than stored with the bad nexthop
+removed, so a route never reaches the RIB with only part of the nexthop set its speaker sent.
 
 The match is exact, not a prefix match, for two reasons:
 
