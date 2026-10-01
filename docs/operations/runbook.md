@@ -23,8 +23,9 @@ those away: each one is there because the problem came back without it.
 
 ## A pool that will not let go
 
-A fence (a reflector route fence plus a Ceph `NetworkFence` on a node's /64) is how failover
-isolates a lost pool. When the pool comes back, the `dispatch-controller` lifts each fence only
+A fence (a reflector route fence plus a Ceph `NetworkFence` on the pool's declared
+`spec.underlayPrefix`) is how failover isolates a lost pool. A pool without that prefix is never
+fenced: its VMs stay put with `FailoverBlocked`. When the pool comes back, the `dispatch-controller` lifts each fence only
 once it can show that doing so is safe, and it fails closed. A pool whose `status.fencedPrefixes`
 stays non-empty after recovery is a pool where one of those proofs has not arrived. This entry is
 the quick check of which one; the diagnosis and the remedies for each case are in
@@ -36,14 +37,14 @@ Start with the pool's status on the dispatch:
 kubectl get clusterpools.platform.ectobase.dev <pool> -o yaml
 ```
 
-The release code (`releaseDrained` in `dispatch/pkg/failover/failover.go`) lifts a fenced /64
+The release code (`releaseDrained` in `dispatch/pkg/failover/failover.go`) lifts a fenced prefix
 only when every row of this table holds. Walk it top to bottom.
 
 | Check | Where to look | When it fails |
 |---|---|---|
 | The pool is reachable | `status.phase` is `Ready` and `status.lease.renewTime` is under 30 seconds old | Nothing is released at all. The broker (`dispatch-broker`) is not renewing its lease. |
-| The broker reports the /64 drained | `status.nodeDrain[]` has `drained: true` for that prefix | The broker still sees a VM running on a node in that /64, or cannot list where VMs run and leaves its previous report in place. While the pool was lost the controller marked every entry not drained, so only a report made after recovery counts. |
-| No route from the /64 is still announced for an address placed on another pool | condition `FenceReleaseBlocked` is `True` with reason `RoutesStillAnnounced` | A node in the /64 still announces a moved workload's address. The message names each route: VNI, prefix, announcing node, nexthop and the owning NIC. |
+| The broker reports the prefix drained | `status.nodeDrain[]` has `drained: true` for that prefix | The broker still sees a VM running on a node whose /64 lies inside it, or cannot list where VMs run and leaves its previous report in place. While the pool was lost the controller marked every entry not drained, so only a report made after recovery counts. |
+| No route from inside the prefix is still announced for an address placed on another pool | condition `FenceReleaseBlocked` is `True` with reason `RoutesStillAnnounced` | A node inside the prefix still announces a moved workload's address. The message names each route: VNI, prefix, announcing node, nexthop and the owning NIC. |
 | The route check itself works | condition `FenceReleaseBlocked` is `True` with reason `RouteCheckFailed` | The check could not run. The message says why: `reflectorAdmin` is empty (message: no route reflector configured); the reflector is unreachable; it runs an image without `AnnouncedFrom` and answers `Unimplemented`, which happens when the reflector lags the controller during an upgrade ([Upgrade order](deploy-helm.md#upgrade-order)); or the `CompiledNIC` twins could not be listed. |
 | Both fences confirm the release | the prefix's `NetworkFence`: `spec.fenceState`, `status.result`, `status.message` | The storage release returns only after csi-addons reports `unfencing operation successful`; until then the prefix stays fenced and the pass retries. The controller does not log a pending or failed release, so read the `NetworkFence` itself. |
 

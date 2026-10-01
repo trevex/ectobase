@@ -45,7 +45,7 @@ func (o *ClusterPool) ValidateUpdate(ctx context.Context, old runtime.Object) fi
 	return o.Validate(ctx)
 }
 
-// validateUnderlayPrefix accepts an empty prefix (failover falls back to the node /64s; the signer
+// ValidateUnderlayPrefix accepts an empty prefix (failover then neither fences nor rebinds; the signer
 // denies the pool its intermediate) or a canonical CIDR of a sane length. Canonical means exactly
 // the spelling netip prints, with no host bits: the prefix is compared as a string in places
 // (status.fencedPrefixes, NetworkFence names), so two spellings of one prefix must not exist.

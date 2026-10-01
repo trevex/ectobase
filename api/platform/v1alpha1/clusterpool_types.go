@@ -34,12 +34,11 @@ type ClusterPoolSpec struct {
 	// entity it bounds. A fenced pool is by definition the one you have lost contact with, and a
 	// constraint the pool chooses itself constrains nothing.
 	//
-	// When empty, failover falls back to the broker-reported node /64s, which is only safe while
-	// every node in the cluster shares one /64 (each node's identity being a /128 inside it). If
-	// the reported set contains MORE than one distinct /64, the cluster spans /64s, an unobserved
-	// node could sit in an unreported one. Failover then fences the /64s it knows about but blocks
-	// the rebind, because fencing incompletely must not reattach a disk an unfenced node may still
-	// write to. Set this field to unblock it. See docs/architecture/failover.md.
+	// It is the ONLY coordinate failover fences: broker-reported status.nodePrefixes never are. A
+	// pool that declares no prefix (or one that fails these rules, stored before they existed) is
+	// neither fenced nor rebound when lost; failover blocks its VMs with FailoverBlocked. A reported
+	// node prefix outside the declared one also blocks the rebind, since the prefix then may miss a
+	// node. See docs/architecture/failover.md.
 	// +optional
 	UnderlayPrefix string `json:"underlayPrefix,omitempty" protobuf:"bytes,3,opt,name=underlayPrefix"`
 }
@@ -61,12 +60,14 @@ type ClusterPoolStatus struct {
 	// Lease is the broker heartbeat; a stale RenewTime drives Phase to Unknown.
 	// +optional
 	Lease *ClusterPoolLease `json:"lease,omitempty" protobuf:"bytes,4,opt,name=lease"`
-	// NodePrefixes is the set of node /64 underlay prefixes composing this cluster,
-	// reported by the broker. The dispatch fences these (Ceph NetworkFence + route
-	// blocklist) to evacuate a lost pool without reaching it.
+	// NodePrefixes is the set of node /64 underlay prefixes composing this cluster, reported by
+	// the broker. They key the drain report. They are never fenced: the pool writes them itself,
+	// so failover fences only spec.underlayPrefix, and a reported prefix outside it blocks the
+	// rebind.
 	// +optional
 	NodePrefixes []string `json:"nodePrefixes,omitempty" protobuf:"bytes,5,rep,name=nodePrefixes"`
-	// FencedPrefixes is the subset of NodePrefixes the dispatch has fenced (evacuation).
+	// FencedPrefixes are the prefixes the dispatch has fenced (spec.underlayPrefix) while
+	// evacuating the pool; recovery releases them.
 	// +optional
 	FencedPrefixes []string `json:"fencedPrefixes,omitempty" protobuf:"bytes,6,rep,name=fencedPrefixes"`
 	// NodeDrain reports, per fenced /64, whether the returning broker has confirmed

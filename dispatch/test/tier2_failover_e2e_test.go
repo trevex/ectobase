@@ -37,8 +37,10 @@ func TestTier2_Failover_FenceRebindRelease(t *testing.T) {
 	const ns = "default"
 	const prefix = "2001:db8:0:1::/64"
 
-	// pool-a: lost — Unknown phase + a lease that renewed 10 minutes ago.
-	poolA := &platformv1.ClusterPool{ObjectMeta: metav1.ObjectMeta{Name: "pool-a"}}
+	// pool-a: lost — Unknown phase + a lease that renewed 10 minutes ago. It declares prefix as its
+	// underlay, the only coordinate failover fences.
+	poolA := &platformv1.ClusterPool{ObjectMeta: metav1.ObjectMeta{Name: "pool-a"},
+		Spec: platformv1.ClusterPoolSpec{UnderlayPrefix: prefix}}
 	if err := c.Create(ctx, poolA); err != nil {
 		t.Fatalf("create poolA: %v", err)
 	}

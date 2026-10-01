@@ -35,7 +35,7 @@ const (
 
 // fenceName mirrors dispatch/pkg/fence/storage.go fenceName(): "ectobase-" +
 // prefix with ':' -> '-', '/' -> '--', '.' -> '-'. Used to look up the csi-addons
-// NetworkFence CR for a fenced prefix (a node /64 or a pool aggregate) by name.
+// NetworkFence CR for a fenced prefix (the pool's declared underlay aggregate) by name.
 func fenceName(prefix string) string {
 	r := strings.NewReplacer(":", "-", "/", "--", ".", "-")
 	return "ectobase-" + r.Replace(prefix)
@@ -165,15 +165,12 @@ func TestTier2Failover(t *testing.T) {
 	t.Logf("protected disk on k02: image=%s handle=%s pool=%s", srcImage, srcHandle, pool)
 
 	// --- Phase 6: k02 fence coordinate ----------------------------------------------
-	// The declared underlay aggregate when the pool has one (failover then fences it whole, see
-	// failover.fenceCoverage), else the one reported node /64.
+	// The declared underlay aggregate: the only coordinate failover fences (see
+	// failover.fenceCoverage). Without it the pool is neither fenced nor rebound, and this test has
+	// nothing to observe.
 	k02Prefix, err := poolField(ctx, cfg, "k02", "{.spec.underlayPrefix}")
 	require.NoError(t, err, "read k02 spec.underlayPrefix")
-	if k02Prefix == "" {
-		k02Prefix, err = poolField(ctx, cfg, "k02", "{.status.nodePrefixes[0]}")
-		require.NoError(t, err, "read k02 nodePrefixes[0]")
-	}
-	require.NotEmpty(t, k02Prefix, "k02 fence coordinate (spec.underlayPrefix or nodePrefixes[0]) empty")
+	require.NotEmpty(t, k02Prefix, "k02 declares no spec.underlayPrefix (the lab sets its /48), so failover would not fence it")
 	fenceCR := fenceName(k02Prefix)
 	// The blocklist entries are client addresses inside the fenced prefix; match its leading
 	// hextets (strip the /len, then a trailing :: or :).

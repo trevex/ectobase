@@ -166,8 +166,8 @@ must be a DNS-1123 label of at most 58 characters, leaving `pool-<name>` a legal
 
 The spec is set by the operator at enrollment: `region`, `endpoint`, and `underlayPrefix`, the
 aggregate that contains every node's underlay address. A pool needs `underlayPrefix` to join the
-route bus, because it is the IP constraint of the pool's route-bus intermediate. It also lets
-failover fence the whole pool by one prefix instead of the node /64s it has seen. The status is
+route bus, because it is the IP constraint of the pool's route-bus intermediate. It is also the
+only prefix failover fences: a pool without it is neither fenced nor rebound when lost. The status is
 written by others. The broker reports `lease`, `allocatable`, `nodePrefixes` and `nodeDrain`; the
 `dispatch-controller` derives `phase` (`Pending`, `Ready` or `Unknown`) from the lease and records
 `fencedPrefixes` when it fences the pool.

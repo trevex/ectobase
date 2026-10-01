@@ -241,7 +241,7 @@ metadata:
 spec:
   fenceState: Fenced
   driver: rbd.csi.ceph.com                # --csi-driver
-  cidrs: ["fd00:cafe:1a2b:1::/64"]        # a node /64, or the pool's spec.underlayPrefix
+  cidrs: ["fd00:cafe:1a2b:1::/64"]        # the pool's spec.underlayPrefix
   secret:
     name: rook-csi-rbd-provisioner        # --csi-secret-name
     namespace: rook-ceph                  # --csi-secret-namespace

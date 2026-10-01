@@ -31,12 +31,11 @@ type ClusterPoolSpecApplyConfiguration struct {
 	// entity it bounds. A fenced pool is by definition the one you have lost contact with, and a
 	// constraint the pool chooses itself constrains nothing.
 	//
-	// When empty, failover falls back to the broker-reported node /64s, which is only safe while
-	// every node in the cluster shares one /64 (each node's identity being a /128 inside it). If
-	// the reported set contains MORE than one distinct /64, the cluster spans /64s, an unobserved
-	// node could sit in an unreported one. Failover then fences the /64s it knows about but blocks
-	// the rebind, because fencing incompletely must not reattach a disk an unfenced node may still
-	// write to. Set this field to unblock it. See docs/architecture/failover.md.
+	// It is the ONLY coordinate failover fences: broker-reported status.nodePrefixes never are. A
+	// pool that declares no prefix (or one that fails these rules, stored before they existed) is
+	// neither fenced nor rebound when lost; failover blocks its VMs with FailoverBlocked. A reported
+	// node prefix outside the declared one also blocks the rebind, since the prefix then may miss a
+	// node. See docs/architecture/failover.md.
 	UnderlayPrefix *string `json:"underlayPrefix,omitempty"`
 }
 

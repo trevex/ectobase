@@ -19,7 +19,7 @@ type ClusterPoolSpec struct {
 	// prefix instead of enumerating broker-reported node /64s, so a node it never observed (one that
 	// joined while the pool was unreachable) is fenced too. It is also the exact IP constraint of
 	// the pool's route-bus intermediate CA, so a pool cannot join the route bus without it. See the
-	// v1alpha1 type for the full rationale and the failover fallback when it is empty.
+	// v1alpha1 type for the full rationale. Without it a pool is neither fenced nor rebound.
 	UnderlayPrefix string
 }
 
@@ -33,9 +33,9 @@ type ClusterPoolStatus struct {
 	Allocatable corev1.ResourceList
 	// Lease is the broker heartbeat; a stale RenewTime drives Phase to Unknown.
 	Lease *ClusterPoolLease
-	// NodePrefixes is the set of node /64 underlay prefixes composing this cluster.
+	// NodePrefixes is the set of node /64 underlay prefixes composing this cluster (never fenced).
 	NodePrefixes []string
-	// FencedPrefixes is the subset of NodePrefixes central has fenced.
+	// FencedPrefixes are the prefixes the dispatch has fenced (spec.underlayPrefix).
 	FencedPrefixes []string
 	// NodeDrain reports per-/64 drain confirmation gating fence release.
 	NodeDrain []NodeDrainStatus
