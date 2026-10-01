@@ -19,9 +19,6 @@ ClusterPool is an attached cluster exposed as a schedulable capacity domain.
 
 
 
-_Appears in:_
-- [ClusterPoolList](#clusterpoollist)
-
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `metadata` _[ObjectMeta](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30/#objectmeta-v1-meta)_ | Refer to Kubernetes API documentation for fields of `metadata`. |  |  |
@@ -114,9 +111,6 @@ RouteBusIdentity is a pool's route-bus intermediate-CA request + signed response
 by the dispatch aggregated apiserver. The broker creates it; the dispatch signer fills status.
 
 
-
-_Appears in:_
-- [RouteBusIdentityList](#routebusidentitylist)
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |

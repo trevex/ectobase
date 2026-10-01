@@ -12,7 +12,6 @@ and consumed as CRDs by the mesh control plane.
 
 ### Resource Types
 - [Volume](#volume)
-- [VolumeList](#volumelist)
 
 
 
@@ -51,9 +50,6 @@ _Appears in:_
 Volume is a persistent RBD-backed disk referenced by a VirtualMachine.
 
 
-
-_Appears in:_
-- [VolumeList](#volumelist)
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |

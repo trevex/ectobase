@@ -12,12 +12,9 @@ served by the aggregated apiserver and consumed as CRDs by the mesh control plan
 
 ### Resource Types
 - [CompiledContainer](#compiledcontainer)
-- [CompiledContainerList](#compiledcontainerlist)
 - [CompiledNIC](#compilednic)
 - [CompiledVM](#compiledvm)
-- [CompiledVMList](#compiledvmlist)
 - [CompiledVolumeAttachment](#compiledvolumeattachment)
-- [CompiledVolumeAttachmentList](#compiledvolumeattachmentlist)
 
 
 
@@ -45,9 +42,6 @@ _Appears in:_
 CompiledContainer is the lowered pod intent for a Container.
 
 
-
-_Appears in:_
-- [CompiledContainerList](#compiledcontainerlist)
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
@@ -240,9 +234,6 @@ It is produced by the Compile() function from a NetworkInterface + matching Netw
 
 
 
-_Appears in:_
-- [CompiledNICList](#compiledniclist)
-
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `apiVersion` _string_ | `compiled.ectobase.dev/v1alpha1` | | |
@@ -353,9 +344,6 @@ CompiledVM is the lowered boot intent for a scheduled VirtualMachine.
 
 
 
-_Appears in:_
-- [CompiledVMList](#compiledvmlist)
-
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `apiVersion` _string_ | `compiled.ectobase.dev/v1alpha1` | | |
@@ -454,9 +442,6 @@ _Appears in:_
 CompiledVolumeAttachment binds one Volume to one VM on a cluster.
 
 
-
-_Appears in:_
-- [CompiledVolumeAttachmentList](#compiledvolumeattachmentlist)
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
@@ -573,7 +558,7 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `type` _[PortType](#porttype)_ | Type is the port type (e.g. tap or vf). |  | Enum: [tap vf] <br /> |
+| `type` _[PortType](#porttype)_ | Type is the port type (e.g. tap or vf). |  | Enum: \[tap vf] <br /> |
 | `name` _string_ | Name is the host-side interface name (e.g. dtapvf_0) for tap ports. |  | Optional: \{\} <br /> |
 | `pciAddress` _string_ | PCIAddress is the PCI address for vf ports. |  | Optional: \{\} <br /> |
 
@@ -585,7 +570,7 @@ _Underlying type:_ _string_
 PortType is the kind of dataplane port backing a NetworkInterface.
 
 _Validation:_
-- Enum: [tap vf]
+- Enum: \[tap vf]
 
 _Appears in:_
 - [PortStatus](#portstatus)

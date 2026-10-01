@@ -32,11 +32,12 @@ docs-serve: ## Serve the docs with live reload at http://127.0.0.1:8000/
 	zensical serve
 
 .PHONY: docs-crd-ref
-docs-crd-ref: ## Generate the per-group CRD API reference (crd-ref-docs)
+docs-crd-ref: ## Generate the per-group CRD API reference (crd-ref-docs, then: drop links to the *List types it never renders, escape non-link brackets)
 	@for g in net compute storage compiled platform; do \
 	  echo "crd-ref-docs -> docs/reference/api/$$g.md"; \
 	  crd-ref-docs --source-path=api/$$g/v1alpha1 --config=crd-ref-docs.yaml \
 	    --renderer=markdown --output-path=docs/reference/api/$$g.md ; \
+	  perl -0pi -e 's/^- \[\w+List\]\(#\w+list\)\n//mg; s/_Appears in:_\n\n(?!- )//g; s/\[(?=[^\]\n]*\](?!\())/\\[/g' docs/reference/api/$$g.md ; \
 	done
 
 .PHONY: generate

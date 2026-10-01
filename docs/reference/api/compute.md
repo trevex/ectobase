@@ -12,9 +12,7 @@ and consumed as CRDs by the mesh control plane.
 
 ### Resource Types
 - [Container](#container)
-- [ContainerList](#containerlist)
 - [VirtualMachine](#virtualmachine)
-- [VirtualMachineList](#virtualmachinelist)
 
 
 
@@ -43,9 +41,6 @@ _Appears in:_
 Container is a schedulable container workload on the ectobase overlay.
 
 
-
-_Appears in:_
-- [ContainerList](#containerlist)
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
@@ -177,9 +172,6 @@ _Appears in:_
 VirtualMachine is the placement anchor for a workload.
 
 
-
-_Appears in:_
-- [VirtualMachineList](#virtualmachinelist)
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
