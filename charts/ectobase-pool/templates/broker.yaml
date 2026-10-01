@@ -51,7 +51,7 @@ spec:
             # dispatch, write the signed intermediate into this Secret in POD_NAMESPACE).
             - "--routebus-intermediate-secret={{ .Values.pki.intermediateSecret }}"
             {{- with .Values.pki.underlayCIDRs }}
-            # Pool underlay range(s) the intermediate is IP-name-constrained to.
+            # Advisory: the signer constrains the intermediate to the ClusterPool's underlayPrefix.
             - "--routebus-underlay-cidrs={{ . }}"
             {{- end }}
             {{- end }}

@@ -164,8 +164,9 @@ scheduler writes into `spec.clusterName` and what names the pool's `pool-<name>`
 must be a DNS-1123 label of at most 58 characters, leaving `pool-<name>` a legal namespace name
 (`api/validate/clustername.go`).
 
-The spec is set by the operator at enrollment: `region`, `endpoint`, and optionally
-`underlayPrefix`, the aggregate that contains every node's underlay address. Declaring it lets
+The spec is set by the operator at enrollment: `region`, `endpoint`, and `underlayPrefix`, the
+aggregate that contains every node's underlay address. A pool needs `underlayPrefix` to join the
+route bus, because it is the IP constraint of the pool's route-bus intermediate. It also lets
 failover fence the whole pool by one prefix instead of the node /64s it has seen. The status is
 written by others. The broker reports `lease`, `allocatable`, `nodePrefixes` and `nodeDrain`; the
 `dispatch-controller` derives `phase` (`Pending`, `Ready` or `Unknown`) from the lease and records
@@ -173,8 +174,9 @@ written by others. The broker reports `lease`, `allocatable`, `nodePrefixes` and
 
 A `RouteBusIdentity`, named after its pool, carries that pool's intermediate-CA request
 (`spec.request`) and the signed certificate (`status.certificate`). The `dispatch-controller`
-signs it, name-constrained to `spec.permittedUnderlayCIDRs`. The WAN edge fleet has one too,
-named `edge`.
+signs it, IP-constrained to the `ClusterPool`'s `spec.underlayPrefix`; the broker's
+`spec.permittedUnderlayCIDRs` is ignored. The WAN edge fleet has one too, named `edge`. It has no
+`ClusterPool`, so it is constrained to its own `spec.permittedUnderlayCIDRs`.
 
 ## Where to go next
 

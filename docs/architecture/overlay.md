@@ -75,8 +75,10 @@ had to identify the endpoint itself, and every interface got its own `/128` carv
 
 The `/64` that contains a node's VTEP survives with one job: it is the coordinate failover uses to
 [fence](../concepts/what-is-ectobase.md#vocabulary) the node. The agent writes it onto its own `Node` as an annotation (`StampNodePrefix` in
-`mesh/agent/nodeprefix.go`), and failover fences that prefix on both the route bus and Ceph. See
-[failover](failover.md).
+`mesh/agent/nodeprefix.go`). Failover fences the reported `/64`s on both the route bus and Ceph
+when the pool's `ClusterPool` declares no `spec.underlayPrefix`; when it does, failover fences that
+aggregate instead, and the broker's drain report holds it while any node `/64` inside it still runs
+a VMI. See [failover](failover.md).
 
 The `/64` is not an address-ownership unit. In the lab every node in a cluster takes its `/128` from
 one shared cluster `/64`, which is why the route bus checks announcements against the exact `/128`

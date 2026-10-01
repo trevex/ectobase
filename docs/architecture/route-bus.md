@@ -177,16 +177,31 @@ flowchart TB
 
 Each pool's broker generates an intermediate key locally and sends only a CSR to the dispatch. The
 signer (`dispatch/pkg/pki`) returns a CA certificate that cannot sign further CAs and is
-name-constrained to the pool's DNS domain and, if they are set, its underlay ranges
-(`pki.underlayCIDRs` in the pool chart). Go's TLS verification enforces those constraints. Each agent then mints its own leaf from the pool's
-cert-manager `Issuer` (`mesh/agent/nodecert.go`). A WAN edge has no cert-manager; its agent mints its
-leaf in-process from an edge CA directory (`--routebus-intermediate`).
+name-constrained to the pool's DNS domain and to its underlay range. Go's TLS verification enforces
+those constraints. Each agent then mints its own leaf from the pool's cert-manager `Issuer`
+(`mesh/agent/nodecert.go`). A WAN edge has no cert-manager; its agent mints its leaf in-process from
+an edge CA directory (`--routebus-intermediate`).
 
-!!! warning "Set `pki.underlayCIDRs` in production"
-    The IP name constraint exists only when `pki.underlayCIDRs` is set; with no ranges the signer adds
-    none (`dispatch/pkg/pki/signer.go`). The pool chart's default is empty. Without it, one pool's
-    intermediate can mint a valid leaf for another pool's addresses, and the reflector's exact-match
-    check would accept it. The lab sets it to each pool's `/48`.
+The IP constraint is what stops one pool from minting a valid leaf for another pool's VTEP, which
+the reflector's exact-match nexthop check would then accept. So the signer takes it from the
+operator, never from the pool:
+
+- For a `RouteBusIdentity` named after a `ClusterPool`, the constraint is exactly that pool's
+  `spec.underlayPrefix`. The broker writes its own `RouteBusIdentity`, so the
+  `spec.permittedUnderlayCIDRs` it sends (from the pool chart's `pki.underlayCIDRs`) is ignored; a
+  requested range outside the prefix is only named in the `Signed` condition.
+- A `ClusterPool` without `spec.underlayPrefix` gets no intermediate: the signer sets `Signed=False`
+  and says why. Setting the prefix later wakes the signer.
+- An identity with no `ClusterPool` of its name, the WAN edge fleet's `edge`, is constrained to its
+  own `spec.permittedUnderlayCIDRs`. The operator creates it and no broker can write it. With no
+  ranges it is denied.
+- `spec.poolName` must equal the object's name. RBAC scopes a broker by name, and `poolName` is a
+  field the broker writes.
+
+The signer re-signs whenever the constraint on the current certificate differs from the one it
+would issue now, and the broker copies a re-signed intermediate for its current key into the pool's
+Secret at its next check (when it starts, then every 12 hours). An intermediate that was already issued stays valid until
+it expires (90 days), because the reflector trusts the root and nothing revokes an intermediate.
 
 ## Fences
 

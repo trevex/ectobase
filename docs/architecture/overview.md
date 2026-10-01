@@ -187,10 +187,12 @@ flowchart TB
 ```
 
 The pool intermediate is a CA with path length 0, so it signs leaves but no further CAs. It is
-name-constrained to the DNS domain `<pool>.routebus.ectobase.dev`. When the pool chart sets
-`pki.underlayCIDRs`, it is also constrained to those underlay ranges, so it cannot issue a leaf
-with an IP SAN in another pool's underlay. The pool's cert-manager `Issuer` `ectobase-pool-ca`
-issues the broker's client cert and each agent's node leaf from it.
+name-constrained to the DNS domain `<pool>.routebus.ectobase.dev` and to the IP range in the
+pool's `ClusterPool` `spec.underlayPrefix`, so it cannot issue a leaf with an IP SAN in another
+pool's underlay. The operator sets that prefix; the broker cannot write it, and the range the
+broker sends with its CSR is ignored. A pool without the prefix gets no intermediate. The pool's
+cert-manager `Issuer` `ectobase-pool-ca` issues the broker's client cert and each agent's node
+leaf from it.
 Pool and edge PKI are covered in more depth in [The route bus](route-bus.md).
 
 ### Mutual TLS on every cross-cluster link
@@ -236,7 +238,11 @@ Each scope follows from a constraint:
 - Apart from the CSR it writes into its own `RouteBusIdentity`, writes go to status subresources
   only. A broker can never rewrite a workload's spec (for example `spec.clusterName`), and it
   cannot create or delete a twin.
-- `RouteBusIdentity` `<pool>` is pre-created, because RBAC cannot scope `create` by name.
+- `RouteBusIdentity` `<pool>` is pre-created, because RBAC cannot scope `create` by name. A
+  broker that could create one would also choose its IP constraint: an identity without a
+  `ClusterPool` of its name is constrained to its own `spec.permittedUnderlayCIDRs`.
+- The broker cannot write its `ClusterPool`'s spec, so `spec.underlayPrefix`, its route-bus
+  certificate constraint and its fence coordinate, stays the operator's.
 
 The dispatch apiserver has no broker-specific admission plugin; RBAC alone draws the boundary.
 Writes that cross into tenant namespaces, such as a VM's placement or a `Volume`'s disk identity,
@@ -260,7 +266,7 @@ sequenceDiagram
     Note over B: no client cert on disk: first boot
     B->>B: generate ECDSA key + CSR locally
     B->>D: update RouteBusIdentity k02 with the CSR (bootstrap token)
-    S->>D: sign the pool intermediate, write it to status
+    S->>D: sign the pool intermediate (IP-constrained to ClusterPool k02's<br>spec.underlayPrefix), write it to status
     B->>D: poll status until the cert matches the key
     B->>CM: write Secret ectobase-pool-ca (intermediate, key, root)
     CM->>B: issue broker-dispatch-tls (CN ectobase:cluster:k02)
@@ -283,6 +289,14 @@ A few links are not authenticated the same way. Know them before you run this ou
 - The agent's kubeconfig for its own pool apiserver sets `insecure-skip-tls-verify`, because the
   apiserver's serving cert has no SAN for the fabric address it is dialled on. The agent still
   authenticates with its ServiceAccount token.
+- Nothing revokes a route-bus intermediate. The reflector trusts the root, so an intermediate
+  stays valid until it expires (90 days), including one signed before its pool's constraint was
+  narrowed. The signer re-signs and the broker adopts the new one, but a compromised pool keeps
+  the old one. Rotating the root is the only way to cut it off sooner.
+- The signer tells a pool from the edge fleet by whether a `ClusterPool` of the identity's name
+  exists. Deleting a `ClusterPool` without also deleting its `RouteBusIdentity` and its
+  `dispatch-broker-pool-<pool>` grant leaves that broker able to choose its own constraint.
+  Remove all three together.
 - flowplane's gRPC socket has no authentication. It is a `0600` unix socket on the node, so only
   root on that node can reach it, and the CNI and the agent both run as root.
 

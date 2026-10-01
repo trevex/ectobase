@@ -102,7 +102,7 @@ up as `--extra-uplink`, so returns arriving over a second top-of-rack switch are
 | `broker.clusterName` | `""` | This pool's name, matching its `ClusterPool` on the dispatch. Required: the chart refuses to render without it. |
 | `pki.enabled` | `true` | Turns on mTLS to the reflector and the broker's dispatch credential (`broker-dispatch-tls`, `CN=ectobase:cluster:<pool>`, `O=ectobase:brokers`, 90 days). Must match the dispatch chart; requires cert-manager in the pool. |
 | `pki.intermediateSecret` | `ectobase-pool-ca` | The Secret the broker writes the pool's intermediate CA into (`tls.crt`, `tls.key`, `ca.crt` = root). It backs the pool's `ectobase-pool-ca` `Issuer`, which issues the broker's certificate and each agent's node certificate, and the agent trusts its `ca.crt`. |
-| `pki.underlayCIDRs` | `""` | Comma-separated underlay ranges of this pool, for example its /48. The intermediate is IP-name-constrained to them, so it can only issue node certificates whose IP SAN falls inside. Empty means no constraint. |
+| `pki.underlayCIDRs` | `""` | Advisory. Comma-separated underlay ranges of this pool, sent with the broker's intermediate CSR. The dispatch signer ignores them: it constrains the pool intermediate to the `ClusterPool`'s `spec.underlayPrefix`, and denies a pool that has none. A range outside that prefix is only named in the `Signed` condition. |
 
 ### CRDs and optional components
 

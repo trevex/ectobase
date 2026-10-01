@@ -253,12 +253,14 @@ fences and rebinds their VMs elsewhere. `forgetDrain` covers the same hole from 
 The broker reports drain every 10 seconds, separately from its lease heartbeat:
 
 1. `gatherNodes` reads each node's /64 from the annotation `net.ectobase.dev/underlay-prefix`, which
-   the agent stamps on its own `Node`. A node without it is not reported, and a VMI on such a
-   node does not hold any prefix's drain.
+   the agent stamps on its own `Node`. A node without it is not reported in `nodePrefixes`.
 2. `gatherVMNodes` lists the pool's KubeVirt `VirtualMachineInstance`s and maps each scheduled VMI
    to its node.
-3. `ReportStatus` marks a fenced prefix busy if any VMI runs on a node in it, and writes
-   `status.nodeDrain` as one entry per fenced prefix with `drained: !busy`.
+3. `ReportStatus` marks each node /64 that runs a VMI busy, and writes `status.nodeDrain` as one
+   entry per fenced prefix with `drained: !busy`. A fenced prefix is busy when a busy /64 overlaps
+   it, in either family, not only when one equals it. That is what makes a pool fenced as its
+   `spec.underlayPrefix` aggregate work: a busy node /64 inside the `/48` holds the `/48`. A VMI on a
+   node whose /64 is unknown could be inside any fenced prefix, so it holds every one.
 
 The report fails closed. If the VMI list fails for any reason except `kubevirtAbsent`, the broker
 leaves `nodeDrain` exactly as stored for that tick: "could not list" must never read as "nothing runs
@@ -416,7 +418,6 @@ give.
 
 | Gap | Consequence |
 |---|---|
-| In aggregate mode, drain is reported immediately. With `spec.underlayPrefix` set, `fencedPrefixes` holds the aggregate, but the broker marks a prefix busy by matching each node's /64, and no node /64 equals the aggregate. | The aggregate reads `drained: true` as soon as the pool is back, so only the route gate holds the release. It catches a stale VM whose interface is still announced, not one whose node has lost its route-bus session. |
 | A reflector restart loses fences, which it keeps in memory only; see [HA and restarts](ha-and-restarts.md#reflector-restarts). | A lost pool is fenced again on the next failover pass; a recovered pool held on drain or routes stays storage-fenced but is no longer hidden at the reflector. |
 | `releaseFencedTwins` runs only for a pool that is lost, fenced with every fence confirmed and complete coverage, and only in namespace `pool-<name>`. | A retired twin is never released for a pool whose `ClusterPool` was deleted, a pool that never had a lease, a pool fenced with incomplete coverage, a pool whose fences never confirm (for example a dispatch-controller without `--reflector-admin`, or csi-addons not running), or a twin in a namespace outside that convention. A VM moving off such a pool waits for an operator; see [Moving a VM between clusters](vm-moves.md#a-move-that-does-not-finish). |
 | A fence that was never confirmed is not tracked. The first pass creates the `NetworkFence`; the prefix enters `status.fencedPrefixes` only on a later pass that sees it confirmed. | If the pool comes back within the roughly 2 minutes before that pass, the CR stays `Fenced`, csi-addons has likely blocklisted the prefix, and no `ClusterPool` lists it, so nothing releases it. See [A stranded Ceph blocklist entry](../operations/runbook.md#a-stranded-ceph-blocklist-entry). |

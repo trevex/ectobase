@@ -142,7 +142,7 @@ them, because each one is scoped to a single pool. The lab generates them in
 | Object | Purpose |
 |---|---|
 | Namespace `pool-<pool>` | Where the compiler writes this pool's `Compiled*` twins. |
-| `ClusterPool` `<pool>` | The pool's inventory entry. Its name must be a DNS-1123 label of at most 58 characters, so that `pool-<pool>` is itself a legal namespace name. |
+| `ClusterPool` `<pool>` | The pool's inventory entry. Its name must be a DNS-1123 label of at most 58 characters, so that `pool-<pool>` is itself a legal namespace name. Its `spec.underlayPrefix` is required: see below. |
 | `RouteBusIdentity` `<pool>` | Carries the pool's intermediate-CA request and the signed certificate. |
 | Role and RoleBinding `dispatch-broker` in `pool-<pool>` | The broker's access to this pool's twins. Bound to the user `ectobase:cluster:<pool>`. |
 | ServiceAccount `dispatch-broker-bootstrap-<pool>` in `system` | The identity behind the short-lived first-boot token. |
@@ -156,6 +156,31 @@ fleet-wide grant would let one pool's credential obtain another pool's CA and mi
 for that pool's nodes. The identity is created ahead of time because RBAC cannot scope `create`
 by name. Apart from filing its own CSR, a broker writes only status subresources, so it can
 never change a workload's spec, create a twin or delete one.
+
+Set `spec.underlayPrefix` on the `ClusterPool` before the pool's broker starts. It is the pool's
+underlay aggregate, a CIDR that contains every node's underlay address, for example the pool's
+`/48`:
+
+```yaml
+apiVersion: platform.ectobase.dev/v1alpha1
+kind: ClusterPool
+metadata:
+  name: k02
+spec:
+  region: eu
+  underlayPrefix: "fd00:cafe:2::/48"
+```
+
+The dispatch signer constrains the pool's route-bus intermediate to exactly this prefix, so the
+pool can only mint node certificates whose IP SAN lies inside it. A `ClusterPool` without it gets
+no intermediate: its `RouteBusIdentity` shows `Signed=False` with the reason, the broker's CSR
+times out, and its agents never join the route bus. Setting the prefix afterwards unblocks it
+without a restart. The same prefix is what failover fences when the pool is lost; see
+[failover](../architecture/failover.md#decide-what-to-fence-coverage).
+
+When you remove a pool, delete its `ClusterPool`, `RouteBusIdentity` and
+`dispatch-broker-pool-<pool>` grant together. An identity whose `ClusterPool` is gone is signed
+with the IP ranges in its own spec, and the broker can still write those while it holds the grant.
 
 ## Install the pool chart
 
@@ -211,8 +236,10 @@ helm upgrade --install ectobase-pool charts/ectobase-pool \
   `dispatch-apiserver` on 6444.
 - `underlayWithin` tells `flowplane` which host address is the underlay, past management and
   host-DNS addresses.
-- `pki.underlayCIDRs` name-constrains the pool intermediate, so it can only issue node
-  certificates whose IP SAN lies inside the pool's underlay.
+- `pki.underlayCIDRs` is advisory. The broker sends it with its CSR, but the signer constrains the
+  pool intermediate to the `ClusterPool`'s `spec.underlayPrefix` and ignores it; a range outside
+  the prefix is only named in the `RouteBusIdentity`'s `Signed` condition. The flag stays for
+  compatibility.
 
 The lab gives `--wait` twelve minutes because the agent's readiness waits on a chain: broker CSR,
 dispatch signer, intermediate Secret, pool `Issuer`, then cert-manager issuing each node's agent
