@@ -16,6 +16,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"math/big"
 	"net"
@@ -26,10 +27,11 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/equality"
-	"k8s.io/apimachinery/pkg/api/errors"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -162,7 +164,7 @@ func (s *Signer) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, 
 	// RBAC binds a broker to the identity NAMED after its pool; spec.poolName is a field it
 	// writes. Signing for any other poolName would hand it another identity's DNS domain and range.
 	if id.Spec.PoolName != id.Name {
-		return ctrl.Result{}, s.deny(ctx, &id, fmt.Sprintf("spec.poolName %q must equal the RouteBusIdentity name %q", id.Spec.PoolName, id.Name))
+		return ctrl.Result{}, s.denyPool(ctx, &id, fmt.Sprintf("spec.poolName %q must equal the RouteBusIdentity name %q", id.Spec.PoolName, id.Name))
 	}
 	permitted, note, denial, err := s.constraint(ctx, &id)
 	if err != nil {
@@ -171,18 +173,18 @@ func (s *Signer) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, 
 	if denial != "" {
 		// A denial can hinge on objects the signer does not watch (the pool it overlapped is
 		// deleted, a fleet identity's ranges change), so look again later.
-		return ctrl.Result{RequeueAfter: deniedRecheck}, s.deny(ctx, &id, denial)
+		return ctrl.Result{RequeueAfter: deniedRecheck}, s.denyPool(ctx, &id, denial)
 	}
 	// Idempotent: if already signed for THIS public key under THIS constraint and not near
 	// expiry, leave it. A cert carrying a different constraint (signed under an earlier rule, or
 	// before the operator changed the prefix) is re-signed now, not at its expiry.
 	if fresh, err := s.alreadySigned(&id, permitted); err == nil && fresh {
-		return ctrl.Result{RequeueAfter: intermediateTTL / 3}, nil
+		return ctrl.Result{RequeueAfter: intermediateTTL / 3}, s.markPool(ctx, id.Name, "")
 	}
 
 	cert, err := SignIntermediate(s.Root.Cert, s.Root.Key, id.Spec.Request, id.Spec.PoolName, permitted, time.Now().Add(intermediateTTL))
 	if err != nil {
-		return ctrl.Result{}, s.deny(ctx, &id, err.Error())
+		return ctrl.Result{}, s.denyPool(ctx, &id, err.Error())
 	}
 	msg := fmt.Sprintf("intermediate CA signed for pool %s, IP-constrained to %s", id.Spec.PoolName, strings.Join(permitted, ","))
 	if note != "" {
@@ -197,7 +199,44 @@ func (s *Signer) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, 
 	if err := s.Client.Status().Update(ctx, &id); err != nil {
 		return ctrl.Result{}, err
 	}
-	return ctrl.Result{RequeueAfter: intermediateTTL / 3}, nil
+	return ctrl.Result{RequeueAfter: intermediateTTL / 3}, s.markPool(ctx, id.Name, "")
+}
+
+// ConditionRouteBusIdentityDenied is set on a ClusterPool while the signer denies the pool's
+// RouteBusIdentity. A denied pool keeps running on the intermediate it already has and only fails at
+// renewal, months later, so the denial has to be visible where the operator looks at the pool.
+const ConditionRouteBusIdentityDenied = "RouteBusIdentityDenied"
+
+// denyPool denies id and records the denial on the ClusterPool of the same name, if there is one.
+func (s *Signer) denyPool(ctx context.Context, id *platformv1.RouteBusIdentity, msg string) error {
+	return errors.Join(s.deny(ctx, id, msg), s.markPool(ctx, id.Name, msg))
+}
+
+// markPool sets RouteBusIdentityDenied on ClusterPool name: True with msg when denied (msg
+// non-empty), False once signed, and nothing for a pool that was never denied. Other writers patch
+// the same status (the broker's heartbeat, pool health, failover), so this patches with an
+// optimistic lock and retries on conflict. A missing ClusterPool (a fleet identity) is no error.
+func (s *Signer) markPool(ctx context.Context, name, msg string) error {
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		var pool platformv1.ClusterPool
+		if err := s.Client.Get(ctx, client.ObjectKey{Name: name}, &pool); err != nil {
+			return client.IgnoreNotFound(err)
+		}
+		c := metav1.Condition{Type: ConditionRouteBusIdentityDenied, ObservedGeneration: pool.Generation}
+		switch {
+		case msg != "":
+			c.Status, c.Reason, c.Message = metav1.ConditionTrue, "Denied", msg
+		case meta.FindStatusCondition(pool.Status.Conditions, ConditionRouteBusIdentityDenied) != nil:
+			c.Status, c.Reason, c.Message = metav1.ConditionFalse, "Signed", "the pool's intermediate is signed"
+		default:
+			return nil
+		}
+		orig := pool.DeepCopy()
+		if !meta.SetStatusCondition(&pool.Status.Conditions, c) {
+			return nil
+		}
+		return s.Client.Status().Patch(ctx, &pool, client.MergeFromWithOptions(orig, client.MergeFromWithOptimisticLock{}))
+	})
 }
 
 // constraint decides the IP ranges id's intermediate is constrained to. For a fleet identity it is
@@ -212,7 +251,7 @@ func (s *Signer) constraint(ctx context.Context, id *platformv1.RouteBusIdentity
 	}
 	var pool platformv1.ClusterPool
 	err = reader.Get(ctx, client.ObjectKey{Name: id.Spec.PoolName}, &pool)
-	if err != nil && !errors.IsNotFound(err) {
+	if err != nil && !apierrors.IsNotFound(err) {
 		return nil, "", "", fmt.Errorf("get ClusterPool %s: %w", id.Spec.PoolName, err)
 	}
 	poolExists := err == nil
@@ -278,7 +317,7 @@ func (s *Signer) overlap(ctx context.Context, reader client.Reader, pool *platfo
 	}
 	for _, name := range s.FleetIdentities {
 		var fleet platformv1.RouteBusIdentity
-		if err := reader.Get(ctx, client.ObjectKey{Name: name}, &fleet); errors.IsNotFound(err) {
+		if err := reader.Get(ctx, client.ObjectKey{Name: name}, &fleet); apierrors.IsNotFound(err) {
 			continue
 		} else if err != nil {
 			return "", fmt.Errorf("get fleet identity %s: %w", name, err)
@@ -402,7 +441,7 @@ func (s *Signer) deny(ctx context.Context, id *platformv1.RouteBusIdentity, msg 
 	meta.SetStatusCondition(&id.Status.Conditions, metav1.Condition{
 		Type: "Signed", Status: metav1.ConditionFalse, Reason: "Denied", Message: msg,
 	})
-	if err := s.Client.Status().Update(ctx, id); err != nil && !errors.IsConflict(err) {
+	if err := s.Client.Status().Update(ctx, id); err != nil && !apierrors.IsConflict(err) {
 		return err
 	}
 	return nil

@@ -197,6 +197,9 @@ operator, never from the pool:
   requested range outside the prefix is only named in the `Signed` condition.
 - A `ClusterPool` without `spec.underlayPrefix` gets no intermediate: the signer sets `Signed=False`
   and says why. Setting the prefix later wakes the signer.
+- Whenever the signer denies a pool's identity, it also sets `RouteBusIdentityDenied=True` with the
+  reason on the `ClusterPool`, and turns it `False` once the pool is signed again. A denied pool
+  keeps running on the intermediate it holds and only fails at renewal, so this is where to look.
 - A pool prefix that overlaps another `ClusterPool`'s, or a fleet identity's ranges, is denied: two
   holders could otherwise mint leaves for the same VTEPs. Between two pools the one enrolled later
   is denied, so a mistake on a new pool cannot take a running one off the route bus at renewal.

@@ -42,7 +42,7 @@ func testSigner(t *testing.T, objs ...client.Object) (*Signer, client.Client) {
 	t.Helper()
 	root, rootKey, rootPEM := makeRoot(t)
 	c := fake.NewClientBuilder().WithScheme(signerScheme(t)).WithObjects(objs...).
-		WithStatusSubresource(&platformv1.RouteBusIdentity{}).Build()
+		WithStatusSubresource(&platformv1.RouteBusIdentity{}, &platformv1.ClusterPool{}).Build()
 	return &Signer{Client: c, Root: &RootCA{Cert: root, Key: rootKey, PEM: rootPEM}}, c
 }
 
@@ -365,5 +365,47 @@ func TestSigner_ResignsACertTheRootDidNotSign(t *testing.T) {
 	got := signedCert(t, reconcileIdentity(t, s, c, "k02"))
 	if err := got.CheckSignatureFrom(s.Root.Cert); err != nil {
 		t.Fatalf("the cert left in status was not signed by the root: %v", err)
+	}
+}
+
+func poolCondition(t *testing.T, c client.Client, name string) *metav1.Condition {
+	t.Helper()
+	var pool platformv1.ClusterPool
+	if err := c.Get(context.Background(), client.ObjectKey{Name: name}, &pool); err != nil {
+		t.Fatal(err)
+	}
+	return meta.FindStatusCondition(pool.Status.Conditions, ConditionRouteBusIdentityDenied)
+}
+
+// A pool denied its intermediate keeps running on the one it has, until renewal fails months later.
+// The denial is therefore put where an operator looks, on the ClusterPool, and cleared once signed.
+func TestSigner_DenialIsVisibleOnTheClusterPool(t *testing.T) {
+	s, c := testSigner(t, clusterPool("k02", ""), identity(t, "k02"))
+	reconcileIdentity(t, s, c, "k02")
+	cond := poolCondition(t, c, "k02")
+	if cond == nil || cond.Status != metav1.ConditionTrue || !strings.Contains(cond.Message, "no spec.underlayPrefix") {
+		t.Fatalf("want %s=True naming the reason, got %+v", ConditionRouteBusIdentityDenied, cond)
+	}
+
+	var pool platformv1.ClusterPool
+	if err := c.Get(context.Background(), client.ObjectKey{Name: "k02"}, &pool); err != nil {
+		t.Fatal(err)
+	}
+	pool.Spec.UnderlayPrefix = poolPrefix
+	if err := c.Update(context.Background(), &pool); err != nil {
+		t.Fatal(err)
+	}
+	signedCert(t, reconcileIdentity(t, s, c, "k02"))
+	if cond := poolCondition(t, c, "k02"); cond == nil || cond.Status != metav1.ConditionFalse {
+		t.Fatalf("want %s=False once signed, got %+v", ConditionRouteBusIdentityDenied, cond)
+	}
+}
+
+// A pool that was never denied gets no condition at all.
+func TestSigner_SignedPoolWithoutAPriorDenialGetsNoCondition(t *testing.T) {
+	s, c := testSigner(t, clusterPool("k02", poolPrefix), identity(t, "k02"))
+	signedCert(t, reconcileIdentity(t, s, c, "k02"))
+	if cond := poolCondition(t, c, "k02"); cond != nil {
+		t.Fatalf("want no condition, got %+v", cond)
 	}
 }

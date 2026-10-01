@@ -331,6 +331,34 @@ self-route, and a later withdraw deletes it, which cuts the guest off on its own
 node; the new `flowplane` repairs any self-route damaged that way when it adopts its maps at
 startup. Never upgrade the `mesh` image on a pool on its own.
 
+### Moving to operator-declared route-bus constraints
+
+A release whose signer constrains a pool intermediate to its `ClusterPool`'s `spec.underlayPrefix`
+adds three ordering hazards on top of the rules above:
+
+1. **Set `spec.underlayPrefix` only after every pool's broker is upgraded.** The prefix also turns
+   on aggregate fencing: failover fences the whole prefix. An old broker reports drain per node
+   /64 and matches it to the fenced prefix by equality, so it reports the aggregate drained the
+   moment the pool is back, while its VMs may still run. A new broker holds the aggregate while
+   any node /64 inside it is busy.
+2. **Pass `pki.fleetIdentities={edge}` in the same dispatch `helm upgrade`** if you run WAN edges.
+   The new signer trusts no identity that is not a `ClusterPool` unless it is named there, and
+   denies `edge` otherwise.
+3. **A pool without `spec.underlayPrefix` keeps running but is denied at renewal.** Its broker
+   already holds an intermediate, so nothing breaks at the upgrade. The signer denies its next
+   request, which comes when that intermediate nears expiry, and the pool then drops off the
+   route bus. Watch for the `RouteBusIdentityDenied` condition on the `ClusterPool`; the signer
+   sets it with the reason whenever it denies the pool's identity:
+
+    ```sh
+    kubectl get clusterpools -o 'custom-columns=NAME:.metadata.name,DENIED:.status.conditions[?(@.type=="RouteBusIdentityDenied")].status,WHY:.status.conditions[?(@.type=="RouteBusIdentityDenied")].message'
+    ```
+
+The reflector also refuses an intermediate with no IP constraint, which is what a pool installed
+with an empty `pki.underlayCIDRs` holds. Such a pool loses its route-bus sessions as soon as the new
+reflector runs, until it is re-signed and its agents present the new chain; see
+[Where the certificates come from](../architecture/route-bus.md#where-the-certificates-come-from).
+
 ## Upgrading an existing release
 
 !!! warning "Never drop the CRDs from a live pool"
