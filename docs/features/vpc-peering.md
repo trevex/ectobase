@@ -103,6 +103,10 @@ imports the same way.
 - Routed only. MACs are unique per VPC, not fleet-wide, and delivery resolves on `(VNI, overlay
   IP)`, so there is no shared L2 across a peering.
 - `Ready` means the reciprocal object exists; it does not check that the reciprocal is itself valid.
+- Known issue: two peered workloads on the same node cannot reach each other. The agent builds
+  imports only from routes it learned from the bus, and the reflector never sends a node its own
+  announcements back, so a peer address hosted on the same node is never imported. Peered
+  workloads on different nodes are unaffected.
 - The live test (`TestVPCPeering`) proves that reachability and permission are separate steps (a
   cross-VPC ping fails while a deny-all policy governs the destination's ingress and succeeds once a
   policy allows the peer's CIDR) and local precedence. Revocation is covered by unit tests of the
