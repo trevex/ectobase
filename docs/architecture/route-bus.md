@@ -167,13 +167,38 @@ applied without waiting for the session to happen to drop.
 
 ### Prune-on-EndOfRIB
 
-Because the datapath outlives any single session, the agent keeps a persistent
-`installed[vni]` set of prefixes it has programmed onto `flowplane`, plus a
-per-session `seen[vni]` set (reset at each session open). When the reflector's
-snapshot for a VNI completes with `EndOfRIB(vni)`, any `installed` prefix not in
-`seen` is stale — it left the RIB while the agent was disconnected — and is withdrawn
-from the datapath (`agent/bus.go`). This closes the gap that a plain re-announce
-cannot: routes that vanished during a disconnect.
+Because the datapath outlives any single session, the agent keeps the routes it has
+learned across sessions, plus a per-session `seen[vni]` set of the prefixes received
+since it subscribed (reset at each session open). When the reflector's snapshot for a
+VNI completes with `EndOfRIB(vni)`, any learned route not in `seen` is stale — it left
+the RIB while the agent was disconnected — so the agent forgets it and withdraws what it
+fed from the datapath (`agent/bus.go`). This closes the gap that a plain re-announce
+cannot: routes that vanished during a disconnect. The public VNI is pruned the same way,
+which drops a stale default from the egress VNIs it was imported into.
+
+### Programming learned routes
+
+What `flowplane` should hold for any `(vni, prefix)` follows from the learned routes,
+the peering and egress configuration and the local interfaces alone (`desiredRoute`):
+a route on the VNI's own table wins, then a peer import, then the public default in an
+egress VNI. Each `RouteUpdate` programs the keys it feeds as it arrives. Every reconcile
+tick then converges the rest against what the agent last programmed, so a failed
+`AddRoute` or `WithdrawRoute` is retried, and a peering or egress change takes effect
+without a replay. A converged tick makes no dataplane calls. A route the dataplane keeps
+refusing is retried with exponential backoff, up to five minutes apart, and logged when
+it starts failing rather than on every retry. The routes of a VNI the agent has stopped
+subscribing to for three ticks in a row are forgotten and withdrawn; the delay keeps a
+guest pod restart from withdrawing and re-learning a VNI's routes.
+
+A restarted `flowplane` rebuilds its routes from its pinned maps, but not a mesh route
+that a local self-route was holding back. The kernel never had that route. Its
+`ListInterfaces` reports an instance id that changes with every process start. When it
+changes, or when the dataplane answers again after an outage, the agent re-sends every
+route it has learned, held local host keys first. A dataplane that predates the id gets
+the same re-send every five minutes. A tick makes at most 256 dataplane calls and a
+re-send continues over the ticks that follow: the tick runs on the goroutine that drains
+the route-bus stream, and a stream backed up long enough makes the reflector drop live
+updates.
 
 ## Securing the bus: per-node mTLS + underlay authz
 

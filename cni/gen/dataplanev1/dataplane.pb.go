@@ -896,8 +896,12 @@ func (*ListInterfacesRequest) Descriptor() ([]byte, []int) {
 }
 
 type ListInterfacesResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Interfaces    []*InterfaceInfo       `protobuf:"bytes,1,rep,name=interfaces,proto3" json:"interfaces,omitempty"`
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	Interfaces []*InterfaceInfo       `protobuf:"bytes,1,rep,name=interfaces,proto3" json:"interfaces,omitempty"`
+	// instance_id is new every time the dataplane process starts. A restart keeps the pinned routes
+	// but loses a mesh route a local self-route was holding back, so the node agent watches this to
+	// know when to re-send its routes. Empty from a dataplane that predates it.
+	InstanceId    string `protobuf:"bytes,2,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -937,6 +941,13 @@ func (x *ListInterfacesResponse) GetInterfaces() []*InterfaceInfo {
 		return x.Interfaces
 	}
 	return nil
+}
+
+func (x *ListInterfacesResponse) GetInstanceId() string {
+	if x != nil {
+		return x.InstanceId
+	}
+	return ""
 }
 
 // InterfaceInfo is one locally-attached interface's overlay identity + node-local underlay.
@@ -2188,11 +2199,13 @@ const file_dataplane_proto_rawDesc = "" +
 	"\x03mac\x18\x03 \x01(\tR\x03mac\x12\x18\n" +
 	"\agateway\x18\x04 \x01(\tR\agateway\x12%\n" +
 	"\x0eunderlay_route\x18\x05 \x01(\tR\runderlayRoute\"\x17\n" +
-	"\x15ListInterfacesRequest\"U\n" +
+	"\x15ListInterfacesRequest\"v\n" +
 	"\x16ListInterfacesResponse\x12;\n" +
 	"\n" +
 	"interfaces\x18\x01 \x03(\v2\x1b.dataplane.v1.InterfaceInfoR\n" +
-	"interfaces\"\x93\x01\n" +
+	"interfaces\x12\x1f\n" +
+	"\vinstance_id\x18\x02 \x01(\tR\n" +
+	"instanceId\"\x93\x01\n" +
 	"\rInterfaceInfo\x12!\n" +
 	"\finterface_id\x18\x01 \x01(\tR\vinterfaceId\x12\x10\n" +
 	"\x03vni\x18\x02 \x01(\rR\x03vni\x12\x12\n" +

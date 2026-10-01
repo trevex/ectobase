@@ -319,7 +319,7 @@ func TestEgressImportFollowsAVniThatBecomesEgressNeedingLater(t *testing.T) {
 	}
 
 	// 2. A LoadBalancer lands: VNI 205 becomes egress-needing on the next reconcile.
-	b.syncEgressImports(ctx, nil, []uint32{205})
+	tick(t, b, DesiredState{Subs: []uint32{PublicVNI, 205}, EgressVNIs: []uint32{205}})
 
 	for _, prefix := range []string{"0.0.0.0/0", "::/0"} {
 		nh, ok := dp.get(205, prefix)
@@ -337,7 +337,7 @@ func TestEgressImportFollowsAVniThatBecomesEgressNeedingLater(t *testing.T) {
 
 	// 3. The LoadBalancer goes away: the VNI stops needing egress and the defaults are withdrawn,
 	//    so a stale default cannot outlive the thing that justified it.
-	b.syncEgressImports(ctx, []uint32{205}, nil)
+	tick(t, b, DesiredState{Subs: []uint32{PublicVNI, 205}})
 	for _, prefix := range []string{"0.0.0.0/0", "::/0"} {
 		if !dp.withdrew[key(205, prefix)] {
 			t.Errorf("default %s was not withdrawn when vni 205 stopped needing egress", prefix)
@@ -350,12 +350,15 @@ func TestEgressImportIsQuietForAnUnchangedVni(t *testing.T) {
 	dp := newRecordingDP()
 	b := NewBus("nodeA", "fd00::a", dp, false)
 	ctx := context.Background()
+	ds := DesiredState{Subs: []uint32{PublicVNI, 205}, EgressVNIs: []uint32{205}}
+	tick(t, b, ds)
 	b.apply(ctx, &rbv1.RouteUpdate{
 		Vni: PublicVNI, Prefix: "0.0.0.0/0", Nexthops: []string{"fd00:ffff::e1"},
 		Op: rbv1.RouteOp_ROUTE_OP_ADD, External: true,
 	})
-	b.syncEgressImports(ctx, []uint32{205}, []uint32{205})
-	if _, ok := dp.get(205, "0.0.0.0/0"); ok {
-		t.Fatal("an unchanged egress VNI must not be re-imported (apply already keeps it current)")
+	n := len(addsFor(dp, 205, "0.0.0.0/0"))
+	tick(t, b, ds)
+	if got := addsFor(dp, 205, "0.0.0.0/0"); n != 1 || len(got) != n {
+		t.Fatalf("an unchanged egress VNI must be imported once and not re-imported every tick, got %+v", got)
 	}
 }

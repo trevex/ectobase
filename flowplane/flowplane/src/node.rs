@@ -20,14 +20,32 @@ use crate::handlers;
 #[derive(Default)]
 pub struct NodeService {
     attach: Option<Arc<AttachState>>,
+    /// This process's instance id, reported by ListInterfaces: see `new_instance_id`.
+    instance_id: String,
 }
 
 impl NodeService {
     pub fn new(attach: Arc<AttachState>) -> Self {
         Self {
             attach: Some(attach),
+            instance_id: new_instance_id(),
         }
     }
+}
+
+/// A fresh id for this process. Adopt keeps the pinned routes across a restart but not a mesh route
+/// a local self-route was holding back (see `ControlCore::adopt_routes`), so the mesh agent watches
+/// the id ListInterfaces reports and re-sends its routes when it changes. Only inequality matters:
+/// the kernel's random UUID, or the pid and start time where that cannot be read.
+fn new_instance_id() -> String {
+    std::fs::read_to_string("/proc/sys/kernel/random/uuid")
+        .map(|s| s.trim().to_owned())
+        .unwrap_or_else(|_| {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos());
+            format!("{}-{nanos}", std::process::id())
+        })
 }
 
 #[tonic::async_trait]
@@ -123,7 +141,10 @@ impl DataplaneNode for NodeService {
                 underlay_route: std::net::Ipv6Addr::from(underlay).to_string(),
             })
             .collect();
-        Ok(Response::new(ListInterfacesResponse { interfaces }))
+        Ok(Response::new(ListInterfacesResponse {
+            interfaces,
+            instance_id: self.instance_id.clone(),
+        }))
     }
 
     async fn configure_network(
@@ -470,6 +491,14 @@ mod tests {
             .await
             .unwrap();
         let _ = resp.into_inner();
+    }
+
+    // Every process start must report a different id, or the mesh agent cannot see the restart.
+    #[test]
+    fn instance_ids_differ() {
+        let a = new_instance_id();
+        assert!(!a.is_empty());
+        assert_ne!(a, new_instance_id());
     }
 
     #[tokio::test]

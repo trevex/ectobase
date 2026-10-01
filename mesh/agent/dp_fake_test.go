@@ -53,6 +53,15 @@ type recordingDP struct {
 	qosN map[string]int     // interfaceID -> call count
 	// ifaces is what ListInterfaces returns: the node-local attached interfaces + their underlays.
 	ifaces []LocalInterface
+	// instanceID is the dataplane instance ListInterfaces reports (see restart); listErr fails it.
+	instanceID string
+	listErr    error
+	// failAdd / failWithdraw [key] is how many of the next AddRoute / WithdrawRoute calls for that
+	// key fail, with failErr (codes.Internal when nil). A failed call changes nothing.
+	failAdd, failWithdraw map[string]int
+	failErr               error
+	// routeAttempts counts every AddRoute and WithdrawRoute call, failed or not.
+	routeAttempts int
 }
 
 type lbBackendCall struct {
@@ -105,7 +114,41 @@ func newRecordingDP() *recordingDP {
 		lbBackendRefs: map[string][]lbBackendRef{},
 		natSrc:        map[string]natSrcCall{}, natSrcN: map[string]int{},
 		qos: map[string]qosCall{}, qosN: map[string]int{},
+		failAdd: map[string]int{}, failWithdraw: map[string]int{},
 	}
+}
+
+// injected consumes one injected failure from fails[k], if any is left.
+func (f *recordingDP) injected(fails map[string]int, k string) error {
+	if fails[k] == 0 {
+		return nil
+	}
+	fails[k]--
+	if f.failErr != nil {
+		return f.failErr
+	}
+	return status.Error(codes.Internal, "injected failure")
+}
+
+// restart models a dataplane process restart that lost every route: nothing programmed, and a new
+// instance id unless it reports none (one that predates the id). The call records (routeAdds,
+// withdrew) are history and are kept.
+func (f *recordingDP) restart() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.instanceID != "" {
+		f.instanceID += "'"
+	}
+	f.added = map[string]string{}
+	f.external = map[string]bool{}
+}
+
+// loseRoutes models routes lost with no restart to show for it: nothing programmed, same instance.
+func (f *recordingDP) loseRoutes() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.added = map[string]string{}
+	f.external = map[string]bool{}
 }
 
 func natKeyStr(natIp string, min, max uint32) string {
@@ -150,6 +193,10 @@ func (f *recordingDP) getNbrNat(natIp string, min, max uint32) (string, bool) {
 func (f *recordingDP) AddRoute(_ context.Context, vni uint32, prefix, nexthop string, external bool, deliveryVNI uint32) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.routeAttempts++
+	if err := f.injected(f.failAdd, key(vni, prefix)); err != nil {
+		return err
+	}
 	f.added[key(vni, prefix)] = nexthop
 	f.external[key(vni, prefix)] = external
 	f.routeAdds = append(f.routeAdds, routeCall{vni, prefix, nexthop, external, deliveryVNI})
@@ -209,6 +256,10 @@ func (f *recordingDP) ReplaceInterfaceFirewall(_ context.Context, iface string, 
 func (f *recordingDP) WithdrawRoute(_ context.Context, vni uint32, prefix string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.routeAttempts++
+	if err := f.injected(f.failWithdraw, key(vni, prefix)); err != nil {
+		return err
+	}
 	f.withdrew[key(vni, prefix)] = true
 	return nil
 }
@@ -321,8 +372,11 @@ func (f *recordingDP) getQoS(iface string) (qosCall, bool) {
 	v, ok := f.qos[iface]
 	return v, ok
 }
-func (f *recordingDP) ListInterfaces(_ context.Context) ([]LocalInterface, error) {
+func (f *recordingDP) ListInterfaces(_ context.Context) ([]LocalInterface, string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return append([]LocalInterface(nil), f.ifaces...), nil
+	if f.listErr != nil {
+		return nil, "", f.listErr
+	}
+	return append([]LocalInterface(nil), f.ifaces...), f.instanceID, nil
 }
