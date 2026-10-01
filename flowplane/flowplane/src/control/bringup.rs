@@ -213,15 +213,26 @@ impl Control {
         if adopt {
             // The classifier's bindings and scopes survived in the pinned maps; rebuild the scope
             // references from them (and collect scopes nothing binds) before any replace runs.
-            inner.core.adopt_fw_classifier();
+            if let Err(e) = inner.core.adopt_fw_classifier() {
+                eprintln!("adopt: WARNING firewall: {e:#}");
+            }
             // Likewise the neighbor-NAT blocks in the pinned `NAT_OWNERS{,6}` tries: rebuild their
             // lists (repairing any a crash left partial) so a withdraw or overlap check sees them.
-            inner.core.adopt_nat_owners();
+            if let Err(e) = inner.core.adopt_nat_owners() {
+                eprintln!("adopt: WARNING neighbor NAT: {e:#}");
+            }
             // Blocks the retired slot table still held. Adopt has just rebuilt the tries' own
             // blocks, so these fill in only what this build never saw.
             if !legacy.is_empty() {
                 let n = crate::legacy_nat::install(&mut inner.core, legacy);
                 eprintln!("migrate: {n} neighbor-NAT block(s) from the retired slot table");
+            }
+            // And the load balancers in the pinned `LB{,6}` and `MAGLEV` maps: a new LB must not
+            // be given a table a live one points at, and a delete or backend change after the
+            // restart must find the LB it names.
+            match inner.core.adopt_lbs() {
+                Ok(n) => eprintln!("adopt: recovered {n} load balancer(s) from pinned maps"),
+                Err(e) => eprintln!("adopt: WARNING load balancers: {e:#}"),
             }
             let recovered = Self::rebuild_from_maps(&mut inner)?;
             eprintln!(
@@ -232,7 +243,9 @@ impl Control {
             // And the routes in the pinned `ROUTES{,6}` tries, so a withdraw after the restart
             // finds what it withdraws instead of leaving it forwarding. After the interfaces: a
             // recovered interface's self-route holds its key against mesh routes again.
-            inner.core.adopt_routes();
+            if let Err(e) = inner.core.adopt_routes() {
+                eprintln!("adopt: WARNING routes: {e:#}");
+            }
         }
         Ok(Self {
             inner: Mutex::new(inner),

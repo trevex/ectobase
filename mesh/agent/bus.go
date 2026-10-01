@@ -5,9 +5,12 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log"
 	"net"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -59,8 +62,9 @@ type Dataplane interface {
 	ConfigureQoS(ctx context.Context, interfaceID string, egressMbps, publicMbps, ingressMbps uint32) error
 	// ListInterfaces returns the interfaces currently attached on this node, each with its overlay
 	// identity and this node's VTEP. The agent announces overlay routes from this (the underlay is
-	// node-local dataplane state, not central config).
-	ListInterfaces(ctx context.Context) ([]LocalInterface, error)
+	// node-local dataplane state, not central config). The string is the dataplane's instance id,
+	// new on every dataplane start ("" from a dataplane that predates it).
+	ListInterfaces(ctx context.Context) ([]LocalInterface, string, error)
 }
 
 // LocalInterface is one interface attached on this node: its overlay identity (vni + IPs) and the
@@ -108,7 +112,7 @@ type Route struct {
 	External bool   // if set, matching source traffic egress-SNATs (e.g. an external default route)
 	// DeliveryVNI is the on-wire Geneve VNI for this route. For every route this node originates
 	// (announces), delivery always equals its own Vni — VNI-differing delivery only arises on the
-	// PEER-IMPORT path (see Bus.applyPeer), which builds AddRoute calls directly, not via Route.
+	// PEER-IMPORT path (see Bus.desiredRoute), which builds AddRoute calls directly, not via Route.
 	DeliveryVNI uint32
 }
 
@@ -132,7 +136,7 @@ type Bus struct {
 	// the dataplane's LB id), built entirely from the LB_IP records backends announce. The
 	// dataplane is not idempotent here (create_lb rejects a duplicate id, add_lb_target a duplicate
 	// backend) and the edge sees each record repeatedly, so this is what makes applyPublic a diff.
-	// Touched only from the Run goroutine (handleServerMsg), like installed/origin — no lock.
+	// Touched only from the Run goroutine (handleServerMsg), like programmed — no lock.
 	//
 	// It PERSISTS across reconnects, deliberately. Resetting it per session would make the first
 	// record for each LB address re-create the LB (see registerLoadBalancer), which would in turn prune anything
@@ -144,8 +148,8 @@ type Bus struct {
 	// replayed snapshot and is withdrawn once the snapshot is known to be complete.
 	edgeLbs map[string]*edgeLb
 
-	// --- global (NAT + public) snapshot tracking, the EndOfGlobal counterpart to installed/seen.
-	// Touched only from the Run goroutine (handleServerMsg), like installed/origin — no lock.
+	// --- global (NAT + public) snapshot tracking, the EndOfGlobal counterpart to programmed/seen.
+	// Touched only from the Run goroutine (handleServerMsg), like programmed — no lock.
 	//
 	// installedNat is what THIS agent programmed, and PERSISTS across reconnects (the dataplane
 	// outlives a session). It is only the fallback path's diff basis now: against a dataplane that
@@ -171,21 +175,28 @@ type Bus struct {
 	globalDone     bool            // the global snapshot has replayed fully (EndOfGlobal)
 	converged      bool            // LATCHING: see Converged
 
-	// Peering import bookkeeping (VPC peering). peerImports is set each reconcile (localVNI -> imports).
-	// origin tags every installed (vni, prefix) as "own" (locally-originated / direct route) or "peer"
-	// (imported from a peer VNI) so LOCAL routes always take precedence over imports and an own-route
-	// withdraw can restore a previously-shadowed peer import. learnedPeer keeps the raw learned peer
-	// routes (peerVNI -> prefix -> nexthop) so a restore has a nexthop to reinstall.
-	peerImports map[uint32][]PeerImport      // localVNI -> imports (set each reconcile; nil-safe)
-	origin      map[uint32]map[string]string // vni -> prefix -> "own" | "peer"
-	learnedPeer map[uint32]map[string]string // peerVNI -> prefix -> nexthop (raw learned peer routes)
+	// peerImports is set each reconcile (localVNI -> imports; nil-safe): which peer VNIs' routes each
+	// local VNI imports (VPC peering), and within which prefixes.
+	peerImports map[uint32][]PeerImport
 
-	// installed[vni] is the set of directly-installed (non public-VNI) route prefixes this Bus has
-	// programmed on the dataplane. It PERSISTS across reconnects (the dataplane outlives a session)
-	// so prune-on-EndOfRIB can remove routes that vanished from the RIB while we were disconnected.
-	installed map[uint32]map[string]bool
-	// seen[vni] is the set of prefixes (re)learned in the CURRENT session's snapshot; reset at each
-	// session open. On EndOfRIB(vni) any installed[vni] prefix not in seen[vni] is stale → withdrawn.
+	// --- learned routes. Everything the route bus has taught this node about overlay routes is
+	// learnedOwn + learnedPublic; what the dataplane should hold for any key follows from that, the
+	// peering and egress config and the local interfaces alone (desiredRoute). apply programs a key
+	// as its RouteUpdate arrives, and every reconcile tick converges the rest (syncRoutes): a failed
+	// call, a changed peering or egress set, a dataplane that restarted. Run goroutine only.
+	//
+	// learnedOwn[vni][prefix] is the route last learned for (vni, prefix) on vni's own table, with
+	// its whole nexthop set. It feeds vni's own table and every local VNI that imports vni. A
+	// WITHDRAW, the EndOfRIB prune and an unsubscribe forget it, so nothing re-asserts a route the
+	// bus has dropped.
+	learnedOwn map[uint32]map[string]ownRoute
+	// programmed[vni][prefix] is what this Bus last programmed for the key, so a tick calls the
+	// dataplane only for the keys that drifted. It PERSISTS across reconnects (the dataplane
+	// outlives a session).
+	programmed map[uint32]map[string]dpRoute
+	// seen[vni] is the set of prefixes received in the CURRENT session's snapshot of vni; reset at
+	// each session open. On EndOfRIB(vni) a learned route not in seen[vni] left the RIB while we
+	// were disconnected, and is forgotten.
 	seen map[uint32]map[string]bool
 	// rxRoutes[vni] counts route ADDs received for that VNI since we asked the reflector for its
 	// table. It must equal EndOfRIB's record_count for the prune to be safe — same guard, same
@@ -206,14 +217,74 @@ type Bus struct {
 	// replaces the self-route with an encap and a WithdrawRoute deletes it.
 	localHosts   map[uint32]map[string]bool
 	ownUnderlays map[string]bool
-	// learnedOwn[vni][prefix] is the bus route last learned for (vni, prefix) on its own table,
-	// kept only for that fallback. A WITHDRAW or the EndOfRIB prune forgets it, so the fallback
-	// never reinstates a route the bus has withdrawn.
-	learnedOwn map[uint32]map[string]ownRoute
+
+	// --- dataplane restarts. flowplane rebuilds its routes from its pinned maps on a restart, but
+	// not a mesh route a self-route was holding back (the kernel never had it), and not anything at
+	// all if the maps went too. So the agent re-sends every learned route when the dataplane's
+	// instance id (from ListInterfaces) changes or it answers again after an outage, and on a slow
+	// sweep (fullResyncEvery) for a dataplane that cannot say. A re-send is owed key by key
+	// (resendQueue) and paid routeCallsPerTick at a time.
+	dpInstance     string
+	dpSeen         bool       // dpInstance has been read at least once
+	dpUnreachable  bool       // the last ListInterfaces failed
+	resendQueue    []routeRef // keys still owed a full re-send, held local host keys first
+	lastFullResync time.Time  // when the last full re-send was queued
+
+	// ticks counts syncRoutes runs; it is the clock retries back off on. retries holds each key
+	// whose last call failed for a reason other than an unreachable dataplane (see routeRetry).
+	ticks   int
+	retries map[routeRef]*routeRetry
+	// absentTicks[vni] counts the successful reconciles in a row whose subscriptions left out a VNI
+	// that still has learned routes (see forgetUnsubscribed).
+	absentTicks map[uint32]int
 
 	// reconcileEvery is how often Run recomputes the desired announcement set and pushes deltas onto
 	// the live stream. Tests override it for fast convergence.
 	reconcileEvery time.Duration
+}
+
+// fullResyncEvery is how often the learned routes are re-sent to the dataplane in full when no
+// restart was seen. It is the safety net behind the instance id — for a dataplane that predates it,
+// or route state lost some other way — so it can be slow: each route costs one AddRoute (and a log
+// line in flowplane), and a restart re-sends on the next tick anyway.
+const fullResyncEvery = 5 * time.Minute
+
+// routeCallsPerTick caps the dataplane calls one tick's resync makes. A tick runs on the Run
+// goroutine, which meanwhile drains nothing from the route-bus stream: past recvCh's 64 messages
+// the reflector's per-session queue fills, and it drops live deltas beyond 1024, which no resync
+// can recover. One AddRoute is a local unix-socket RPC plus a linear scan of flowplane's route
+// shadow, well under a millisecond each, so 256 of them hold Run for a fraction of a second — far
+// shorter than it takes any realistic churn to queue a thousand deltas for one node. A full
+// re-send of N routes takes N/256 ticks: about three minutes for 10k, with the keys a restart
+// actually loses (held local host keys) sent on the first.
+const routeCallsPerTick = 256
+
+// retryMaxTicks caps a failing key's backoff: retries come 1, 2, 4, ... ticks apart, then every
+// 60 ticks (five minutes at the default reconcileEvery).
+const retryMaxTicks = 60
+
+// retrySummaryTicks is how often the keys still failing are summarised in the log (about a
+// minute), since each is logged only when it starts failing.
+const retrySummaryTicks = 12
+
+// unsubscribeAfterTicks is how many successful reconciles in a row must leave a VNI out of the
+// subscriptions before its learned routes are forgotten and withdrawn. A guest pod that restarts
+// detaches and re-attaches within a tick or two, and one reconcile can read the peering config
+// without an import; dropping a VNI's routes on either would blackhole it until the re-subscribe
+// replays them. Three ticks (~15 s) outlasts both, and costs only that much longer for a VNI that
+// really left — its routes are frozen meanwhile (the unsubscribe has gone out), and a re-subscribe
+// replays and prunes them anyway.
+const unsubscribeAfterTicks = 3
+
+// routeRetry is a key whose last dataplane call failed: the route that call was for (want, or a
+// withdraw when !wantOK), how often in a row, the first tick it may be retried on, and the error,
+// for the summary. The backoff is for that one call: see backingOff.
+type routeRetry struct {
+	want      dpRoute
+	wantOK    bool
+	failures  int
+	nextTick  int
+	lastError string
 }
 
 // natEntry is one learned neighbor-NAT block, keyed exactly as the dataplane programs it so a
@@ -224,12 +295,32 @@ type natEntry struct {
 	vni              uint32
 }
 
-// ownRoute is one learned own-table bus route: its whole nexthop set, since the one apply
-// programs (the first) can be this node's own VTEP.
+// ownRoute is one learned own-table bus route: its whole nexthop set, since the one programmed
+// (the first) can be this node's own VTEP.
 type ownRoute struct {
 	nexthops []string
 	external bool
 }
+
+// dpRoute is one route as programmed for a key: the AddRoute arguments, and where it came from.
+// The zero value, never a wanted route, stands for "unknown, may hold anything" after a failed call
+// (see syncKey).
+type dpRoute struct {
+	nexthop     string
+	external    bool
+	deliveryVNI uint32
+	origin      routeOrigin
+}
+
+// routeOrigin is which learned route a key is programmed from: local routes win over peer imports,
+// which win over the public default.
+type routeOrigin string
+
+const (
+	originOwn    routeOrigin = "own"
+	originPeer   routeOrigin = "peer"
+	originPublic routeOrigin = "public"
+)
 
 // NeighborNatBlock is one neighbor-NAT block as ReplaceNeighborNats takes it.
 type NeighborNatBlock struct {
@@ -428,15 +519,16 @@ func NewBus(nodeID, underlay string, dp Dataplane, isEdge bool) *Bus {
 		seenPublic:      map[publicEntry]bool{},
 		subscribedVNIs:  map[uint32]bool{},
 		eorSeen:         map[uint32]bool{},
-		installed:       map[uint32]map[string]bool{},
+		programmed:      map[uint32]map[string]dpRoute{},
 		seen:            map[uint32]map[string]bool{},
 		rxRoutes:        map[uint32]uint32{},
 		localHosts:      map[uint32]map[string]bool{},
 		ownUnderlays:    map[string]bool{},
 		learnedOwn:      map[uint32]map[string]ownRoute{},
 		peerImports:     map[uint32][]PeerImport{},
-		origin:          map[uint32]map[string]string{},
-		learnedPeer:     map[uint32]map[string]string{},
+		lastFullResync:  time.Now(),
+		retries:         map[routeRef]*routeRetry{},
+		absentTicks:     map[uint32]int{},
 		reconcileEvery:  defaultReconcileEvery,
 	}
 }
@@ -472,7 +564,7 @@ func (b *Bus) Run(ctx context.Context, cc rbv1.RouteBusClient, reconcile func(co
 	}
 	// New session: the reflector will replay each subscribed VNI's snapshot then send EndOfRIB. Reset
 	// the per-session "seen" set so prune-on-EndOfRIB removes routes that left the RIB while we were
-	// disconnected (installed[] persists across sessions; the dataplane still holds those routes).
+	// disconnected (learnedOwn and programmed persist across sessions, as the dataplane's routes do).
 	b.seen = map[uint32]map[string]bool{}
 	b.rxRoutes = map[uint32]uint32{}
 	// Same for the GLOBAL channel: an edge's Hello registers it for the feed, which replays every
@@ -528,20 +620,22 @@ func (b *Bus) Run(ctx context.Context, cc rbv1.RouteBusClient, reconcile func(co
 // reconcileStep recomputes the desired set and pushes the delta to the stream. A `reconcile` error
 // (e.g. a transient API-server read) is logged and swallowed so the session stays up and retries next
 // tick; a stream Send error is returned so the caller reconnects (and re-announces from scratch).
+// Either way the learned routes converge on the dataplane (syncRoutes): they need nothing from the
+// reconcile but the egress and peering config, and the last good one stands.
 func (b *Bus) reconcileStep(ctx context.Context, stream rbv1.RouteBus_SessionClient, reconcile func(context.Context) (DesiredState, error), applied *DesiredState) error {
 	desired, err := reconcile(ctx)
 	if err != nil {
 		log.Printf("reconcile: %v", err)
+		b.syncRoutes(ctx)
 		return nil
 	}
 	b.mu.Lock()
-	prevEgress := b.egressVNIs
 	b.egressVNIs = append(b.egressVNIs[:0:0], desired.EgressVNIs...)
 	b.setPeerImportsLocked(desired.PeeringImports)
 	b.mu.Unlock()
-	b.syncEgressImports(ctx, prevEgress, desired.EgressVNIs)
-	b.refreshLocalHosts(ctx)
 	b.noteSubscribed(desired.Subs)
+	b.forgetUnsubscribed(desired.Subs)
+	b.syncRoutes(ctx)
 	d := diffDesired(*applied, desired)
 	if d.empty() {
 		return nil
@@ -553,51 +647,186 @@ func (b *Bus) reconcileStep(ctx context.Context, stream rbv1.RouteBus_SessionCli
 	return nil
 }
 
-// syncEgressImports installs the already-learned public-VNI defaults into egress VNIs that just
-// appeared, and withdraws them from ones that just went away.
+// syncRoutes is the level-triggered half of programming the learned routes (apply, as each
+// RouteUpdate arrives, is the event-driven half). It re-reads the local interfaces, queues a full
+// re-send when the dataplane restarted (or, for one without an instance id, the slow sweep is due),
+// then converges the keys that drifted from what was programmed and pays down the re-send, within
+// one tick's budget (see resyncRoutes).
 //
-// Without this the import is EVENT-DRIVEN ONLY: Bus.apply imports a public-VNI route into whatever
-// egressVNIs happened to hold at the instant that RouteUpdate arrived. But the normal ordering is
-// the other way round — an agent learns the edge's defaults once at session open, and a VNI becomes
-// egress-needing LATER, when someone creates the LoadBalancer or NATGateway that makes a local NIC
-// an LB backend or a SNAT source. Nothing re-imported for that VNI, so its guests had no route off
-// the node: an LB backend's DSR reply reached the guest and then died with nowhere to go, and only
-// an agent restart (which replays the whole snapshot AFTER the first reconcile has set egressVNIs)
-// ever fixed it. That is a steady-state cluster's ONLY ordering, so N/S from intent alone could
-// never work without this.
-//
-// Runs on the Run goroutine, like apply — no locking beyond the learnedPublic snapshot.
-func (b *Bus) syncEgressImports(ctx context.Context, prev, next []uint32) {
-	prevSet, nextSet := vniSet(prev), vniSet(next)
-	b.mu.Lock()
-	learned := make(map[string]string, len(b.learnedPublic))
-	for prefix, nh := range b.learnedPublic {
-		learned[prefix] = nh
+// apply alone left gaps nothing closed short of a route-bus reconnect: a failed AddRoute or
+// WithdrawRoute was only logged; a restarted flowplane never got back a mesh route a self-route had
+// been holding (see dpInstance); and a key whose wanted route changes with no RouteUpdate at all —
+// a VNI that becomes egress-needing after the public defaults were learned (an LB or NATGateway
+// lands later, the steady-state ordering), a peering configured or removed, a guest arriving over a
+// route that names this node — was programmed only if the session happened to replay.
+func (b *Bus) syncRoutes(ctx context.Context) {
+	b.ticks++
+	if b.refreshLocalHosts(ctx) {
+		log.Printf("dataplane restarted or answered again after an outage: re-sending every learned route")
+		b.queueFullResend()
 	}
-	b.mu.Unlock()
+	// A dataplane with an instance id announces its restarts, so only one without gets the sweep.
+	if b.dpInstance == "" && len(b.resendQueue) == 0 && time.Since(b.lastFullResync) >= fullResyncEvery {
+		b.queueFullResend()
+	}
+	b.resyncRoutes(ctx)
+	if len(b.retries) > 0 && b.ticks%retrySummaryTicks == 0 {
+		b.logRetrySummary()
+	}
+}
 
-	for vni := range nextSet {
-		if prevSet[vni] {
-			continue // already importing; apply keeps it current
-		}
-		for prefix, nh := range learned {
-			// deliveryVNI = PublicVNI mirrors Bus.apply's import arm exactly (the dataplane reads a
-			// delivery_vni of 0 as "use the key vni"); external=true so SNAT sources follow it.
-			if err := b.dp.AddRoute(ctx, vni, prefix, nh, true, PublicVNI); err != nil {
-				log.Printf("egress import AddRoute vni=%d %s -> %s: %v", vni, prefix, nh, err)
-				continue
+// queueFullResend owes every key a re-send, held local host keys first: they are what a restarted
+// flowplane cannot recover from its pinned maps, so they lead the line when it is paid over ticks.
+func (b *Bus) queueFullResend() {
+	keys := make([]routeRef, 0, len(b.resendQueue))
+	for k := range b.routeKeys() {
+		keys = append(keys, k)
+	}
+	slices.SortFunc(keys, func(x, y routeRef) int {
+		if hx, hy := b.localHosts[x.Vni][x.Prefix], b.localHosts[y.Vni][y.Prefix]; hx != hy {
+			if hx {
+				return -1
 			}
-			log.Printf("imported public default %s -> %s into newly-egress vni=%d", prefix, nh, vni)
+			return 1
+		}
+		if x.Vni != y.Vni {
+			return int(x.Vni) - int(y.Vni)
+		}
+		return strings.Compare(x.Prefix, y.Prefix)
+	})
+	b.resendQueue = keys
+	b.lastFullResync = time.Now()
+}
+
+// resyncRoutes converges the route keys within one tick's budget (routeCallsPerTick). First the
+// diff: every key the learned routes want programmed, or that is programmed and no longer wanted,
+// gets a call only if it drifted from what was last programmed and is not backing off — so a
+// converged tick makes none. Then, with what is left of the budget, the owed full re-send (flowplane's
+// AddRoute replaces in place, so re-sending a route it holds is a no-op upsert). What the budget
+// does not reach is picked up next tick. It stops early at the first call that never reached the
+// dataplane: the rest would fail the same way, one log line each.
+func (b *Bus) resyncRoutes(ctx context.Context) {
+	budget := routeCallsPerTick
+	keys := b.routeKeys()
+	for k := range b.retries {
+		if !keys[k] {
+			delete(b.retries, k) // nothing wants it and nothing is programmed there any more
 		}
 	}
-	for vni := range prevSet {
-		if nextSet[vni] {
+	for k := range keys {
+		if budget == 0 {
+			return
+		}
+		if r := b.retries[k]; r != nil && b.backingOff(k, r) {
 			continue
 		}
-		for prefix := range learned {
-			if err := b.dp.WithdrawRoute(ctx, vni, prefix); err != nil {
-				log.Printf("egress unimport WithdrawRoute vni=%d %s: %v", vni, prefix, err)
+		sent, err := b.syncKey(ctx, k.Vni, k.Prefix, false)
+		if sent {
+			budget--
+		}
+		if err != nil && transientDataplaneError(err) {
+			log.Printf("route resync: dataplane unreachable; resuming on the next tick")
+			return
+		}
+	}
+	for len(b.resendQueue) > 0 && budget > 0 {
+		k := b.resendQueue[0]
+		b.resendQueue = b.resendQueue[1:]
+		if _, ok := b.desiredRoute(k.Vni, k.Prefix); !ok {
+			// Withdrawn since it was queued, and not programmed: nothing to re-send. A held key is
+			// still withdrawn, since flowplane's shadow may keep a route for it this agent never sent.
+			if _, had := b.programmed[k.Vni][k.Prefix]; !had && !b.localHosts[k.Vni][k.Prefix] {
+				continue
 			}
+		}
+		sent, err := b.syncKey(ctx, k.Vni, k.Prefix, true)
+		if sent {
+			budget--
+		}
+		if err != nil && transientDataplaneError(err) {
+			log.Printf("route resync: dataplane unreachable; resuming on the next tick")
+			return
+		}
+	}
+	if len(b.resendQueue) == 0 {
+		b.resendQueue = nil
+	}
+}
+
+// logRetrySummary logs how many keys are still failing, with one of them as an example.
+func (b *Bus) logRetrySummary() {
+	for k, r := range b.retries {
+		log.Printf("route resync: %d route key(s) failing, backing off; e.g. vni=%d %s (%d failures): %s",
+			len(b.retries), k.Vni, k.Prefix, r.failures, r.lastError)
+		return
+	}
+}
+
+// routeKeys is every key the learned routes reach — each own-table route, each peer import, the
+// public defaults in each egress VNI — plus every key programmed, so one that is no longer wanted
+// is withdrawn.
+func (b *Bus) routeKeys() map[routeRef]bool {
+	keys := map[routeRef]bool{}
+	for vni, routes := range b.learnedOwn {
+		for prefix := range routes {
+			keys[routeRef{vni, prefix}] = true
+		}
+	}
+	for local, imports := range b.peerImports {
+		for _, im := range imports {
+			for prefix := range b.learnedOwn[im.PeerVNI] {
+				if prefixInCIDRs(prefix, im.ImportPrefixes) {
+					keys[routeRef{local, prefix}] = true
+				}
+			}
+		}
+	}
+	for _, vni := range b.egressVNIs {
+		for prefix := range b.learnedPublic {
+			keys[routeRef{vni, prefix}] = true
+		}
+	}
+	for vni, routes := range b.programmed {
+		for prefix := range routes {
+			keys[routeRef{vni, prefix}] = true
+		}
+	}
+	return keys
+}
+
+// forgetUnsubscribed forgets the routes learned for every VNI this node has no longer subscribed
+// to for unsubscribeAfterTicks reconciles in a row: the reflector stops updating such a VNI, so
+// they could only go stale. The resync then withdraws them, and whatever was imported from them.
+// Level-triggered on the desired set rather than on the unsubscribe sent, so a VNI dropped while
+// the session was down is forgotten too. The public VNI counts like any other.
+func (b *Bus) forgetUnsubscribed(subs []uint32) {
+	keep := vniSet(subs)
+	absent := map[uint32]bool{}
+	for vni := range b.learnedOwn {
+		if !keep[vni] {
+			absent[vni] = true
+		}
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !keep[PublicVNI] && len(b.learnedPublic) > 0 {
+		absent[PublicVNI] = true
+	}
+	for vni := range b.absentTicks {
+		if !absent[vni] {
+			delete(b.absentTicks, vni)
+		}
+	}
+	for vni := range absent {
+		b.absentTicks[vni]++
+		if b.absentTicks[vni] < unsubscribeAfterTicks {
+			continue
+		}
+		delete(b.absentTicks, vni)
+		if vni == PublicVNI {
+			clear(b.learnedPublic)
+		} else {
+			delete(b.learnedOwn, vni)
 		}
 	}
 }
@@ -645,9 +874,11 @@ func (b *Bus) resetRouteSnapshot(vni uint32) {
 	b.seen[vni] = map[string]bool{}
 }
 
-// pruneVNI removes any directly-installed route in vni that was NOT (re)seen in this session's
-// snapshot — i.e. a route that left the RIB (peer withdrew, or its owner disconnected) while this
-// node was disconnected, and would otherwise linger on the dataplane as a stale blackhole/misroute.
+// pruneVNI forgets every route learned on vni that was NOT (re)received in this session's snapshot
+// — a route that left the RIB (peer withdrew, or its owner disconnected) while this node was
+// disconnected — and withdraws what it fed, which would otherwise linger on the dataplane as a
+// stale blackhole/misroute and be re-asserted by every resync. For the public VNI that is the
+// defaults imported into the egress VNIs.
 func (b *Bus) pruneVNI(ctx context.Context, vni uint32, want uint32) {
 	// A lossy replay must not prune: an older reflector dropped snapshot records on overflow, and
 	// withdrawing a live route is strictly worse than keeping a stale one. Same guard as pruneGlobal.
@@ -656,46 +887,40 @@ func (b *Bus) pruneVNI(ctx context.Context, vni uint32, want uint32) {
 			vni, got, want)
 		return
 	}
-	inst := b.installed[vni]
 	seen := b.seen[vni]
-	// A route the reflector no longer has must not be re-asserted when a local interface leaves.
-	for prefix := range b.learnedOwn[vni] {
-		if !seen[prefix] {
+	var stale []string
+	if vni == PublicVNI {
+		b.mu.Lock()
+		for prefix := range b.learnedPublic {
+			if !seen[prefix] {
+				stale = append(stale, prefix)
+				delete(b.learnedPublic, prefix)
+			}
+		}
+		b.mu.Unlock()
+	} else {
+		for prefix := range b.learnedOwn[vni] {
+			if !seen[prefix] {
+				stale = append(stale, prefix)
+			}
+		}
+		for _, prefix := range stale {
 			b.delLearnedOwn(vni, prefix)
 		}
 	}
-	for prefix := range inst {
-		if seen[prefix] {
-			continue
-		}
-		if err := b.dp.WithdrawRoute(ctx, vni, prefix); err != nil {
-			log.Printf("prune WithdrawRoute vni=%d %s: %v", vni, prefix, err)
-			continue
-		}
-		delete(inst, prefix)
-	}
-	if len(inst) == 0 {
-		delete(b.installed, vni)
+	for _, prefix := range stale {
+		b.syncLearned(ctx, vni, prefix, false)
 	}
 }
 
-// markInstalled / markSeen / markWithdrawn maintain the directly-installed route set used by
-// prune-on-EndOfRIB. Called only from the Run goroutine (apply), so no locking.
-func (b *Bus) markInstalled(vni uint32, prefix string) {
-	if b.installed[vni] == nil {
-		b.installed[vni] = map[string]bool{}
-	}
-	b.installed[vni][prefix] = true
+// markSeen records a route ADD received in this session, for prune-on-EndOfRIB. It is marked on
+// receipt, not on a successful install: a route whose AddRoute failed is still in the RIB, and
+// the resync retries it. Called only from the Run goroutine (apply), so no locking.
+func (b *Bus) markSeen(vni uint32, prefix string) {
 	if b.seen[vni] == nil {
 		b.seen[vni] = map[string]bool{}
 	}
 	b.seen[vni][prefix] = true
-}
-
-func (b *Bus) markWithdrawn(vni uint32, prefix string) {
-	if m := b.installed[vni]; m != nil {
-		delete(m, prefix)
-	}
 }
 
 // sendDelta writes one busDelta to the stream: subscribes + announces first (so we start receiving
@@ -841,177 +1066,195 @@ func (b *Bus) addNeighborNat(ctx context.Context, e natEntry, owner string) {
 	b.installedNat[e] = true
 }
 
+// apply records one RouteUpdate and programs the keys it feeds. A route on a public-VNI is an
+// aggregation record, imported into each local egress VNI (a tenant node has no VNI-0 table). Any
+// other route on ru.Vni is BOTH an own/direct route for ru.Vni's OWN table AND, if any LOCAL vni
+// imports ru.Vni (VPC peering), a peer route for those importers' tables. These are ADDITIVE (they
+// target different tables), not mutually exclusive — a node that hosts guests in two peered VPCs
+// sees ru.Vni be its own table *and* a peer VNI at once.
 func (b *Bus) apply(ctx context.Context, ru *rbv1.RouteUpdate) {
-	nh := ""
-	if len(ru.Nexthops) > 0 {
-		nh = ru.Nexthops[0] // ECMP set carried; v1 programs the primary
-	}
-	if ru.Vni == PublicVNI {
-		// Public-VNI routes are aggregation records: record them and IMPORT into each local egress VNI
-		// (a tenant node has no VNI-0 table). External=true so SNAT sources follow it; LB-address replies
-		// miss SNAT and stay public.
-		b.mu.Lock()
-		switch ru.Op {
-		case rbv1.RouteOp_ROUTE_OP_ADD:
+	switch ru.Op {
+	case rbv1.RouteOp_ROUTE_OP_ADD:
+		b.markSeen(ru.Vni, ru.Prefix)
+		if ru.Vni == PublicVNI {
+			nh := ""
+			if len(ru.Nexthops) > 0 {
+				nh = ru.Nexthops[0] // ECMP set carried; v1 programs the primary
+			}
+			b.mu.Lock()
 			b.learnedPublic[ru.Prefix] = nh
-		case rbv1.RouteOp_ROUTE_OP_WITHDRAW:
+			b.mu.Unlock()
+		} else {
+			b.setLearnedOwn(ru.Vni, ru.Prefix, ownRoute{nexthops: append([]string(nil), ru.Nexthops...), external: ru.External})
+		}
+	case rbv1.RouteOp_ROUTE_OP_WITHDRAW:
+		if ru.Vni == PublicVNI {
+			b.mu.Lock()
 			delete(b.learnedPublic, ru.Prefix)
+			b.mu.Unlock()
+		} else {
+			b.delLearnedOwn(ru.Vni, ru.Prefix)
 		}
-		evs := append([]uint32(nil), b.egressVNIs...)
-		b.mu.Unlock()
-		for _, vni := range evs {
-			switch ru.Op {
-			case rbv1.RouteOp_ROUTE_OP_ADD:
-				// deliveryVNI = ru.Vni here is PublicVNI (0): there is no real VPC to deliver into at
-				// VNI 0, and the dataplane treats delivery_vni=0 as "default to the key vni" — so this
-				// naturally preserves the original behavior (delivery == the local egress vni), while
-				// keeping this import structurally identical to a peer import (key != origin vni).
-				if err := b.dp.AddRoute(ctx, vni, ru.Prefix, nh, true, ru.Vni); err != nil {
-					log.Printf("import AddRoute vni=%d %s -> %s: %v", vni, ru.Prefix, nh, err)
-				}
-			case rbv1.RouteOp_ROUTE_OP_WITHDRAW:
-				if err := b.dp.WithdrawRoute(ctx, vni, ru.Prefix); err != nil {
-					log.Printf("import WithdrawRoute vni=%d %s: %v", vni, ru.Prefix, err)
-				}
-			}
+	default:
+		return
+	}
+	b.syncLearned(ctx, ru.Vni, ru.Prefix, true)
+}
+
+// syncLearned programs every key a learned route on (vni, prefix) feeds: the public defaults in
+// each egress VNI, or vni's own table and each table importing vni. force applies to the own-table
+// key only (see syncKey): the RouteUpdate is about that key, so it is passed through to the
+// dataplane whatever this Bus last programmed there, as before. The keys it feeds by import change
+// only if their wanted route did.
+func (b *Bus) syncLearned(ctx context.Context, vni uint32, prefix string, force bool) {
+	if vni == PublicVNI {
+		for _, egress := range b.egressVNIs {
+			_, _ = b.syncKey(ctx, egress, prefix, false)
 		}
 		return
 	}
-	// A non-public RouteUpdate on ru.Vni is BOTH an own/direct route for ru.Vni's OWN table AND, if any
-	// LOCAL vni imports ru.Vni (VPC peering), a peer route to import into those importers' tables. These
-	// are ADDITIVE (they target different tables), not mutually exclusive — a node that hosts guests in
-	// two peered VPCs sees ru.Vni be its own table *and* a peer VNI at once. So install the own route
-	// into ru.Vni's table first, then (if ru.Vni is imported) import it into the importer tables.
-	switch ru.Op {
-	case rbv1.RouteOp_ROUTE_OP_ADD:
-		b.setLearnedOwn(ru.Vni, ru.Prefix, ownRoute{nexthops: append([]string(nil), ru.Nexthops...), external: ru.External})
-		ownNH, ok := b.nexthopFor(ru.Vni, ru.Prefix, ru.Nexthops)
-		if !ok {
-			// A local guest's /32 whose only nexthop is this node: there is nowhere else to send
-			// it, and X->self must never sit in flowplane's shadow to be reinstalled on detach.
-			if err := b.dp.WithdrawRoute(ctx, ru.Vni, ru.Prefix); err != nil {
-				log.Printf("WithdrawRoute vni=%d %s (only this node announces it): %v", ru.Vni, ru.Prefix, err)
-			} else {
-				b.markWithdrawn(ru.Vni, ru.Prefix)
-				b.clearOrigin(ru.Vni, ru.Prefix)
-			}
-		} else if err := b.dp.AddRoute(ctx, ru.Vni, ru.Prefix, ownNH, ru.External, ru.Vni); err != nil {
-			// (Own table install: delivery vni == the route's own vni — key and delivery match.)
-			log.Printf("AddRoute vni=%d %s -> %s external=%t: %v", ru.Vni, ru.Prefix, ownNH, ru.External, err)
-			// Still attempt the peer import below: it targets other tables and must not be skipped.
-		} else {
-			b.markInstalled(ru.Vni, ru.Prefix)
-			// Tag as own; if a peer import currently held this (vni, prefix) the AddRoute above overwrote
-			// it in the dataplane (one value per key), so flipping the tag to "own" completes the eviction.
-			b.setOrigin(ru.Vni, ru.Prefix, "own")
-		}
-		// Additionally import into any LOCAL vni that imports ru.Vni. applyPeer targets the IMPORTER
-		// tables (never ru.Vni's own table), so there is no self-conflict with the own install above.
-		if importers := b.importersOf(ru.Vni); len(importers) > 0 {
-			b.applyPeer(ctx, ru, nh, importers)
-		}
-	case rbv1.RouteOp_ROUTE_OP_WITHDRAW:
-		b.delLearnedOwn(ru.Vni, ru.Prefix)
-		if err := b.dp.WithdrawRoute(ctx, ru.Vni, ru.Prefix); err != nil {
-			log.Printf("WithdrawRoute vni=%d %s: %v", ru.Vni, ru.Prefix, err)
-		} else {
-			b.markWithdrawn(ru.Vni, ru.Prefix)
-			// The own route is gone: restore a shadowed peer import for this (vni, prefix) if one exists,
-			// else clear the tag entirely.
-			b.clearOrigin(ru.Vni, ru.Prefix)
-			b.restoreImport(ctx, ru.Vni, ru.Prefix)
-		}
-		// Withdraw from importer tables too: applyPeer clears its own learnedPeer bookkeeping and only
-		// touches importer tables tagged "peer", so the own withdraw/restore above is unaffected.
-		if importers := b.importersOf(ru.Vni); len(importers) > 0 {
-			b.applyPeer(ctx, ru, nh, importers)
+	_, _ = b.syncKey(ctx, vni, prefix, force)
+	for _, im := range b.importersOf(vni) {
+		if prefixInCIDRs(prefix, im.prefixes) {
+			_, _ = b.syncKey(ctx, im.localVNI, prefix, false)
 		}
 	}
 }
 
-// applyPeer handles the peer-import side of a RouteUpdate whose VNI is imported by some LOCAL vni: it
-// records the raw learned peer route (for later restore) and, for each LOCAL vni importing that peer
-// VNI whose import prefixes contain the route, installs it into the importer's local table UNLESS a
-// local (own) route already holds that exact key. Local routes always win. This runs IN ADDITION to
-// the own install into ru.Vni's own table (see apply): the two target different tables, so a VNI that
-// is both a local table and a peer VNI (co-resident peered VPCs) gets both without conflict.
-func (b *Bus) applyPeer(ctx context.Context, ru *rbv1.RouteUpdate, nh string, importers []importer) {
-	switch ru.Op {
-	case rbv1.RouteOp_ROUTE_OP_ADD:
-		b.setLearnedPeer(ru.Vni, ru.Prefix, nh)
-		for _, im := range importers {
-			if !prefixInCIDRs(ru.Prefix, im.prefixes) {
-				continue
-			}
-			if b.origin[im.localVNI][ru.Prefix] == "own" {
-				continue // local route wins; do not shadow it
-			}
-			impNH, ok := b.nexthopFor(im.localVNI, ru.Prefix, ru.Nexthops)
-			if !ok {
-				// Only this node, into a local guest's key: drop any import held there (see apply).
-				if b.origin[im.localVNI][ru.Prefix] == "peer" {
-					if err := b.dp.WithdrawRoute(ctx, im.localVNI, ru.Prefix); err != nil {
-						log.Printf("peer import WithdrawRoute vni=%d %s: %v", im.localVNI, ru.Prefix, err)
-						continue
-					}
-					b.clearOrigin(im.localVNI, ru.Prefix)
-					b.markWithdrawn(im.localVNI, ru.Prefix)
-				}
-				continue
-			}
-			// Peer import: key = im.localVNI (the importer's table), but delivery must be stamped
-			// with ru.Vni (the peer's own/origin vni) so the datapath encaps toward the peer VPC —
-			// this is the load-bearing case for delivery_vni.
-			if err := b.dp.AddRoute(ctx, im.localVNI, ru.Prefix, impNH, false, ru.Vni); err != nil {
-				log.Printf("peer import AddRoute vni=%d %s -> %s: %v", im.localVNI, ru.Prefix, impNH, err)
-				continue
-			}
-			b.setOrigin(im.localVNI, ru.Prefix, "peer")
-			b.markInstalled(im.localVNI, ru.Prefix)
+// desiredRoute is what the dataplane should hold for (vni, prefix) in vni's table, from what the
+// bus has taught this node — the one rule apply, the release fallback and the resync all program:
+//   - a route learned on vni's own table decides the key alone (local routes win), with its
+//     delivery VNI = vni. A local guest's key whose only nexthop is this node wants nothing:
+//     X->self must never sit in flowplane's shadow to be reinstalled on detach.
+//   - else the first import of vni that covers the prefix and has a usable learned route for it.
+//     Key = vni (the importer's table), but delivery is stamped with the peer's own VNI so the
+//     datapath encaps toward the peer VPC — the load-bearing case for delivery_vni.
+//   - else, in an egress VNI, the learned public default: external so SNAT sources follow it, and
+//     delivery PublicVNI (0), which the dataplane reads as "the key vni" — there is no VPC to
+//     deliver into at VNI 0. LB-address replies miss SNAT and stay public.
+func (b *Bus) desiredRoute(vni uint32, prefix string) (dpRoute, bool) {
+	if r, ok := b.learnedOwn[vni][prefix]; ok {
+		nh, ok := b.nexthopFor(vni, prefix, r.nexthops)
+		if !ok {
+			return dpRoute{}, false
 		}
-	case rbv1.RouteOp_ROUTE_OP_WITHDRAW:
-		b.delLearnedPeer(ru.Vni, ru.Prefix)
-		for _, im := range importers {
-			if !prefixInCIDRs(ru.Prefix, im.prefixes) {
-				continue
-			}
-			if b.origin[im.localVNI][ru.Prefix] != "peer" {
-				continue // an own route (or nothing) holds this key; leave it
-			}
-			if err := b.dp.WithdrawRoute(ctx, im.localVNI, ru.Prefix); err != nil {
-				log.Printf("peer import WithdrawRoute vni=%d %s: %v", im.localVNI, ru.Prefix, err)
-				continue
-			}
-			b.clearOrigin(im.localVNI, ru.Prefix)
-			b.markWithdrawn(im.localVNI, ru.Prefix)
+		return dpRoute{nexthop: nh, external: r.external, deliveryVNI: vni, origin: originOwn}, true
+	}
+	for _, im := range b.peerImports[vni] {
+		r, ok := b.learnedOwn[im.PeerVNI][prefix]
+		if !ok || !prefixInCIDRs(prefix, im.ImportPrefixes) {
+			continue
 		}
+		if nh, ok := b.nexthopFor(vni, prefix, r.nexthops); ok {
+			return dpRoute{nexthop: nh, deliveryVNI: im.PeerVNI, origin: originPeer}, true
+		}
+	}
+	if nh, ok := b.learnedPublic[prefix]; ok && slices.Contains(b.egressVNIs, vni) {
+		return dpRoute{nexthop: nh, external: true, deliveryVNI: PublicVNI, origin: originPublic}, true
+	}
+	return dpRoute{}, false
+}
+
+// syncKey programs desiredRoute(vni, prefix) — an AddRoute, or a WithdrawRoute when nothing is
+// wanted — and records it in programmed. Without force it calls the dataplane only when that
+// differs from what was last programmed. With force it always does, a withdraw included: flowplane
+// may hold a route for the key that this agent never programmed (a held key's shadow from before an
+// agent restart). A failed call may or may not have landed (a deadline, say), so it leaves the key
+// unknown — the zero dpRoute, which differs from every wanted route and from none — and the next
+// resync sends whatever is wanted then. sent reports whether the dataplane was called.
+func (b *Bus) syncKey(ctx context.Context, vni uint32, prefix string, force bool) (sent bool, err error) {
+	want, ok := b.desiredRoute(vni, prefix)
+	have, had := b.programmed[vni][prefix]
+	k := routeRef{vni, prefix}
+	if !ok {
+		if !had && !force {
+			return false, nil
+		}
+		if err := b.dp.WithdrawRoute(ctx, vni, prefix); err != nil {
+			b.noteFailure(k, fmt.Sprintf("WithdrawRoute vni=%d %s", vni, prefix), err, dpRoute{}, false)
+			b.setProgrammed(vni, prefix, dpRoute{})
+			return true, err
+		}
+		b.noteSuccess(k)
+		b.forgetProgrammed(vni, prefix)
+		return true, nil
+	}
+	if had && have == want && !force {
+		return false, nil
+	}
+	if err := b.dp.AddRoute(ctx, vni, prefix, want.nexthop, want.external, want.deliveryVNI); err != nil {
+		b.noteFailure(k, fmt.Sprintf("AddRoute vni=%d %s -> %s external=%t delivery=%d (%s)",
+			vni, prefix, want.nexthop, want.external, want.deliveryVNI, want.origin), err, want, true)
+		b.setProgrammed(vni, prefix, dpRoute{})
+		return true, err
+	}
+	b.noteSuccess(k)
+	b.setProgrammed(vni, prefix, want)
+	return true, nil
+}
+
+// noteFailure logs a failed call — for want, or a withdraw when !wantOK — and backs the key off.
+// An unreachable dataplane is not the key's fault: it is logged each time, as before, and not backed
+// off, so the key goes out as soon as the dataplane is back. Any other failure — the dataplane
+// refused this route — is logged once, when the key starts failing or fails differently, and
+// retried 1, 2, 4, ... ticks later, up to retryMaxTicks apart; the summary keeps it visible
+// meanwhile. A failure for a different route than the last starts the count over.
+func (b *Bus) noteFailure(k routeRef, call string, err error, want dpRoute, wantOK bool) {
+	if transientDataplaneError(err) {
+		log.Printf("%s: %v", call, err)
+		return
+	}
+	r := b.retries[k]
+	if r == nil || r.want != want || r.wantOK != wantOK {
+		r = &routeRetry{want: want, wantOK: wantOK}
+		b.retries[k] = r
+	}
+	r.failures++
+	r.nextTick = b.ticks + min(1<<min(r.failures-1, 30), retryMaxTicks)
+	if msg := err.Error(); msg != r.lastError {
+		r.lastError = msg
+		log.Printf("%s: %v — retrying with backoff", call, err)
 	}
 }
 
-// restoreImport reinstalls a peer import that was shadowed by a now-withdrawn own route on (vni,
-// prefix): for each active import on this local vni whose prefixes contain the route and for which a
-// learned peer route still exists, AddRoute it back and re-tag as "peer".
-func (b *Bus) restoreImport(ctx context.Context, localVNI uint32, prefix string) {
-	for _, im := range b.peerImports[localVNI] {
-		if !prefixInCIDRs(prefix, im.ImportPrefixes) {
-			continue
+// backingOff reports whether k is still waiting out its backoff. It waits only while the key wants
+// the very route whose AddRoute failed. A key that wants nothing any more never waits: that
+// withdraw may be a peering revoked, a VNI that no longer needs egress or one forgotten, and a
+// cross-VPC route must not outlive its peering by a backoff. A key that wants a different route
+// starts over, so the new route goes out at once.
+func (b *Bus) backingOff(k routeRef, r *routeRetry) bool {
+	want, ok := b.desiredRoute(k.Vni, k.Prefix)
+	if !ok {
+		return false
+	}
+	if !r.wantOK || want != r.want {
+		delete(b.retries, k)
+		return false
+	}
+	return b.ticks < r.nextTick
+}
+
+// noteSuccess ends a key's backoff, logging the recovery if it had been failing.
+func (b *Bus) noteSuccess(k routeRef) {
+	if r := b.retries[k]; r != nil {
+		log.Printf("route vni=%d %s programmed after %d failed attempt(s)", k.Vni, k.Prefix, r.failures)
+		delete(b.retries, k)
+	}
+}
+
+func (b *Bus) setProgrammed(vni uint32, prefix string, r dpRoute) {
+	if b.programmed[vni] == nil {
+		b.programmed[vni] = map[string]dpRoute{}
+	}
+	b.programmed[vni][prefix] = r
+}
+
+func (b *Bus) forgetProgrammed(vni uint32, prefix string) {
+	if m := b.programmed[vni]; m != nil {
+		delete(m, prefix)
+		if len(m) == 0 {
+			delete(b.programmed, vni)
 		}
-		learned, ok := b.learnedPeer[im.PeerVNI][prefix]
-		if !ok {
-			continue
-		}
-		nh, ok := b.nexthopFor(localVNI, prefix, []string{learned})
-		if !ok {
-			continue
-		}
-		// Restore mirrors applyPeer: key = localVNI, delivery = im.PeerVNI (the peer's origin vni).
-		if err := b.dp.AddRoute(ctx, localVNI, prefix, nh, false, im.PeerVNI); err != nil {
-			log.Printf("peer import restore AddRoute vni=%d %s -> %s: %v", localVNI, prefix, nh, err)
-			return
-		}
-		b.setOrigin(localVNI, prefix, "peer")
-		b.markInstalled(localVNI, prefix)
-		return
 	}
 }
 
@@ -1046,39 +1289,6 @@ func (b *Bus) setPeerImportsLocked(m map[uint32][]PeerImport) {
 		next[local] = cp
 	}
 	b.peerImports = next
-}
-
-// origin / learnedPeer bookkeeping. Called only from the apply (Run) goroutine, so no locking.
-func (b *Bus) setOrigin(vni uint32, prefix, kind string) {
-	if b.origin[vni] == nil {
-		b.origin[vni] = map[string]string{}
-	}
-	b.origin[vni][prefix] = kind
-}
-
-func (b *Bus) clearOrigin(vni uint32, prefix string) {
-	if m := b.origin[vni]; m != nil {
-		delete(m, prefix)
-		if len(m) == 0 {
-			delete(b.origin, vni)
-		}
-	}
-}
-
-func (b *Bus) setLearnedPeer(peerVNI uint32, prefix, nh string) {
-	if b.learnedPeer[peerVNI] == nil {
-		b.learnedPeer[peerVNI] = map[string]string{}
-	}
-	b.learnedPeer[peerVNI][prefix] = nh
-}
-
-func (b *Bus) delLearnedPeer(peerVNI uint32, prefix string) {
-	if m := b.learnedPeer[peerVNI]; m != nil {
-		delete(m, prefix)
-		if len(m) == 0 {
-			delete(b.learnedPeer, peerVNI)
-		}
-	}
 }
 
 // prefixInCIDRs reports whether the route prefix's host address is contained in any of cidrs. A
@@ -1215,10 +1425,10 @@ func (d dpAdapter) ConfigureQoS(ctx context.Context, interfaceID string, egressM
 	})
 	return err
 }
-func (d dpAdapter) ListInterfaces(ctx context.Context) ([]LocalInterface, error) {
+func (d dpAdapter) ListInterfaces(ctx context.Context) ([]LocalInterface, string, error) {
 	resp, err := d.c.ListInterfaces(ctx, &dpv1.ListInterfacesRequest{})
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	out := make([]LocalInterface, 0, len(resp.GetInterfaces()))
 	for _, i := range resp.GetInterfaces() {
@@ -1233,20 +1443,27 @@ func (d dpAdapter) ListInterfaces(ctx context.Context) ([]LocalInterface, error)
 			InterfaceID: i.GetInterfaceId(), Vni: i.GetVni(), OverlayIPs: ips, Underlay: i.GetUnderlayRoute(),
 		})
 	}
-	return out, nil
+	return out, resp.GetInstanceId(), nil
 }
 
 // refreshLocalHosts re-reads the attached interfaces and, for every host prefix whose interface
 // LEFT since the last read (its VM moved away), re-asserts the bus route held for it — the fallback
-// described at localHosts. An interface that arrived needs nothing: flowplane now holds its key and
-// keeps whatever mesh route was there in its shadow. A failed read keeps the previous view. Run
-// goroutine only, like installed.
-func (b *Bus) refreshLocalHosts(ctx context.Context) {
-	ifaces, err := b.dp.ListInterfaces(ctx)
+// described at localHosts. An interface that arrived needs nothing here: flowplane now holds its key
+// and keeps whatever mesh route was there in its shadow (the resync moves that off this node's own
+// VTEP, see nexthopFor). A failed read keeps the previous view. Run goroutine only.
+//
+// It reports whether the dataplane may have restarted since the last read — the same read carries
+// its instance id — so the caller can re-send what a restart loses (see dpInstance). The first read
+// is not a restart: nothing has been programmed into an earlier instance by this agent.
+func (b *Bus) refreshLocalHosts(ctx context.Context) bool {
+	ifaces, instance, err := b.dp.ListInterfaces(ctx)
 	if err != nil {
 		log.Printf("ListInterfaces (local host prefixes): %v — keeping the previous view", err)
-		return
+		b.dpUnreachable = true
+		return false
 	}
+	restarted := b.dpUnreachable || (b.dpSeen && instance != b.dpInstance)
+	b.dpInstance, b.dpSeen, b.dpUnreachable = instance, true, false
 	next := map[uint32]map[string]bool{}
 	own := map[string]bool{b.underlay: true}
 	for _, iface := range ifaces {
@@ -1276,44 +1493,32 @@ func (b *Bus) refreshLocalHosts(ctx context.Context) {
 			}
 		}
 	}
+	return restarted
 }
 
 // releaseLocalHost re-asserts what the bus holds for a key whose local interface just left: the own
-// route if one is learned, else a peer import (own routes win, as in apply). The nexthop is the first
-// one in the held set that is not this node — this node may have announced the /32 too (mid-move),
-// and a route to itself for a guest it no longer has is a loop; with no other nexthop left, nothing
-// is programmed. It is recorded as installed but NOT as seen: it may come from what an earlier
-// session learned, so a replay in progress must still be able to prune it.
+// route if one is learned, else a peer import or public default (own routes win, as in apply). This
+// node may have announced the /32 too (mid-move): its own withdraw is on its way to the reflector,
+// so its VTEP is dropped from the held set here — a route to itself for a guest it no longer has is
+// a loop — and with no other nexthop left, nothing is programmed. It is NOT marked seen: it may come
+// from what an earlier session learned, so a replay in progress must still be able to prune it.
 func (b *Bus) releaseLocalHost(ctx context.Context, vni uint32, prefix string) {
-	r, ok := b.learnedOwn[vni][prefix]
-	if !ok {
-		b.restoreImport(ctx, vni, prefix)
-		return
+	if r, ok := b.learnedOwn[vni][prefix]; ok {
+		r.nexthops = slices.DeleteFunc(slices.Clone(r.nexthops), func(nh string) bool { return b.ownUnderlays[nh] })
+		b.learnedOwn[vni][prefix] = r
 	}
-	nh := b.foreignNexthop(r.nexthops)
-	if nh == "" {
-		return
-	}
-	if err := b.dp.AddRoute(ctx, vni, prefix, nh, r.external, vni); err != nil {
-		log.Printf("AddRoute vni=%d %s -> %s (local interface left): %v", vni, prefix, nh, err)
-		return
-	}
-	if b.installed[vni] == nil {
-		b.installed[vni] = map[string]bool{}
-	}
-	b.installed[vni][prefix] = true
-	b.setOrigin(vni, prefix, "own")
+	_, _ = b.syncKey(ctx, vni, prefix, true)
 }
 
 // nexthopFor picks the nexthop to program for (vni, prefix) from a route's sorted set. Any key but
 // a local guest's host prefix gets the first, as it always has — for an E/W LB address a self
 // nexthop is right, since flowplane delivers it locally. A local host key gets the first nexthop
 // that is not this node instead, so flowplane's shadow never holds X->self for a guest that is
-// here; ok is false when only this node is left.
+// here; ok is false when only this node is left, or nothing at all.
 func (b *Bus) nexthopFor(vni uint32, prefix string, nexthops []string) (string, bool) {
 	if !b.localHosts[vni][prefix] {
 		if len(nexthops) == 0 {
-			return "", true
+			return "", false
 		}
 		return nexthops[0], true
 	}

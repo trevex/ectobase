@@ -26,6 +26,10 @@ use flowplane_common::{
 /// - `get_owned`      — `get(key: $key)  -> Option<$val>`
 /// - `entries`        — `pub fn entries() -> Vec<($key, $val)>`
 /// - `entries_crate`  — `pub(crate) fn entries() -> Vec<($key, $val)>`
+/// - `lookup`         — `lookup(key: &$key) -> anyhow::Result<Option<$val>>`: like `get`, but an
+///   absent key is `Ok(None)` and any other failure an error
+/// - `walk`           — `pub fn walk() -> Walk<($key, $val)>`: like `entries`, but keeps the
+///   first read error instead of dropping it, for an adopt that must know its walk was whole
 ///
 /// `$name` is the aya map name (must match the eBPF object) and doubles as the error context.
 macro_rules! bpf_hash_map {
@@ -57,6 +61,33 @@ macro_rules! bpf_hash_map {
     (@entries $key:ty, $val:ty, $name:literal) => {
         pub fn entries(&self) -> Vec<($key, $val)> {
             self.map.iter().filter_map(|r| r.ok()).collect()
+        }
+    };
+    (@lookup $key:ty, $val:ty, $name:literal) => {
+        pub fn lookup(&self, key: &$key) -> anyhow::Result<Option<$val>> {
+            match self.map.get(key, 0) {
+                Ok(v) => Ok(Some(v)),
+                Err(MapError::KeyNotFound) => Ok(None),
+                Err(e) => Err(anyhow::Error::from(e).context(concat!("read ", $name))),
+            }
+        }
+    };
+    (@walk $key:ty, $val:ty, $name:literal) => {
+        pub fn walk(&self) -> flowplane_control::Walk<($key, $val)> {
+            let mut walk = flowplane_control::Walk {
+                entries: Vec::new(),
+                error: None,
+            };
+            for r in self.map.iter() {
+                match r {
+                    Ok(e) => walk.entries.push(e),
+                    Err(e) => {
+                        walk.error
+                            .get_or_insert(anyhow::Error::from(e).context(concat!("walk ", $name)));
+                    }
+                }
+            }
+            walk
         }
     };
     (@entries_crate $key:ty, $val:ty, $name:literal) => {
@@ -159,7 +190,7 @@ bpf_hash_map!(
 bpf_hash_map!(
     /// Typed handle over the `IFACE_META` restart journal (interface_id -> rebuild detail). Written
     /// by the control plane on attach/detach and scanned on restart; never read by the datapath.
-    IfaceMetaMap, "IFACE_META", IfaceMetaKey, IfaceMetaVal, upsert, remove, entries
+    IfaceMetaMap, "IFACE_META", IfaceMetaKey, IfaceMetaVal, upsert, remove, walk
 );
 
 bpf_hash_map!(
@@ -175,17 +206,17 @@ bpf_hash_map!(
 
 bpf_hash_map!(
     /// Typed handle over the `LB` BPF map.
-    Lb, "LB", LbKey, LbValue, upsert, remove
+    Lb, "LB", LbKey, LbValue, upsert, remove, walk
 );
 
 bpf_hash_map!(
     /// Typed handle over the `LB6` BPF map (IPv6 LB services, full-address key).
-    Lb6, "LB6", LbKey6, LbValue, upsert, remove
+    Lb6, "LB6", LbKey6, LbValue, upsert, remove, walk
 );
 
 bpf_hash_map!(
     /// Typed handle over the `MAGLEV` BPF map.
-    Maglev, "MAGLEV", MaglevKey, LbBackend, upsert, remove
+    Maglev, "MAGLEV", MaglevKey, LbBackend, upsert, remove, lookup, walk
 );
 
 bpf_hash_map!(
@@ -214,7 +245,7 @@ bpf_hash_map!(
 
 bpf_hash_map!(
     /// Typed handle over the `FW_BIND` BPF map (ifindex -> the interface's classifier scopes).
-    FwBindMap, "FW_BIND", u32, flowplane_common::FwBind, upsert, remove_owned, entries
+    FwBindMap, "FW_BIND", u32, flowplane_common::FwBind, upsert, remove_owned, walk
 );
 
 bpf_array_map!(
@@ -298,18 +329,29 @@ impl FwScopes {
     }
 
     /// Every scope id present in any of the four outer maps (adopt GC).
-    pub fn ids(&self) -> Vec<u64> {
-        let mut ids: Vec<u64> = self
+    pub fn ids(&self) -> flowplane_control::Walk<u64> {
+        let mut walk = flowplane_control::Walk {
+            entries: Vec::new(),
+            error: None,
+        };
+        let keys = self
             .class4
             .keys()
             .chain(self.class6.keys())
             .chain(self.policy4.keys())
-            .chain(self.policy6.keys())
-            .filter_map(Result::ok)
-            .collect();
-        ids.sort_unstable();
-        ids.dedup();
-        ids
+            .chain(self.policy6.keys());
+        for r in keys {
+            match r {
+                Ok(id) => walk.entries.push(id),
+                Err(e) => {
+                    walk.error
+                        .get_or_insert(anyhow::Error::from(e).context("walk the FW scope maps"));
+                }
+            }
+        }
+        walk.entries.sort_unstable();
+        walk.entries.dedup();
+        walk
     }
 }
 
@@ -403,9 +445,9 @@ impl Routes {
         absent_ok(self.map.remove(&key)).context("remove route")
     }
 
-    /// Every `(vni, prefix, prefix_len, route)` in the trie (adopt). A read error is logged, not
-    /// returned: what was read is still worth adopting.
-    pub fn entries(&self) -> Vec<(u32, [u8; 4], u32, RouteValue)> {
+    /// Every `(vni, prefix, prefix_len, route)` in the trie (adopt), and the first read error (see
+    /// `route_entries`).
+    pub fn walk(&self) -> flowplane_control::Walk<(u32, [u8; 4], u32, RouteValue)> {
         route_entries(self.map.iter(), "ROUTES", |d: RouteLpmData| (d.vni, d.ipv4))
     }
 
@@ -442,13 +484,17 @@ fn absent_ok(r: Result<(), MapError>) -> Result<(), MapError> {
 
 /// Decode a `ROUTES{,6}` walk: each key is the VNI's 32 bits followed by the prefix, so the route's
 /// own prefix length is the key's minus 32. A key shorter than the VNI was not written by `upsert`
-/// and is skipped.
+/// and is skipped. The first read error is kept: a key-walk error ends aya's iteration, so the
+/// routes past it go unlisted.
 fn route_entries<D: aya::Pod, A>(
     walk: impl Iterator<Item = Result<(Key<D>, RouteValue), MapError>>,
     name: &str,
     split: impl Fn(D) -> ([u8; 4], A),
-) -> Vec<(u32, A, u32, RouteValue)> {
-    let mut out = Vec::new();
+) -> flowplane_control::Walk<(u32, A, u32, RouteValue)> {
+    let mut out = flowplane_control::Walk {
+        entries: Vec::new(),
+        error: None,
+    };
     for r in walk {
         match r {
             Ok((k, v)) => {
@@ -456,14 +502,12 @@ fn route_entries<D: aya::Pod, A>(
                     continue;
                 };
                 let (vni, prefix) = split(k.data());
-                out.push((u32::from_be_bytes(vni), prefix, len, v));
+                out.entries.push((u32::from_be_bytes(vni), prefix, len, v));
             }
-            // A key-walk error ends aya's iteration: the routes past it go unlisted.
-            Err(e) => eprintln!(
-                "adopt: WARNING reading {name} failed ({:#}); routes it skipped stay programmed but \
-                 cannot be withdrawn until re-announced",
-                anyhow::Error::from(e)
-            ),
+            Err(e) => {
+                out.error
+                    .get_or_insert(anyhow::Error::from(e).context(format!("walk {name}")));
+            }
         }
     }
     out
@@ -508,8 +552,8 @@ impl Routes6 {
         absent_ok(self.map.remove(&key)).context("remove route6")
     }
 
-    /// v6 sibling of [`Routes::entries`].
-    pub fn entries(&self) -> Vec<(u32, [u8; 16], u32, RouteValue)> {
+    /// v6 sibling of [`Routes::walk`].
+    pub fn walk(&self) -> flowplane_control::Walk<(u32, [u8; 16], u32, RouteValue)> {
         route_entries(self.map.iter(), "ROUTES6", |d: RouteLpmData6| {
             (d.vni, d.ipv6)
         })
@@ -573,20 +617,20 @@ impl<K: aya::Pod> NatOwnerTrie<K> {
             .with_context(|| format!("remove {}", self.name))
     }
 
-    /// Every `(prefix_len, key, owner)` in the trie (adopt). A read error is logged, not returned:
-    /// what was read is still worth adopting.
-    pub fn entries(&self) -> Vec<(u32, K, NatOwner)> {
-        let mut out = Vec::new();
+    /// Every `(prefix_len, key, owner)` in the trie (adopt), and the first read error: a key-walk
+    /// error ends aya's iteration, so the prefixes past it go unlisted.
+    pub fn walk(&self) -> flowplane_control::Walk<(u32, K, NatOwner)> {
+        let mut out = flowplane_control::Walk {
+            entries: Vec::new(),
+            error: None,
+        };
         for r in self.map.iter() {
             match r {
-                Ok((k, v)) => out.push((k.prefix_len(), k.data(), v)),
-                // A key-walk error ends aya's iteration: the prefixes past it go unlisted.
-                Err(e) => eprintln!(
-                    "adopt: WARNING reading {} failed ({:#}); prefixes it skipped stay programmed \
-                     but unlisted",
-                    self.name,
-                    anyhow::Error::from(e)
-                ),
+                Ok((k, v)) => out.entries.push((k.prefix_len(), k.data(), v)),
+                Err(e) => {
+                    let e = anyhow::Error::from(e).context(format!("walk {}", self.name));
+                    out.error.get_or_insert(e);
+                }
             }
         }
         out
@@ -720,7 +764,7 @@ mod tests {
     }
 
     // The adopt walk undoes `Routes::upsert`'s key: the VNI back from big-endian and the route's
-    // prefix length back from the key's. A walk error is skipped, not fatal.
+    // prefix length back from the key's. A walk error does not end the decode, and is reported.
     #[test]
     fn route_entries_decode_the_upsert_key() {
         let v = RouteValue {
@@ -746,8 +790,9 @@ mod tests {
             (d.vni, d.ipv4)
         });
         assert_eq!(
-            got,
+            got.entries,
             vec![(100, [10, 0, 0, 0], 24, v), (0x01_02_03, [0; 4], 0, v)]
         );
+        assert!(got.error.is_some(), "the walk is reported cut");
     }
 }

@@ -13,7 +13,7 @@ use flowplane_common::{
     NatKey, NatKey6, NatOwner, NatOwnerKey, NatOwnerKey6, NatValue, NatValue6, PortMeta,
     RouteValue,
 };
-use flowplane_control::{CtFlushScope, CtFlushScope6, MapWriter};
+use flowplane_control::{CtFlushScope, CtFlushScope6, MapWriter, Walk};
 
 pub struct AyaWriter {
     pub routes: Routes,
@@ -59,12 +59,6 @@ pub struct AyaWriter {
 }
 
 impl AyaWriter {
-    /// All `IFACE_META` restart-journal entries (adopt scan). Reaches the raw map, which lives here
-    /// now; not part of the `MapWriter` trait.
-    pub fn iface_meta_entries(&self) -> Vec<(IfaceMetaKey, IfaceMetaVal)> {
-        self.iface_meta.entries()
-    }
-
     /// Count of live `INTERFACES` entries (adopt journal-drift cross-check).
     pub fn ifaces_count(&self) -> usize {
         self.ifaces.entries().len()
@@ -176,11 +170,11 @@ impl MapWriter for AyaWriter {
     fn route6_remove(&mut self, vni: u32, ipv6: [u8; 16], p: u32) -> anyhow::Result<()> {
         self.routes6.remove(vni, ipv6, p)
     }
-    fn route_entries(&self) -> Vec<(u32, [u8; 4], u32, RouteValue)> {
-        self.routes.entries()
+    fn route_entries(&self) -> Walk<(u32, [u8; 4], u32, RouteValue)> {
+        self.routes.walk()
     }
-    fn route6_entries(&self) -> Vec<(u32, [u8; 16], u32, RouteValue)> {
-        self.routes6.entries()
+    fn route6_entries(&self) -> Walk<(u32, [u8; 16], u32, RouteValue)> {
+        self.routes6.walk()
     }
     fn nat_upsert(&mut self, k: NatKey, v: NatValue) -> anyhow::Result<()> {
         self.nat.upsert(k, v)
@@ -203,8 +197,8 @@ impl MapWriter for AyaWriter {
     fn nat_owner_remove(&mut self, p: u32, k: &NatOwnerKey) -> anyhow::Result<()> {
         self.nat_owners.remove(p, *k)
     }
-    fn nat_owner_entries(&self) -> Vec<(u32, NatOwnerKey, NatOwner)> {
-        self.nat_owners.entries()
+    fn nat_owner_entries(&self) -> Walk<(u32, NatOwnerKey, NatOwner)> {
+        self.nat_owners.walk()
     }
     fn nat6_upsert(&mut self, k: NatKey6, v: NatValue6) -> anyhow::Result<()> {
         self.nat6.upsert(k, v)
@@ -227,8 +221,8 @@ impl MapWriter for AyaWriter {
     fn nat_owner6_remove(&mut self, p: u32, k: &NatOwnerKey6) -> anyhow::Result<()> {
         self.nat_owners6.remove(p, *k)
     }
-    fn nat_owner6_entries(&self) -> Vec<(u32, NatOwnerKey6, NatOwner)> {
-        self.nat_owners6.entries()
+    fn nat_owner6_entries(&self) -> Walk<(u32, NatOwnerKey6, NatOwner)> {
+        self.nat_owners6.walk()
     }
     fn lb_upsert(
         &mut self,
@@ -259,6 +253,21 @@ impl MapWriter for AyaWriter {
     }
     fn maglev_remove(&mut self, k: &flowplane_common::MaglevKey) -> anyhow::Result<()> {
         self.maglev.remove(k)
+    }
+    fn maglev_get(
+        &self,
+        k: &flowplane_common::MaglevKey,
+    ) -> anyhow::Result<Option<flowplane_common::LbBackend>> {
+        self.maglev.lookup(k)
+    }
+    fn lb_entries(&self) -> Walk<(flowplane_common::LbKey, flowplane_common::LbValue)> {
+        self.lb.walk()
+    }
+    fn lb6_entries(&self) -> Walk<(flowplane_common::LbKey6, flowplane_common::LbValue)> {
+        self.lb6.walk()
+    }
+    fn maglev_entries(&self) -> Walk<(flowplane_common::MaglevKey, flowplane_common::LbBackend)> {
+        self.maglev.walk()
     }
     fn underlay_upsert(
         &mut self,
@@ -292,10 +301,10 @@ impl MapWriter for AyaWriter {
     fn fw_epoch_bump(&mut self) -> anyhow::Result<()> {
         self.fw_epoch.bump()
     }
-    fn fw_bind_entries(&self) -> Vec<(u32, flowplane_common::FwBind)> {
-        self.fw_bind.entries()
+    fn fw_bind_entries(&self) -> Walk<(u32, flowplane_common::FwBind)> {
+        self.fw_bind.walk()
     }
-    fn fw_scope_ids(&self) -> Vec<u64> {
+    fn fw_scope_ids(&self) -> Walk<u64> {
         self.fw_scopes.ids()
     }
     fn meter_upsert(&mut self, i: u32, v: flowplane_common::MeterState) -> anyhow::Result<()> {
@@ -336,6 +345,9 @@ impl MapWriter for AyaWriter {
     }
     fn iface_meta_remove(&mut self, k: &IfaceMetaKey) -> anyhow::Result<()> {
         self.iface_meta.remove(k)
+    }
+    fn iface_meta_entries(&self) -> Walk<(IfaceMetaKey, IfaceMetaVal)> {
+        self.iface_meta.walk()
     }
     fn dhcp_meta_remove(&mut self, i: u32) -> anyhow::Result<()> {
         self.dhcp_meta.remove(i)

@@ -24,7 +24,8 @@ pub enum LbIpBytes {
 }
 
 /// LB IP address stored in the shadow state (IPv4 or IPv6). Moved out of `control/mod.rs`.
-#[derive(Clone)]
+/// Ordered so adopt can group the pinned service rows by address.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum LbIp {
     Ipv4([u8; 4]),
     Ipv6([u8; 16]),
@@ -33,12 +34,17 @@ pub enum LbIp {
 /// Registered load balancer: its Maglev table id, the (port,proto) services it answers, and the
 /// ordered backend list (drives the Maglev table). Keyed in `ControlCore.lbs` by the LB's id.
 /// Moved verbatim out of `control/mod.rs`; the NAT preferred-underlay collision check
-/// reads `lb_underlay`.
+/// reads `lb_underlay`, which no map records: an LB adopted after a restart carries all zeroes.
 pub struct LbEntry {
     pub vni: u32,
     pub ip: LbIp,
     pub lb_underlay: [u8; 16],
     pub ports: Vec<(u16, u8)>,
     pub table_id: u32,
+    /// Tables some of an adopted LB's rows point at besides `table_id` (left by the counter reset
+    /// adopt fixes), when adopt could not move those rows onto `table_id`: a cut walk, or a main
+    /// table without backends or that it failed to refill. They forward as they were and go with
+    /// the LB.
+    pub other_tables: Vec<u32>,
     pub backends: Vec<flowplane_common::LbBackend>,
 }

@@ -122,10 +122,15 @@ impl<W: MapWriter> ControlCore<W> {
     /// overwrites it.
     ///
     /// A mesh route a self-route was holding back is lost here: the kernel never had it. The mesh
-    /// agent re-sends a route only when its route-bus session restarts (the subscribe replay) or
-    /// the prefix changes, so until then detaching that interface removes the key instead of
-    /// restoring the route.
-    pub fn adopt_routes(&mut self) {
+    /// agent re-sends every route it holds when the instance id ListInterfaces reports changes, so
+    /// it is back within one agent reconcile tick; until then detaching that interface removes the
+    /// key instead of restoring the route.
+    ///
+    /// After an `IFACE_META` walk a read error cut short (`ifaces_partial`), an interface the walk
+    /// did not list may still live, so a self-route that looks orphaned is held instead, unless
+    /// the walk listed its interface (whose device is then known to be gone).
+    /// A walk of the tries cut short leaves the routes past the error unlisted; that is returned.
+    pub fn adopt_routes(&mut self) -> anyhow::Result<()> {
         let orphan = |iv: Option<IfaceValue>, r: &RouteValue, vni: u32| {
             iv.is_some_and(|iv| {
                 iv.is_local == 1
@@ -147,17 +152,26 @@ impl<W: MapWriter> ControlCore<W> {
             .map(|m| ((m.vni, m.ipv6), route_value(m.underlay, m.vni, false)))
             .collect();
 
+        let walk4 = self.w.route_entries();
+        let mut held4 = Vec::new();
         self.routes_shadow.clear();
-        for (v, p, l, r) in self.w.route_entries() {
+        for (v, p, l, r) in walk4.entries {
             let listed = match own4.get(&(v, p)) {
                 Some(own) if l == 32 => r != *own,
-                _ => !(l == 32 && orphan(self.w.ifaces_get(&IfaceKey::new(v, p)), &r, v)),
+                _ if l == 32 && orphan(self.w.ifaces_get(&IfaceKey::new(v, p)), &r, v) => {
+                    if self.ifaces_partial && !self.journal_read4.contains(&(v, p)) {
+                        held4.push((v, p));
+                    }
+                    false
+                }
+                _ => true,
             };
             if listed {
                 self.routes_shadow.push((v, p, l, r));
             }
         }
         self.self_routes.clear();
+        self.self_routes.extend(held4);
         for (&(v, p), &own) in &own4 {
             // A key whose write fails stays unheld, so the kernel and the shadow still agree on
             // it; the next adopt retries.
@@ -166,21 +180,34 @@ impl<W: MapWriter> ControlCore<W> {
             }
         }
 
+        let walk6 = self.w.route6_entries();
+        let mut held6 = Vec::new();
         self.routes6_shadow.clear();
-        for (v, p, l, r) in self.w.route6_entries() {
+        for (v, p, l, r) in walk6.entries {
             let listed = match own6.get(&(v, p)) {
                 Some(own) if l == 128 => r != *own,
-                _ => !(l == 128 && orphan(self.w.ifaces6_get(&IfaceKey6::new(v, p)), &r, v)),
+                _ if l == 128 && orphan(self.w.ifaces6_get(&IfaceKey6::new(v, p)), &r, v) => {
+                    if self.ifaces_partial && !self.journal_read6.contains(&(v, p)) {
+                        held6.push((v, p));
+                    }
+                    false
+                }
+                _ => true,
             };
             if listed {
                 self.routes6_shadow.push((v, p, l, r));
             }
         }
         self.self_routes6.clear();
+        self.self_routes6.extend(held6);
         for (&(v, p), &own) in &own6 {
             if self.w.route6_upsert(v, p, 128, own).is_ok() {
                 self.self_routes6.insert((v, p));
             }
+        }
+        match walk4.error.or(walk6.error) {
+            None => Ok(()),
+            Some(e) => Err(e.context("a walk was cut short: routes past it stay unlisted")),
         }
     }
 
@@ -366,7 +393,7 @@ mod tests {
         );
 
         let mut c = ControlCore::new(before.w);
-        c.adopt_routes();
+        c.adopt_routes().unwrap();
         assert_eq!(sorted(c.routes_shadow.clone()), want4);
         assert_eq!(sorted(c.routes6_shadow.clone()), want6);
 
@@ -452,7 +479,7 @@ mod tests {
                 },
             );
         }
-        c.adopt_routes();
+        c.adopt_routes().unwrap();
         assert_eq!(c.routes_shadow, vec![(100, [10, 0, 0, 6], 32, foreign)]);
         assert_eq!(c.routes6_shadow, vec![(100, v6(6), 128, foreign)]);
         for last in [5, 6, 8] {
@@ -512,5 +539,77 @@ mod tests {
         assert!(!c.w.routes.contains_key(&(7, [10, 0, 0, 5], 32)));
         assert_eq!(c.routes_shadow.len(), 2);
         assert_eq!(c.routes_shadow[1].3.nexthop_ipv6, moved);
+    }
+    // A journal walk a read error cut short leaves live interfaces unrecovered. Nothing may then
+    // take their absence for their removal: an unrecovered interface's self-route looks orphaned
+    // but stays held against mesh routes, and no VNI is purged when its last known interface
+    // detaches. An interface the journal did list but that did not come back (its device is
+    // gone) is a known orphan, and its key is released as on a whole walk.
+    #[test]
+    fn a_cut_journal_walk_releases_no_self_route_and_purges_no_vni() {
+        use flowplane_common::{IfaceKey, IfaceMetaKey, IfaceMetaVal, IfaceValue};
+        let local = [0xfd, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
+        let self_route = RouteValue {
+            nexthop_vni: 100,
+            nexthop_ipv6: local,
+            is_external: 0,
+            _pad: [0; 3],
+        };
+        let mut w = MemMapWriter::default();
+        for (id, last) in [(&b"a"[..], 5u8), (b"b", 6)] {
+            let ip = [10, 0, 0, last];
+            w.ifaces_upsert(
+                IfaceKey::new(100, ip),
+                IfaceValue {
+                    tap_ifindex: 40 + last as u32,
+                    is_local: 1,
+                    underlay_ipv6: local,
+                    guest_mac: [2, 0, 0, 0, 0, last],
+                    peer_capable: 1,
+                    _pad: [0; 1],
+                },
+            )
+            .unwrap();
+            w.route_upsert(100, ip, 32, self_route).unwrap();
+            let val = IfaceMetaVal {
+                vni: 100,
+                tap_ifindex: 40 + last as u32,
+                ipv4: ip,
+                id_len: 1,
+                device_len: 0,
+                ipv6: [0; 16],
+                underlay: local,
+                device: [0; flowplane_common::IFACE_DEV_MAX],
+                l3: 0,
+                _pad: [0; 3],
+            };
+            w.iface_meta_upsert(IfaceMetaKey::from_id(id).unwrap(), val)
+                .unwrap();
+        }
+        w.walk_cut.insert("IFACE_META", 1);
+
+        let mut c = ControlCore::new(w);
+        let journal = c.read_iface_journal();
+        assert!(journal.error.is_some(), "the cut is reported");
+        let [(_, read)] = journal.entries[..] else {
+            panic!("one interface read");
+        };
+        let unread = [10, 0, 0, 11 - read.ipv4[3]];
+        // The interface read has no device any more, so the caller registers nothing.
+        c.adopt_routes().unwrap();
+
+        c.create_route(100, unread, 32, NH, 100, true).unwrap();
+        assert_eq!(
+            c.w.routes[&(100, unread, 32)],
+            self_route,
+            "the unrecovered interface keeps local delivery"
+        );
+        c.create_route(100, read.ipv4, 32, NH, 100, true).unwrap();
+        assert_ne!(
+            c.w.routes[&(100, read.ipv4, 32)],
+            self_route,
+            "the known orphan's key is released"
+        );
+        assert!(c.keeps_vni(100), "its VNI is not purged");
     }
 }

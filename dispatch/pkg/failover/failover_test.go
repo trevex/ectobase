@@ -180,6 +180,26 @@ func TestFailover_MultiPrefix_PartialBarrier_TracksAppliedFence(t *testing.T) {
 	}
 }
 
+// A fence applied on an earlier pass stays tracked when a later pass fails on its first target:
+// dropping it from FencedPrefixes would leave that fence in place with nothing ever to release it.
+func TestFailover_LaterFenceFailure_KeepsEarlierAppliedFenceTracked(t *testing.T) {
+	scheme := testScheme(t)
+	lost := lostPoolObj("A", "2001:db8:0:1::/64")
+	lost.Status.FencedPrefixes = []string{"2001:db8:0:1::/64"} // applied by an earlier pass
+	vm := vmOn("vm1", "A")
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(lost, readyPoolObj("B"), vm).WithStatusSubresource(vm, lost).Build()
+	r := &Reconciler{Client: c, StorageFencer: denyFencer{errors.New("ceph down")}, NetworkFencer: okFencer{}, FailoverThreshold: time.Minute}
+
+	if _, err := r.Reconcile(context.Background(), req("A")); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	gp := &platformv1.ClusterPool{}
+	_ = c.Get(context.Background(), key("A"), gp)
+	if len(gp.Status.FencedPrefixes) != 1 || gp.Status.FencedPrefixes[0] != "2001:db8:0:1::/64" {
+		t.Fatalf("an already-applied fence must stay tracked for release, got %v", gp.Status.FencedPrefixes)
+	}
+}
+
 // A fence coordinate must never be derived from the entity being fenced — that entity is by
 // definition the one central has lost contact with. Node /64s are broker-reported, so the set is
 // frozen at whatever was last seen: a node that joined during the outage is absent from it. That is

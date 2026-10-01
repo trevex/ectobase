@@ -257,6 +257,230 @@ func (*FenceReply) Descriptor() ([]byte, []int) {
 	return file_routebus_proto_rawDescGZIP(), []int{1}
 }
 
+// RouteKey names one route in the RIB: a prefix in a VNI.
+type RouteKey struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Vni           uint32                 `protobuf:"varint,1,opt,name=vni,proto3" json:"vni,omitempty"`
+	Prefix        string                 `protobuf:"bytes,2,opt,name=prefix,proto3" json:"prefix,omitempty"` // e.g. "10.0.0.5/32"; matched in either spelling of an address, answered as asked
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RouteKey) Reset() {
+	*x = RouteKey{}
+	mi := &file_routebus_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RouteKey) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RouteKey) ProtoMessage() {}
+
+func (x *RouteKey) ProtoReflect() protoreflect.Message {
+	mi := &file_routebus_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RouteKey.ProtoReflect.Descriptor instead.
+func (*RouteKey) Descriptor() ([]byte, []int) {
+	return file_routebus_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *RouteKey) GetVni() uint32 {
+	if x != nil {
+		return x.Vni
+	}
+	return 0
+}
+
+func (x *RouteKey) GetPrefix() string {
+	if x != nil {
+		return x.Prefix
+	}
+	return ""
+}
+
+// AnnouncedFromRequest asks about a targeted set of keys, never the whole table: the caller knows
+// which addresses must be gone, and a pool's other routes (its anycast LB addresses among them)
+// have no bearing on the answer.
+type AnnouncedFromRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Prefix        string                 `protobuf:"bytes,1,opt,name=prefix,proto3" json:"prefix,omitempty"` // CIDR the nexthops are tested against, e.g. "2001:db8:0:1::/64"
+	Keys          []*RouteKey            `protobuf:"bytes,2,rep,name=keys,proto3" json:"keys,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AnnouncedFromRequest) Reset() {
+	*x = AnnouncedFromRequest{}
+	mi := &file_routebus_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AnnouncedFromRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AnnouncedFromRequest) ProtoMessage() {}
+
+func (x *AnnouncedFromRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_routebus_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AnnouncedFromRequest.ProtoReflect.Descriptor instead.
+func (*AnnouncedFromRequest) Descriptor() ([]byte, []int) {
+	return file_routebus_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *AnnouncedFromRequest) GetPrefix() string {
+	if x != nil {
+		return x.Prefix
+	}
+	return ""
+}
+
+func (x *AnnouncedFromRequest) GetKeys() []*RouteKey {
+	if x != nil {
+		return x.Keys
+	}
+	return nil
+}
+
+type AnnouncedFromReply struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Keys  []*RouteKey            `protobuf:"bytes,1,rep,name=keys,proto3" json:"keys,omitempty"` // the asked keys announced from inside the prefix; empty = none
+	// Who holds each of those keys: one entry per (key, origin, nexthop inside the prefix). A shared
+	// /64 or a pool aggregate covers many nodes, and one zombie among them holds the whole fence, so
+	// the operator needs the node, not just the address.
+	Holdings      []*RouteHolding `protobuf:"bytes,2,rep,name=holdings,proto3" json:"holdings,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AnnouncedFromReply) Reset() {
+	*x = AnnouncedFromReply{}
+	mi := &file_routebus_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AnnouncedFromReply) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AnnouncedFromReply) ProtoMessage() {}
+
+func (x *AnnouncedFromReply) ProtoReflect() protoreflect.Message {
+	mi := &file_routebus_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AnnouncedFromReply.ProtoReflect.Descriptor instead.
+func (*AnnouncedFromReply) Descriptor() ([]byte, []int) {
+	return file_routebus_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *AnnouncedFromReply) GetKeys() []*RouteKey {
+	if x != nil {
+		return x.Keys
+	}
+	return nil
+}
+
+func (x *AnnouncedFromReply) GetHoldings() []*RouteHolding {
+	if x != nil {
+		return x.Holdings
+	}
+	return nil
+}
+
+// RouteHolding is one origin announcing a key with one nexthop inside the asked prefix.
+type RouteHolding struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Key           *RouteKey              `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
+	Origin        string                 `protobuf:"bytes,2,opt,name=origin,proto3" json:"origin,omitempty"`   // the announcing session's Hello node_id
+	Nexthop       string                 `protobuf:"bytes,3,opt,name=nexthop,proto3" json:"nexthop,omitempty"` // the underlay nexthop it announced, inside the prefix
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RouteHolding) Reset() {
+	*x = RouteHolding{}
+	mi := &file_routebus_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RouteHolding) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RouteHolding) ProtoMessage() {}
+
+func (x *RouteHolding) ProtoReflect() protoreflect.Message {
+	mi := &file_routebus_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RouteHolding.ProtoReflect.Descriptor instead.
+func (*RouteHolding) Descriptor() ([]byte, []int) {
+	return file_routebus_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *RouteHolding) GetKey() *RouteKey {
+	if x != nil {
+		return x.Key
+	}
+	return nil
+}
+
+func (x *RouteHolding) GetOrigin() string {
+	if x != nil {
+		return x.Origin
+	}
+	return ""
+}
+
+func (x *RouteHolding) GetNexthop() string {
+	if x != nil {
+		return x.Nexthop
+	}
+	return ""
+}
+
 // PortProto is one LB service tuple. proto is the IP protocol NUMBER (6=TCP, 17=UDP).
 type PortProto struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -268,7 +492,7 @@ type PortProto struct {
 
 func (x *PortProto) Reset() {
 	*x = PortProto{}
-	mi := &file_routebus_proto_msgTypes[2]
+	mi := &file_routebus_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -280,7 +504,7 @@ func (x *PortProto) String() string {
 func (*PortProto) ProtoMessage() {}
 
 func (x *PortProto) ProtoReflect() protoreflect.Message {
-	mi := &file_routebus_proto_msgTypes[2]
+	mi := &file_routebus_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -293,7 +517,7 @@ func (x *PortProto) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PortProto.ProtoReflect.Descriptor instead.
 func (*PortProto) Descriptor() ([]byte, []int) {
-	return file_routebus_proto_rawDescGZIP(), []int{2}
+	return file_routebus_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *PortProto) GetPort() uint32 {
@@ -332,7 +556,7 @@ type ClientMsg struct {
 
 func (x *ClientMsg) Reset() {
 	*x = ClientMsg{}
-	mi := &file_routebus_proto_msgTypes[3]
+	mi := &file_routebus_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -344,7 +568,7 @@ func (x *ClientMsg) String() string {
 func (*ClientMsg) ProtoMessage() {}
 
 func (x *ClientMsg) ProtoReflect() protoreflect.Message {
-	mi := &file_routebus_proto_msgTypes[3]
+	mi := &file_routebus_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -357,7 +581,7 @@ func (x *ClientMsg) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClientMsg.ProtoReflect.Descriptor instead.
 func (*ClientMsg) Descriptor() ([]byte, []int) {
-	return file_routebus_proto_rawDescGZIP(), []int{3}
+	return file_routebus_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *ClientMsg) GetMsg() isClientMsg_Msg {
@@ -539,7 +763,7 @@ type ServerMsg struct {
 
 func (x *ServerMsg) Reset() {
 	*x = ServerMsg{}
-	mi := &file_routebus_proto_msgTypes[4]
+	mi := &file_routebus_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -551,7 +775,7 @@ func (x *ServerMsg) String() string {
 func (*ServerMsg) ProtoMessage() {}
 
 func (x *ServerMsg) ProtoReflect() protoreflect.Message {
-	mi := &file_routebus_proto_msgTypes[4]
+	mi := &file_routebus_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -564,7 +788,7 @@ func (x *ServerMsg) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ServerMsg.ProtoReflect.Descriptor instead.
 func (*ServerMsg) Descriptor() ([]byte, []int) {
-	return file_routebus_proto_rawDescGZIP(), []int{4}
+	return file_routebus_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *ServerMsg) GetMsg() isServerMsg_Msg {
@@ -683,7 +907,7 @@ type Hello struct {
 
 func (x *Hello) Reset() {
 	*x = Hello{}
-	mi := &file_routebus_proto_msgTypes[5]
+	mi := &file_routebus_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -695,7 +919,7 @@ func (x *Hello) String() string {
 func (*Hello) ProtoMessage() {}
 
 func (x *Hello) ProtoReflect() protoreflect.Message {
-	mi := &file_routebus_proto_msgTypes[5]
+	mi := &file_routebus_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -708,7 +932,7 @@ func (x *Hello) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Hello.ProtoReflect.Descriptor instead.
 func (*Hello) Descriptor() ([]byte, []int) {
-	return file_routebus_proto_rawDescGZIP(), []int{5}
+	return file_routebus_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *Hello) GetNodeId() string {
@@ -749,7 +973,7 @@ type Subscribe struct {
 
 func (x *Subscribe) Reset() {
 	*x = Subscribe{}
-	mi := &file_routebus_proto_msgTypes[6]
+	mi := &file_routebus_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -761,7 +985,7 @@ func (x *Subscribe) String() string {
 func (*Subscribe) ProtoMessage() {}
 
 func (x *Subscribe) ProtoReflect() protoreflect.Message {
-	mi := &file_routebus_proto_msgTypes[6]
+	mi := &file_routebus_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -774,7 +998,7 @@ func (x *Subscribe) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Subscribe.ProtoReflect.Descriptor instead.
 func (*Subscribe) Descriptor() ([]byte, []int) {
-	return file_routebus_proto_rawDescGZIP(), []int{6}
+	return file_routebus_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *Subscribe) GetVni() uint32 {
@@ -793,7 +1017,7 @@ type Unsubscribe struct {
 
 func (x *Unsubscribe) Reset() {
 	*x = Unsubscribe{}
-	mi := &file_routebus_proto_msgTypes[7]
+	mi := &file_routebus_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -805,7 +1029,7 @@ func (x *Unsubscribe) String() string {
 func (*Unsubscribe) ProtoMessage() {}
 
 func (x *Unsubscribe) ProtoReflect() protoreflect.Message {
-	mi := &file_routebus_proto_msgTypes[7]
+	mi := &file_routebus_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -818,7 +1042,7 @@ func (x *Unsubscribe) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Unsubscribe.ProtoReflect.Descriptor instead.
 func (*Unsubscribe) Descriptor() ([]byte, []int) {
-	return file_routebus_proto_rawDescGZIP(), []int{7}
+	return file_routebus_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *Unsubscribe) GetVni() uint32 {
@@ -841,7 +1065,7 @@ type Announce struct {
 
 func (x *Announce) Reset() {
 	*x = Announce{}
-	mi := &file_routebus_proto_msgTypes[8]
+	mi := &file_routebus_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -853,7 +1077,7 @@ func (x *Announce) String() string {
 func (*Announce) ProtoMessage() {}
 
 func (x *Announce) ProtoReflect() protoreflect.Message {
-	mi := &file_routebus_proto_msgTypes[8]
+	mi := &file_routebus_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -866,7 +1090,7 @@ func (x *Announce) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Announce.ProtoReflect.Descriptor instead.
 func (*Announce) Descriptor() ([]byte, []int) {
-	return file_routebus_proto_rawDescGZIP(), []int{8}
+	return file_routebus_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *Announce) GetVni() uint32 {
@@ -914,7 +1138,7 @@ type Withdraw struct {
 
 func (x *Withdraw) Reset() {
 	*x = Withdraw{}
-	mi := &file_routebus_proto_msgTypes[9]
+	mi := &file_routebus_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -926,7 +1150,7 @@ func (x *Withdraw) String() string {
 func (*Withdraw) ProtoMessage() {}
 
 func (x *Withdraw) ProtoReflect() protoreflect.Message {
-	mi := &file_routebus_proto_msgTypes[9]
+	mi := &file_routebus_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -939,7 +1163,7 @@ func (x *Withdraw) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Withdraw.ProtoReflect.Descriptor instead.
 func (*Withdraw) Descriptor() ([]byte, []int) {
-	return file_routebus_proto_rawDescGZIP(), []int{9}
+	return file_routebus_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *Withdraw) GetVni() uint32 {
@@ -969,7 +1193,7 @@ type RouteUpdate struct {
 
 func (x *RouteUpdate) Reset() {
 	*x = RouteUpdate{}
-	mi := &file_routebus_proto_msgTypes[10]
+	mi := &file_routebus_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -981,7 +1205,7 @@ func (x *RouteUpdate) String() string {
 func (*RouteUpdate) ProtoMessage() {}
 
 func (x *RouteUpdate) ProtoReflect() protoreflect.Message {
-	mi := &file_routebus_proto_msgTypes[10]
+	mi := &file_routebus_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -994,7 +1218,7 @@ func (x *RouteUpdate) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RouteUpdate.ProtoReflect.Descriptor instead.
 func (*RouteUpdate) Descriptor() ([]byte, []int) {
-	return file_routebus_proto_rawDescGZIP(), []int{10}
+	return file_routebus_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *RouteUpdate) GetVni() uint32 {
@@ -1050,7 +1274,7 @@ type EndOfRIB struct {
 
 func (x *EndOfRIB) Reset() {
 	*x = EndOfRIB{}
-	mi := &file_routebus_proto_msgTypes[11]
+	mi := &file_routebus_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1062,7 +1286,7 @@ func (x *EndOfRIB) String() string {
 func (*EndOfRIB) ProtoMessage() {}
 
 func (x *EndOfRIB) ProtoReflect() protoreflect.Message {
-	mi := &file_routebus_proto_msgTypes[11]
+	mi := &file_routebus_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1075,7 +1299,7 @@ func (x *EndOfRIB) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EndOfRIB.ProtoReflect.Descriptor instead.
 func (*EndOfRIB) Descriptor() ([]byte, []int) {
-	return file_routebus_proto_rawDescGZIP(), []int{11}
+	return file_routebus_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *EndOfRIB) GetVni() uint32 {
@@ -1116,7 +1340,7 @@ type EndOfGlobal struct {
 
 func (x *EndOfGlobal) Reset() {
 	*x = EndOfGlobal{}
-	mi := &file_routebus_proto_msgTypes[12]
+	mi := &file_routebus_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1128,7 +1352,7 @@ func (x *EndOfGlobal) String() string {
 func (*EndOfGlobal) ProtoMessage() {}
 
 func (x *EndOfGlobal) ProtoReflect() protoreflect.Message {
-	mi := &file_routebus_proto_msgTypes[12]
+	mi := &file_routebus_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1141,7 +1365,7 @@ func (x *EndOfGlobal) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EndOfGlobal.ProtoReflect.Descriptor instead.
 func (*EndOfGlobal) Descriptor() ([]byte, []int) {
-	return file_routebus_proto_rawDescGZIP(), []int{12}
+	return file_routebus_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *EndOfGlobal) GetRecordCount() uint32 {
@@ -1159,7 +1383,7 @@ type KeepAlive struct {
 
 func (x *KeepAlive) Reset() {
 	*x = KeepAlive{}
-	mi := &file_routebus_proto_msgTypes[13]
+	mi := &file_routebus_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1171,7 +1395,7 @@ func (x *KeepAlive) String() string {
 func (*KeepAlive) ProtoMessage() {}
 
 func (x *KeepAlive) ProtoReflect() protoreflect.Message {
-	mi := &file_routebus_proto_msgTypes[13]
+	mi := &file_routebus_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1184,7 +1408,7 @@ func (x *KeepAlive) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KeepAlive.ProtoReflect.Descriptor instead.
 func (*KeepAlive) Descriptor() ([]byte, []int) {
-	return file_routebus_proto_rawDescGZIP(), []int{13}
+	return file_routebus_proto_rawDescGZIP(), []int{17}
 }
 
 // AnnounceNat announces this node's ownership of a deterministic egress SNAT
@@ -1206,7 +1430,7 @@ type AnnounceNat struct {
 
 func (x *AnnounceNat) Reset() {
 	*x = AnnounceNat{}
-	mi := &file_routebus_proto_msgTypes[14]
+	mi := &file_routebus_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1218,7 +1442,7 @@ func (x *AnnounceNat) String() string {
 func (*AnnounceNat) ProtoMessage() {}
 
 func (x *AnnounceNat) ProtoReflect() protoreflect.Message {
-	mi := &file_routebus_proto_msgTypes[14]
+	mi := &file_routebus_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1231,7 +1455,7 @@ func (x *AnnounceNat) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AnnounceNat.ProtoReflect.Descriptor instead.
 func (*AnnounceNat) Descriptor() ([]byte, []int) {
-	return file_routebus_proto_rawDescGZIP(), []int{14}
+	return file_routebus_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *AnnounceNat) GetVni() uint32 {
@@ -1287,7 +1511,7 @@ type WithdrawNat struct {
 
 func (x *WithdrawNat) Reset() {
 	*x = WithdrawNat{}
-	mi := &file_routebus_proto_msgTypes[15]
+	mi := &file_routebus_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1299,7 +1523,7 @@ func (x *WithdrawNat) String() string {
 func (*WithdrawNat) ProtoMessage() {}
 
 func (x *WithdrawNat) ProtoReflect() protoreflect.Message {
-	mi := &file_routebus_proto_msgTypes[15]
+	mi := &file_routebus_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1312,7 +1536,7 @@ func (x *WithdrawNat) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WithdrawNat.ProtoReflect.Descriptor instead.
 func (*WithdrawNat) Descriptor() ([]byte, []int) {
-	return file_routebus_proto_rawDescGZIP(), []int{15}
+	return file_routebus_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *WithdrawNat) GetNatIp() string {
@@ -1351,7 +1575,7 @@ type NatUpdate struct {
 
 func (x *NatUpdate) Reset() {
 	*x = NatUpdate{}
-	mi := &file_routebus_proto_msgTypes[16]
+	mi := &file_routebus_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1363,7 +1587,7 @@ func (x *NatUpdate) String() string {
 func (*NatUpdate) ProtoMessage() {}
 
 func (x *NatUpdate) ProtoReflect() protoreflect.Message {
-	mi := &file_routebus_proto_msgTypes[16]
+	mi := &file_routebus_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1376,7 +1600,7 @@ func (x *NatUpdate) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NatUpdate.ProtoReflect.Descriptor instead.
 func (*NatUpdate) Descriptor() ([]byte, []int) {
-	return file_routebus_proto_rawDescGZIP(), []int{16}
+	return file_routebus_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *NatUpdate) GetVni() uint32 {
@@ -1446,7 +1670,7 @@ type PublicPrefix struct {
 
 func (x *PublicPrefix) Reset() {
 	*x = PublicPrefix{}
-	mi := &file_routebus_proto_msgTypes[17]
+	mi := &file_routebus_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1458,7 +1682,7 @@ func (x *PublicPrefix) String() string {
 func (*PublicPrefix) ProtoMessage() {}
 
 func (x *PublicPrefix) ProtoReflect() protoreflect.Message {
-	mi := &file_routebus_proto_msgTypes[17]
+	mi := &file_routebus_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1471,7 +1695,7 @@ func (x *PublicPrefix) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PublicPrefix.ProtoReflect.Descriptor instead.
 func (*PublicPrefix) Descriptor() ([]byte, []int) {
-	return file_routebus_proto_rawDescGZIP(), []int{17}
+	return file_routebus_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *PublicPrefix) GetKind() PublicKind {
@@ -1540,7 +1764,7 @@ type PublicUpdate struct {
 
 func (x *PublicUpdate) Reset() {
 	*x = PublicUpdate{}
-	mi := &file_routebus_proto_msgTypes[18]
+	mi := &file_routebus_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1552,7 +1776,7 @@ func (x *PublicUpdate) String() string {
 func (*PublicUpdate) ProtoMessage() {}
 
 func (x *PublicUpdate) ProtoReflect() protoreflect.Message {
-	mi := &file_routebus_proto_msgTypes[18]
+	mi := &file_routebus_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1565,7 +1789,7 @@ func (x *PublicUpdate) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PublicUpdate.ProtoReflect.Descriptor instead.
 func (*PublicUpdate) Descriptor() ([]byte, []int) {
-	return file_routebus_proto_rawDescGZIP(), []int{18}
+	return file_routebus_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *PublicUpdate) GetPrefix() *PublicPrefix {
@@ -1590,7 +1814,20 @@ const file_routebus_proto_rawDesc = "" +
 	"\fFenceRequest\x12\x16\n" +
 	"\x06prefix\x18\x01 \x01(\tR\x06prefix\"\f\n" +
 	"\n" +
-	"FenceReply\"5\n" +
+	"FenceReply\"4\n" +
+	"\bRouteKey\x12\x10\n" +
+	"\x03vni\x18\x01 \x01(\rR\x03vni\x12\x16\n" +
+	"\x06prefix\x18\x02 \x01(\tR\x06prefix\"Y\n" +
+	"\x14AnnouncedFromRequest\x12\x16\n" +
+	"\x06prefix\x18\x01 \x01(\tR\x06prefix\x12)\n" +
+	"\x04keys\x18\x02 \x03(\v2\x15.routebus.v1.RouteKeyR\x04keys\"v\n" +
+	"\x12AnnouncedFromReply\x12)\n" +
+	"\x04keys\x18\x01 \x03(\v2\x15.routebus.v1.RouteKeyR\x04keys\x125\n" +
+	"\bholdings\x18\x02 \x03(\v2\x19.routebus.v1.RouteHoldingR\bholdings\"i\n" +
+	"\fRouteHolding\x12'\n" +
+	"\x03key\x18\x01 \x01(\v2\x15.routebus.v1.RouteKeyR\x03key\x12\x16\n" +
+	"\x06origin\x18\x02 \x01(\tR\x06origin\x12\x18\n" +
+	"\anexthop\x18\x03 \x01(\tR\anexthop\"5\n" +
 	"\tPortProto\x12\x12\n" +
 	"\x04port\x18\x01 \x01(\rR\x04port\x12\x14\n" +
 	"\x05proto\x18\x02 \x01(\rR\x05proto\"\xe1\x04\n" +
@@ -1697,11 +1934,12 @@ const file_routebus_proto_rawDesc = "" +
 	"\x0fGLOBAL_FEED_ALL\x10\x00\x12\x14\n" +
 	"\x10GLOBAL_FEED_NONE\x10\x012I\n" +
 	"\bRouteBus\x12=\n" +
-	"\aSession\x12\x16.routebus.v1.ClientMsg\x1a\x16.routebus.v1.ServerMsg(\x010\x012\x91\x01\n" +
+	"\aSession\x12\x16.routebus.v1.ClientMsg\x1a\x16.routebus.v1.ServerMsg(\x010\x012\xe6\x01\n" +
 	"\rRouteBusAdmin\x12>\n" +
 	"\bSetFence\x12\x19.routebus.v1.FenceRequest\x1a\x17.routebus.v1.FenceReply\x12@\n" +
 	"\n" +
-	"ClearFence\x12\x19.routebus.v1.FenceRequest\x1a\x17.routebus.v1.FenceReplyB;Z9github.com/trevex/ectobase/mesh/gen/routebusv1;routebusv1b\x06proto3"
+	"ClearFence\x12\x19.routebus.v1.FenceRequest\x1a\x17.routebus.v1.FenceReply\x12S\n" +
+	"\rAnnouncedFrom\x12!.routebus.v1.AnnouncedFromRequest\x1a\x1f.routebus.v1.AnnouncedFromReplyB;Z9github.com/trevex/ectobase/mesh/gen/routebusv1;routebusv1b\x06proto3"
 
 var (
 	file_routebus_proto_rawDescOnce sync.Once
@@ -1716,66 +1954,76 @@ func file_routebus_proto_rawDescGZIP() []byte {
 }
 
 var file_routebus_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_routebus_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
+var file_routebus_proto_msgTypes = make([]protoimpl.MessageInfo, 23)
 var file_routebus_proto_goTypes = []any{
-	(RouteOp)(0),         // 0: routebus.v1.RouteOp
-	(PublicKind)(0),      // 1: routebus.v1.PublicKind
-	(GlobalFeed)(0),      // 2: routebus.v1.GlobalFeed
-	(*FenceRequest)(nil), // 3: routebus.v1.FenceRequest
-	(*FenceReply)(nil),   // 4: routebus.v1.FenceReply
-	(*PortProto)(nil),    // 5: routebus.v1.PortProto
-	(*ClientMsg)(nil),    // 6: routebus.v1.ClientMsg
-	(*ServerMsg)(nil),    // 7: routebus.v1.ServerMsg
-	(*Hello)(nil),        // 8: routebus.v1.Hello
-	(*Subscribe)(nil),    // 9: routebus.v1.Subscribe
-	(*Unsubscribe)(nil),  // 10: routebus.v1.Unsubscribe
-	(*Announce)(nil),     // 11: routebus.v1.Announce
-	(*Withdraw)(nil),     // 12: routebus.v1.Withdraw
-	(*RouteUpdate)(nil),  // 13: routebus.v1.RouteUpdate
-	(*EndOfRIB)(nil),     // 14: routebus.v1.EndOfRIB
-	(*EndOfGlobal)(nil),  // 15: routebus.v1.EndOfGlobal
-	(*KeepAlive)(nil),    // 16: routebus.v1.KeepAlive
-	(*AnnounceNat)(nil),  // 17: routebus.v1.AnnounceNat
-	(*WithdrawNat)(nil),  // 18: routebus.v1.WithdrawNat
-	(*NatUpdate)(nil),    // 19: routebus.v1.NatUpdate
-	(*PublicPrefix)(nil), // 20: routebus.v1.PublicPrefix
-	(*PublicUpdate)(nil), // 21: routebus.v1.PublicUpdate
+	(RouteOp)(0),                 // 0: routebus.v1.RouteOp
+	(PublicKind)(0),              // 1: routebus.v1.PublicKind
+	(GlobalFeed)(0),              // 2: routebus.v1.GlobalFeed
+	(*FenceRequest)(nil),         // 3: routebus.v1.FenceRequest
+	(*FenceReply)(nil),           // 4: routebus.v1.FenceReply
+	(*RouteKey)(nil),             // 5: routebus.v1.RouteKey
+	(*AnnouncedFromRequest)(nil), // 6: routebus.v1.AnnouncedFromRequest
+	(*AnnouncedFromReply)(nil),   // 7: routebus.v1.AnnouncedFromReply
+	(*RouteHolding)(nil),         // 8: routebus.v1.RouteHolding
+	(*PortProto)(nil),            // 9: routebus.v1.PortProto
+	(*ClientMsg)(nil),            // 10: routebus.v1.ClientMsg
+	(*ServerMsg)(nil),            // 11: routebus.v1.ServerMsg
+	(*Hello)(nil),                // 12: routebus.v1.Hello
+	(*Subscribe)(nil),            // 13: routebus.v1.Subscribe
+	(*Unsubscribe)(nil),          // 14: routebus.v1.Unsubscribe
+	(*Announce)(nil),             // 15: routebus.v1.Announce
+	(*Withdraw)(nil),             // 16: routebus.v1.Withdraw
+	(*RouteUpdate)(nil),          // 17: routebus.v1.RouteUpdate
+	(*EndOfRIB)(nil),             // 18: routebus.v1.EndOfRIB
+	(*EndOfGlobal)(nil),          // 19: routebus.v1.EndOfGlobal
+	(*KeepAlive)(nil),            // 20: routebus.v1.KeepAlive
+	(*AnnounceNat)(nil),          // 21: routebus.v1.AnnounceNat
+	(*WithdrawNat)(nil),          // 22: routebus.v1.WithdrawNat
+	(*NatUpdate)(nil),            // 23: routebus.v1.NatUpdate
+	(*PublicPrefix)(nil),         // 24: routebus.v1.PublicPrefix
+	(*PublicUpdate)(nil),         // 25: routebus.v1.PublicUpdate
 }
 var file_routebus_proto_depIdxs = []int32{
-	8,  // 0: routebus.v1.ClientMsg.hello:type_name -> routebus.v1.Hello
-	9,  // 1: routebus.v1.ClientMsg.subscribe:type_name -> routebus.v1.Subscribe
-	10, // 2: routebus.v1.ClientMsg.unsubscribe:type_name -> routebus.v1.Unsubscribe
-	11, // 3: routebus.v1.ClientMsg.announce:type_name -> routebus.v1.Announce
-	12, // 4: routebus.v1.ClientMsg.withdraw:type_name -> routebus.v1.Withdraw
-	16, // 5: routebus.v1.ClientMsg.keep_alive:type_name -> routebus.v1.KeepAlive
-	17, // 6: routebus.v1.ClientMsg.announce_nat:type_name -> routebus.v1.AnnounceNat
-	18, // 7: routebus.v1.ClientMsg.withdraw_nat:type_name -> routebus.v1.WithdrawNat
-	20, // 8: routebus.v1.ClientMsg.announce_public:type_name -> routebus.v1.PublicPrefix
-	20, // 9: routebus.v1.ClientMsg.withdraw_public:type_name -> routebus.v1.PublicPrefix
-	13, // 10: routebus.v1.ServerMsg.route_update:type_name -> routebus.v1.RouteUpdate
-	14, // 11: routebus.v1.ServerMsg.end_of_rib:type_name -> routebus.v1.EndOfRIB
-	16, // 12: routebus.v1.ServerMsg.keep_alive:type_name -> routebus.v1.KeepAlive
-	19, // 13: routebus.v1.ServerMsg.nat_update:type_name -> routebus.v1.NatUpdate
-	21, // 14: routebus.v1.ServerMsg.public_update:type_name -> routebus.v1.PublicUpdate
-	15, // 15: routebus.v1.ServerMsg.end_of_global:type_name -> routebus.v1.EndOfGlobal
-	2,  // 16: routebus.v1.Hello.global_feed:type_name -> routebus.v1.GlobalFeed
-	0,  // 17: routebus.v1.RouteUpdate.op:type_name -> routebus.v1.RouteOp
-	0,  // 18: routebus.v1.NatUpdate.op:type_name -> routebus.v1.RouteOp
-	1,  // 19: routebus.v1.PublicPrefix.kind:type_name -> routebus.v1.PublicKind
-	5,  // 20: routebus.v1.PublicPrefix.ports:type_name -> routebus.v1.PortProto
-	20, // 21: routebus.v1.PublicUpdate.prefix:type_name -> routebus.v1.PublicPrefix
-	0,  // 22: routebus.v1.PublicUpdate.op:type_name -> routebus.v1.RouteOp
-	6,  // 23: routebus.v1.RouteBus.Session:input_type -> routebus.v1.ClientMsg
-	3,  // 24: routebus.v1.RouteBusAdmin.SetFence:input_type -> routebus.v1.FenceRequest
-	3,  // 25: routebus.v1.RouteBusAdmin.ClearFence:input_type -> routebus.v1.FenceRequest
-	7,  // 26: routebus.v1.RouteBus.Session:output_type -> routebus.v1.ServerMsg
-	4,  // 27: routebus.v1.RouteBusAdmin.SetFence:output_type -> routebus.v1.FenceReply
-	4,  // 28: routebus.v1.RouteBusAdmin.ClearFence:output_type -> routebus.v1.FenceReply
-	26, // [26:29] is the sub-list for method output_type
-	23, // [23:26] is the sub-list for method input_type
-	23, // [23:23] is the sub-list for extension type_name
-	23, // [23:23] is the sub-list for extension extendee
-	0,  // [0:23] is the sub-list for field type_name
+	5,  // 0: routebus.v1.AnnouncedFromRequest.keys:type_name -> routebus.v1.RouteKey
+	5,  // 1: routebus.v1.AnnouncedFromReply.keys:type_name -> routebus.v1.RouteKey
+	8,  // 2: routebus.v1.AnnouncedFromReply.holdings:type_name -> routebus.v1.RouteHolding
+	5,  // 3: routebus.v1.RouteHolding.key:type_name -> routebus.v1.RouteKey
+	12, // 4: routebus.v1.ClientMsg.hello:type_name -> routebus.v1.Hello
+	13, // 5: routebus.v1.ClientMsg.subscribe:type_name -> routebus.v1.Subscribe
+	14, // 6: routebus.v1.ClientMsg.unsubscribe:type_name -> routebus.v1.Unsubscribe
+	15, // 7: routebus.v1.ClientMsg.announce:type_name -> routebus.v1.Announce
+	16, // 8: routebus.v1.ClientMsg.withdraw:type_name -> routebus.v1.Withdraw
+	20, // 9: routebus.v1.ClientMsg.keep_alive:type_name -> routebus.v1.KeepAlive
+	21, // 10: routebus.v1.ClientMsg.announce_nat:type_name -> routebus.v1.AnnounceNat
+	22, // 11: routebus.v1.ClientMsg.withdraw_nat:type_name -> routebus.v1.WithdrawNat
+	24, // 12: routebus.v1.ClientMsg.announce_public:type_name -> routebus.v1.PublicPrefix
+	24, // 13: routebus.v1.ClientMsg.withdraw_public:type_name -> routebus.v1.PublicPrefix
+	17, // 14: routebus.v1.ServerMsg.route_update:type_name -> routebus.v1.RouteUpdate
+	18, // 15: routebus.v1.ServerMsg.end_of_rib:type_name -> routebus.v1.EndOfRIB
+	20, // 16: routebus.v1.ServerMsg.keep_alive:type_name -> routebus.v1.KeepAlive
+	23, // 17: routebus.v1.ServerMsg.nat_update:type_name -> routebus.v1.NatUpdate
+	25, // 18: routebus.v1.ServerMsg.public_update:type_name -> routebus.v1.PublicUpdate
+	19, // 19: routebus.v1.ServerMsg.end_of_global:type_name -> routebus.v1.EndOfGlobal
+	2,  // 20: routebus.v1.Hello.global_feed:type_name -> routebus.v1.GlobalFeed
+	0,  // 21: routebus.v1.RouteUpdate.op:type_name -> routebus.v1.RouteOp
+	0,  // 22: routebus.v1.NatUpdate.op:type_name -> routebus.v1.RouteOp
+	1,  // 23: routebus.v1.PublicPrefix.kind:type_name -> routebus.v1.PublicKind
+	9,  // 24: routebus.v1.PublicPrefix.ports:type_name -> routebus.v1.PortProto
+	24, // 25: routebus.v1.PublicUpdate.prefix:type_name -> routebus.v1.PublicPrefix
+	0,  // 26: routebus.v1.PublicUpdate.op:type_name -> routebus.v1.RouteOp
+	10, // 27: routebus.v1.RouteBus.Session:input_type -> routebus.v1.ClientMsg
+	3,  // 28: routebus.v1.RouteBusAdmin.SetFence:input_type -> routebus.v1.FenceRequest
+	3,  // 29: routebus.v1.RouteBusAdmin.ClearFence:input_type -> routebus.v1.FenceRequest
+	6,  // 30: routebus.v1.RouteBusAdmin.AnnouncedFrom:input_type -> routebus.v1.AnnouncedFromRequest
+	11, // 31: routebus.v1.RouteBus.Session:output_type -> routebus.v1.ServerMsg
+	4,  // 32: routebus.v1.RouteBusAdmin.SetFence:output_type -> routebus.v1.FenceReply
+	4,  // 33: routebus.v1.RouteBusAdmin.ClearFence:output_type -> routebus.v1.FenceReply
+	7,  // 34: routebus.v1.RouteBusAdmin.AnnouncedFrom:output_type -> routebus.v1.AnnouncedFromReply
+	31, // [31:35] is the sub-list for method output_type
+	27, // [27:31] is the sub-list for method input_type
+	27, // [27:27] is the sub-list for extension type_name
+	27, // [27:27] is the sub-list for extension extendee
+	0,  // [0:27] is the sub-list for field type_name
 }
 
 func init() { file_routebus_proto_init() }
@@ -1783,7 +2031,7 @@ func file_routebus_proto_init() {
 	if File_routebus_proto != nil {
 		return
 	}
-	file_routebus_proto_msgTypes[3].OneofWrappers = []any{
+	file_routebus_proto_msgTypes[7].OneofWrappers = []any{
 		(*ClientMsg_Hello)(nil),
 		(*ClientMsg_Subscribe)(nil),
 		(*ClientMsg_Unsubscribe)(nil),
@@ -1795,7 +2043,7 @@ func file_routebus_proto_init() {
 		(*ClientMsg_AnnouncePublic)(nil),
 		(*ClientMsg_WithdrawPublic)(nil),
 	}
-	file_routebus_proto_msgTypes[4].OneofWrappers = []any{
+	file_routebus_proto_msgTypes[8].OneofWrappers = []any{
 		(*ServerMsg_RouteUpdate)(nil),
 		(*ServerMsg_EndOfRib)(nil),
 		(*ServerMsg_KeepAlive)(nil),
@@ -1809,7 +2057,7 @@ func file_routebus_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_routebus_proto_rawDesc), len(file_routebus_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   19,
+			NumMessages:   23,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

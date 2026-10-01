@@ -299,7 +299,7 @@ func (r *Reconciler) listLocalIfaces(ctx context.Context) ([]LocalInterface, err
 	if r.dp == nil {
 		return nil, nil
 	}
-	locals, err := r.dp.ListInterfaces(ctx)
+	locals, _, err := r.dp.ListInterfaces(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list interfaces: %w", err)
 	}

@@ -9,6 +9,7 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
 	pb "github.com/trevex/ectobase/mesh/gen/routebusv1"
 )
@@ -42,4 +43,21 @@ func (a *AdminServer) ClearFence(_ context.Context, req *pb.FenceRequest) (*pb.F
 	}
 	a.rib.ClearFence(req.GetPrefix())
 	return &pb.FenceReply{}, nil
+}
+
+// AnnouncedFrom reports which of the asked keys are still announced from inside a prefix, fenced
+// or not, and by which node and nexthop — what failover waits on before it calls ClearFence (see
+// RIB.AnnouncedFrom).
+func (a *AdminServer) AnnouncedFrom(_ context.Context, req *pb.AnnouncedFromRequest) (*pb.AnnouncedFromReply, error) {
+	held, err := a.rib.AnnouncedFrom(req.GetPrefix(), req.GetKeys())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid prefix %q: %v", req.GetPrefix(), err)
+	}
+	rep := &pb.AnnouncedFromReply{Holdings: held}
+	for i, h := range held {
+		if i == 0 || !proto.Equal(h.GetKey(), held[i-1].GetKey()) { // holdings come grouped by key
+			rep.Keys = append(rep.Keys, h.GetKey())
+		}
+	}
+	return rep, nil
 }

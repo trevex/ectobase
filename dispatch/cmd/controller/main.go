@@ -111,7 +111,9 @@ func main() {
 		log.Fatalf("new manager: %v", err)
 	}
 
-	if err := (&clusterpool.Reconciler{Client: mgr.GetClient(), HealthStale: 30 * time.Second}).SetupWithManager(mgr); err != nil {
+	// One lease-staleness threshold for pool health and for failover's "is the pool back" check.
+	const healthStale = 30 * time.Second
+	if err := (&clusterpool.Reconciler{Client: mgr.GetClient(), HealthStale: healthStale}).SetupWithManager(mgr); err != nil {
 		log.Fatalf("setup clusterpool controller: %v", err)
 	}
 
@@ -136,6 +138,11 @@ func main() {
 	// wired to the real reflector RouteBusAdmin only when -reflector-admin is set.
 	var storageF failover.PrefixFencer = fence.NewStorageFencer(mgr.GetClient(), *csiDriver, *csiClusterID, client.ObjectKey{Name: *csiSecretName, Namespace: *csiSecretNS})
 	var networkF failover.PrefixFencer = failover.DenyFencer{}
+	// Fence release also waits on route state: the reflector must hold, from the /64 being
+	// released, no overlay address placed on another pool. Asked over the same admin client; with
+	// no reflector DenyFencer answers that too, so a release with an address to check never
+	// happens (it could not anyway: DenyFencer refuses the release itself).
+	var routes failover.RouteHolder = failover.DenyFencer{}
 	if *reflectorAdmin != "" {
 		creds := insecure.NewCredentials()
 		if *reflectorTLSCA != "" || *reflectorTLSCert != "" || *reflectorTLSKey != "" {
@@ -149,10 +156,11 @@ func main() {
 		if derr != nil {
 			log.Fatalf("dial reflector admin: %v", derr)
 		}
-		networkF = fence.NewNetworkFencer(routebusv1.NewRouteBusAdminClient(conn))
+		nf := fence.NewNetworkFencer(routebusv1.NewRouteBusAdminClient(conn))
+		networkF, routes = nf, nf
 	}
 
-	if err := (&failover.Reconciler{Client: mgr.GetClient(), StorageFencer: storageF, NetworkFencer: networkF, FailoverThreshold: 2 * time.Minute}).SetupWithManager(mgr); err != nil {
+	if err := (&failover.Reconciler{Client: mgr.GetClient(), StorageFencer: storageF, NetworkFencer: networkF, Routes: routes, FailoverThreshold: 2 * time.Minute, HealthStale: healthStale}).SetupWithManager(mgr); err != nil {
 		log.Fatalf("setup failover controller: %v", err)
 	}
 

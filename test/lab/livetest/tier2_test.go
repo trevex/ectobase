@@ -251,9 +251,11 @@ func TestTier2Failover(t *testing.T) {
 	// an earlier run that was interrupted while the pool was fenced, rather than this run's fence.
 	// Ceph drops a blocklist entry only on the Fenced -> Unfenced transition, so a run killed inside
 	// the fenced window leaves one behind with a multi-year expiry, and the release of every later
-	// fence for that same /64 then looks unfinished. Check `ceph osd blocklist ls` on the ceph node;
-	// clearing it means patching the NetworkFence to Unfenced (not deleting it) and letting csi-addons
-	// run the removal.
+	// fence for that same /64 then looks unfinished. Before Release required the unfence op's own
+	// status message, a release pass landing right after its flip to Unfenced could also delete the
+	// CR before csi-addons unfenced it, which strands an entry the same way. Check `ceph osd blocklist
+	// ls` on the ceph node; clearing it means patching the NetworkFence to Unfenced (not deleting it)
+	// and letting csi-addons run the removal.
 	require.NoError(t, scaleBrokerReplicas(ctx, cfg, "k02", 1), "scale up k02 broker (recover)")
 	t.Logf("recovered k02: scaled its broker back to 1 (lease renews → pool Ready → fence released)")
 

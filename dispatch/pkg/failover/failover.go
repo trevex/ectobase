@@ -11,6 +11,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -21,6 +23,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -52,23 +55,46 @@ func (DenyFencer) Release(context.Context, string) error {
 
 // Reconciler runs Tier-2 fence-gated failover for VMs bound to a lost pool.
 type Reconciler struct {
-	Client            client.Client
-	StorageFencer     PrefixFencer
-	NetworkFencer     PrefixFencer
+	Client        client.Client
+	StorageFencer PrefixFencer
+	NetworkFencer PrefixFencer
+	// Routes gates fence release on route state (see routegate.go). nil holds every release that
+	// has an address to check, as an unreachable reflector does.
+	Routes            RouteHolder
 	FailoverThreshold time.Duration
+	// HealthStale is how fresh a pool's lease must be for its fences to be released (the
+	// pool-health controller's threshold); zero means defaultHealthStale.
+	HealthStale time.Duration
 }
+
+// defaultHealthStale matches the pool-health controller's lease-staleness threshold.
+const defaultHealthStale = 30 * time.Second
 
 func (r *Reconciler) Reconcile(ctx context.Context, rq ctrl.Request) (ctrl.Result, error) {
 	var pool platformv1.ClusterPool
 	if err := r.Client.Get(ctx, rq.NamespacedName, &pool); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
-	// Recovery path: release fences for /64s the broker has confirmed drained.
-	if err := r.releaseDrained(ctx, &pool); err != nil {
+	// Recovery path: release fences for /64s the broker has confirmed drained — only while the
+	// pool is demonstrably back (see releaseDrained).
+	healthStale := r.HealthStale
+	if healthStale == 0 {
+		healthStale = defaultHealthStale
+	}
+	waiting, err := r.releaseDrained(ctx, &pool, clusterpool.Reachable(&pool, time.Now(), healthStale))
+	if err != nil {
 		return ctrl.Result{}, err
 	}
 	if !poolLost(&pool, time.Now(), r.FailoverThreshold) {
+		if waiting {
+			return ctrl.Result{RequeueAfter: routeRecheck}, nil
+		}
 		return ctrl.Result{RequeueAfter: r.FailoverThreshold}, nil
+	}
+	// A lost pool's drain report is stale by definition: forget it before fencing, so only a
+	// report its broker makes after the pool is back can release anything.
+	if err := r.forgetDrain(ctx, &pool); err != nil {
+		return ctrl.Result{}, err
 	}
 	// Whole-pool fence: every target must confirm BOTH fences active (barrier) before any re-bind.
 	targets, complete, why := fenceCoverage(&pool)
@@ -213,30 +239,93 @@ func (r *Reconciler) blockPoolVMs(ctx context.Context, lostPool, msg string) err
 	return nil
 }
 
-// setFencedPrefixes records which /64s central has fenced (drives recovery release).
+// forgetDrain marks every NodeDrain entry not drained on a lost pool. NodeDrain is its broker's
+// last report, and the broker writes it separately from the lease heartbeat, so a pool that comes
+// back can be Ready on a fresh lease while NodeDrain still says Drained=true from before it was
+// lost — after that loss, VMIs may well be running on those prefixes again. The broker's next
+// report, computed from its live downstream on every tick, overwrites this: ReportStatus replaces
+// the whole list whenever what it computes differs from what it read.
+func (r *Reconciler) forgetDrain(ctx context.Context, pool *platformv1.ClusterPool) error {
+	changed := false
+	for i := range pool.Status.NodeDrain {
+		if pool.Status.NodeDrain[i].Drained {
+			pool.Status.NodeDrain[i].Drained = false
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	if err := r.Client.Status().Update(ctx, pool); err != nil {
+		return fmt.Errorf("forget drain report of lost pool %s: %w", pool.Name, err)
+	}
+	return nil
+}
+
+// setFencedPrefixes records which /64s central has fenced (drives recovery release). It adds to
+// what is recorded and never drops anything: a prefix fenced by an earlier pass is still fenced
+// when this pass fails before reaching it, and only releaseDrained, having released it, may forget
+// it. Overwriting with this pass's shorter list leaked such a fence with nothing left to release it.
 func (r *Reconciler) setFencedPrefixes(ctx context.Context, pool *platformv1.ClusterPool, fenced []string) error {
-	pool.Status.FencedPrefixes = fenced
+	for _, p := range fenced {
+		if !slices.Contains(pool.Status.FencedPrefixes, p) {
+			pool.Status.FencedPrefixes = append(pool.Status.FencedPrefixes, p)
+		}
+	}
 	return r.Client.Status().Update(ctx, pool)
 }
 
 // releaseDrained clears the fence (both backends) for every FencedPrefix the broker
-// has reported Drained, then trims it from FencedPrefixes. Fail-safe: an un-drained
-// /64 stays fenced. Returns nil when there's nothing to release.
-func (r *Reconciler) releaseDrained(ctx context.Context, pool *platformv1.ClusterPool) error {
-	if len(pool.Status.FencedPrefixes) == 0 {
-		return nil
-	}
+// has reported Drained and that no longer announces an address placed on another pool,
+// then trims it from FencedPrefixes. Fail-safe: an un-drained /64 stays fenced, and so
+// does one the reflector still holds such a route from, or that cannot be checked.
+// waiting reports a prefix held on routes alone, which the caller rechecks soon; the
+// pool's FenceReleaseBlocked condition says which and why. A failed check is not an
+// error: it holds the release and lets the rest of the pass run.
+//
+// Nothing is released unless the pool is reachable (Ready on a fresh lease). NodeDrain is
+// its broker's LAST report, and nothing clears it when the pool is lost again. With a
+// release that can wait on routes indefinitely, a stale Drained=true on a pool lost again
+// is reachable: a partition that also drops the pool's route-bus sessions empties the
+// reflector, the route gate passes, and the release would reopen Ceph to nodes that are
+// partitioned but alive — while the same pass fences and rebinds their VMs elsewhere.
+func (r *Reconciler) releaseDrained(ctx context.Context, pool *platformv1.ClusterPool, reachable bool) (waiting bool, err error) {
 	drained := map[string]bool{}
 	for _, d := range pool.Status.NodeDrain {
-		if d.Drained {
+		if d.Drained && reachable {
 			drained[d.Prefix] = true
 		}
 	}
-	var remain []string
+	// Only look up what is placed elsewhere when a release is actually on the table.
+	var keys []RouteKey
+	var owner map[RouteKey]string
+	var lookupErr error
+	for _, p := range pool.Status.FencedPrefixes {
+		if drained[p] {
+			keys, owner, lookupErr = r.placedElsewhere(ctx, pool.Name)
+			break
+		}
+	}
+	var remain, blocked []string
+	reason := ""
 	changed := false
 	for _, p := range pool.Status.FencedPrefixes {
 		if !drained[p] {
 			remain = append(remain, p)
+			continue
+		}
+		if lookupErr != nil {
+			remain, blocked = append(remain, p), append(blocked, fmt.Sprintf("%s: cannot work out which addresses to check: %v", p, lookupErr))
+			reason = "RouteCheckFailed"
+			continue
+		}
+		// Before either fence lifts: a stale source still announcing a moved VM may well still be
+		// running it, so storage stays fenced as long as the route does.
+		if ok, why, msg := r.routesGone(ctx, p, keys, owner); !ok {
+			remain, blocked = append(remain, p), append(blocked, msg)
+			if reason != "RouteCheckFailed" {
+				reason = why // one reason per condition; a failed check needs fixing first
+			}
 			continue
 		}
 		if err := r.StorageFencer.Release(ctx, p); err != nil {
@@ -249,11 +338,35 @@ func (r *Reconciler) releaseDrained(ctx context.Context, pool *platformv1.Cluste
 		}
 		changed = true
 	}
-	if !changed {
-		return nil
+	if changed {
+		pool.Status.FencedPrefixes = remain
 	}
-	pool.Status.FencedPrefixes = remain
-	return r.Client.Status().Update(ctx, pool)
+	if setReleaseBlocked(pool, reason, blocked) {
+		changed = true
+		if len(blocked) > 0 {
+			log.FromContext(ctx).Info("holding fence release on route state", "pool", pool.Name, "reason", reason, "detail", blocked)
+		}
+	}
+	if !changed {
+		return len(blocked) > 0, nil
+	}
+	return len(blocked) > 0, r.Client.Status().Update(ctx, pool)
+}
+
+// setReleaseBlocked records on the pool why a drained prefix is still fenced, or — once nothing is
+// held on routes, including when nothing is fenced at all — that it no longer is. A pool that
+// never waited gets no condition at all. Reports whether the status changed.
+func setReleaseBlocked(pool *platformv1.ClusterPool, reason string, blocked []string) bool {
+	c := metav1.Condition{Type: ConditionFenceReleaseBlocked, ObservedGeneration: pool.Generation}
+	switch {
+	case len(blocked) > 0:
+		c.Status, c.Reason, c.Message = metav1.ConditionTrue, reason, strings.Join(blocked, "; ")
+	case meta.IsStatusConditionTrue(pool.Status.Conditions, ConditionFenceReleaseBlocked):
+		c.Status, c.Reason, c.Message = metav1.ConditionFalse, "RoutesWithdrawn", "no fenced prefix is waiting on a route"
+	default:
+		return false
+	}
+	return meta.SetStatusCondition(&pool.Status.Conditions, c)
 }
 
 // block records a FailoverBlocked=True condition on the VM and writes ONLY status

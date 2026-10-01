@@ -78,7 +78,7 @@ func TestBusRouteForALocalHostPrefixIsPassedThrough(t *testing.T) {
 	if nh, ok := dp.get(100, guestHost); !ok || nh != remoteNH {
 		t.Fatalf("the ADD must reach the dataplane (flowplane shadows it while the key is held), got %q ok=%v", nh, ok)
 	}
-	if !b.installed[100][guestHost] {
+	if _, ok := b.programmed[100][guestHost]; !ok {
 		t.Fatal("the agent must keep its installed bookkeeping for a local host key")
 	}
 	b.apply(ctx, routeWithdraw(100, guestHost))
@@ -102,7 +102,7 @@ func TestLocalInterfaceArrivingOverAProgrammedRouteKeepsItsBookkeeping(t *testin
 	if withdrewKey(dp, 100, guestHost) {
 		t.Fatal("the interface arriving must not withdraw the key")
 	}
-	if !b.installed[100][guestHost] {
+	if _, ok := b.programmed[100][guestHost]; !ok {
 		t.Fatal("the interface arriving must not drop the route from the bookkeeping")
 	}
 	b.apply(ctx, routeWithdraw(100, guestHost))
@@ -209,7 +209,7 @@ func TestLocalHostKeyWithOnlyThisNodeIsWithdrawn(t *testing.T) {
 	if !withdrewKey(dp, 100, guestHost) {
 		t.Fatal("a local host key sent only this node must be withdrawn from the dataplane")
 	}
-	if b.installed[100][guestHost] {
+	if _, ok := b.programmed[100][guestHost]; ok {
 		t.Fatal("nothing is installed for it any more")
 	}
 

@@ -20,6 +20,13 @@ const (
 // Pending (never reported); renewed within-or-at healthStale => Ready; older =>
 // Unknown. The boundary is inclusive (age == healthStale is still Ready) to avoid
 // flicker exactly at the threshold.
+// Reachable reports whether pool is up as far as central can tell: Ready, and on a lease its broker
+// renewed within healthStale. Both, because the phase is written by this package's reconciler on
+// its own schedule and lags a broker that has just gone silent; the lease is the evidence itself.
+func Reachable(pool *platformv1.ClusterPool, now time.Time, healthStale time.Duration) bool {
+	return pool.Status.Phase == PhaseReady && phaseFromLease(now, pool.Status.Lease, healthStale) == PhaseReady
+}
+
 func phaseFromLease(now time.Time, lease *platformv1.ClusterPoolLease, healthStale time.Duration) string {
 	if lease == nil || lease.RenewTime == nil {
 		return PhasePending
