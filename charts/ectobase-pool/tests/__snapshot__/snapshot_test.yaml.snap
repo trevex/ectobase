@@ -311,7 +311,9 @@ renders (ebpf clab):
                         type: string
                       type: array
                     clusterName:
-                      description: ClusterName is the cluster this compiled container is bound to. The broker selects on this field.
+                      description: |-
+                        ClusterName is the cluster this compiled container is bound to. The twin lives in the pool's
+                        pool-<clusterName> namespace on the dispatch, which is the namespace the pool's broker syncs.
                       type: string
                     command:
                       description: Command overrides the image entrypoint.
@@ -618,15 +620,16 @@ renders (ebpf clab):
                     on the NetworkInterface instead. It also deliberately does NOT carry
                     the NIC's underlay address: every interface on a node shares that node's one VTEP, which the
                     dataplane resolves at startup, and the agent obtains it from the local DataplaneNode
-                    (ListInterfaces) to announce overlay routes with the correct node nexthop. Keeping node-local state out of this central object avoids a
+                    (ListInterfaces) to announce overlay routes with the correct node nexthop. Keeping node-local state out of this dispatch-side object avoids a
                     compile->sync round-trip that would lag (and flap) the announced nexthop.
                   properties:
                     clusterName:
                       description: |-
                         ClusterName is the cluster this compiled NIC is bound to (the pod->node
-                        binding). Set by the compiler from the owning VirtualMachine's placement,
-                        or the compiler's --cluster-name default for NICs with no owning VM.
-                        The per-cluster broker selects on this field.
+                        binding). The compiler resolves it in order: the owning Container, the owning
+                        VirtualMachine, the NIC's own spec.clusterName, then the compiler's --cluster-name
+                        default. The twin is written into that pool's pool-<clusterName> namespace on the
+                        dispatch, which is the namespace the pool's broker syncs.
                       type: string
                     firewall:
                       description: Firewall holds the compiled ingress and egress firewall rules.
@@ -834,7 +837,7 @@ renders (ebpf clab):
                       type: object
                     vni:
                       description: |-
-                        VNI is the effective VXLAN network identifier for this NIC (resolved from the NIC's
+                        VNI is the effective Geneve virtual network identifier for this NIC (resolved from the NIC's
                         status.vni, falling back to its VPC's status.vni).
                       format: int32
                       type: integer
@@ -914,7 +917,8 @@ renders (ebpf clab):
                     clusterName:
                       description: |-
                         ClusterName is the cluster this compiled VM is bound to (the pod->node binding).
-                        The per-cluster broker selects on this field.
+                        The twin lives in the pool's pool-<clusterName> namespace on the dispatch, which is the
+                        namespace the pool's broker syncs.
                       type: string
                     image:
                       description: Image is the containerDisk image to boot from.
@@ -1098,8 +1102,9 @@ renders (ebpf clab):
                       type: string
                     clusterName:
                       description: |-
-                        ClusterName is the cluster this attachment is bound to (the pod->node binding);
-                        the per-cluster broker selects on this field.
+                        ClusterName is the cluster this attachment is bound to (the pod->node binding). The twin
+                        lives in the pool's pool-<clusterName> namespace on the dispatch, which is the namespace
+                        the pool's broker syncs.
                       type: string
                     diskIdentity:
                       description: |-
@@ -1892,7 +1897,9 @@ renders (ebpf clab):
         - name: v1alpha1
           schema:
             openAPIV3Schema:
-              description: LoadBalancer is a scaffold-only resource. Selector-target load balancer (§3.5).
+              description: |-
+                LoadBalancer is a Maglev load balancer: one address that spreads flows across the
+                NetworkInterfaces matched by spec.targetSelector or named by spec.targetRefs.
               properties:
                 apiVersion:
                   description: |-
@@ -1916,11 +1923,11 @@ renders (ebpf clab):
                     LoadBalancerSpec is the desired state of a LoadBalancer. The IP is the LB's identity (v4 or v6);
                     backends are the NetworkInterfaces matched by TargetSelector or named by TargetRefs.
 
-                    Deliberately NOT called a "LB address". A load-balancer address is 1:N and ingress-only — clients reach
-                    it and it Maglev-hashes to a backend, but a backend's own egress is SNATed to its NATGateway
-                    address, never to this one. The 1:1, bidirectional "virtual IP" that a single interface owns for
-                    both directions (ironcore/dpservice VirtualIP, AWS Elastic IP) is a different object: FloatingIP.
-                    Naming both "LB address" conflated them once too often.
+                    It is deliberately not called a VIP. A load-balancer address is 1:N and ingress-only: clients
+                    reach it and it Maglev-hashes to a backend, but a backend's own egress is SNATed to its
+                    NATGateway address, never to this one. The 1:1, bidirectional "virtual IP" that a single
+                    interface owns for both directions (ironcore/dpservice VirtualIP, AWS Elastic IP) is a
+                    different object: FloatingIP.
                   properties:
                     ip:
                       description: |-
@@ -2029,7 +2036,9 @@ renders (ebpf clab):
                       format: int64
                       type: integer
                     state:
-                      description: State is the lifecycle state (Pending | Ready).
+                      description: |-
+                        State is the address allocation state: Allocated, Pending (waiting on the pool),
+                        Exhausted (the pool has no free address) or Invalid (the request cannot be satisfied).
                       type: string
                   type: object
               type: object
@@ -2405,7 +2414,7 @@ renders (ebpf clab):
                         single VTEP, shared by every interface on that node.
                       type: string
                     vni:
-                      description: VNI is the effective VXLAN network identifier resolved from the VPC.
+                      description: VNI is the effective Geneve virtual network identifier resolved from the VPC.
                       format: int32
                       type: integer
                   type: object
@@ -2645,8 +2654,8 @@ renders (ebpf clab):
                       type: string
                     vni:
                       description: |-
-                        VNI optionally pins the VXLAN network identifier. When nil or 0, the VNI is
-                        allocated by the central cluster from the global VNI space.
+                        VNI optionally pins the Geneve virtual network identifier. When nil or 0, the VNI is
+                        allocated by the dispatch from the global VNI space.
                       format: int32
                       type: integer
                   type: object
@@ -2718,7 +2727,7 @@ renders (ebpf clab):
                       description: State is the current lifecycle state (e.g. Pending, Ready).
                       type: string
                     vni:
-                      description: VNI is the effective, allocated VXLAN network identifier.
+                      description: VNI is the effective, allocated Geneve virtual network identifier.
                       format: int32
                       type: integer
                   type: object
@@ -3462,7 +3471,9 @@ renders (ebpf hw):
                         type: string
                       type: array
                     clusterName:
-                      description: ClusterName is the cluster this compiled container is bound to. The broker selects on this field.
+                      description: |-
+                        ClusterName is the cluster this compiled container is bound to. The twin lives in the pool's
+                        pool-<clusterName> namespace on the dispatch, which is the namespace the pool's broker syncs.
                       type: string
                     command:
                       description: Command overrides the image entrypoint.
@@ -3769,15 +3780,16 @@ renders (ebpf hw):
                     on the NetworkInterface instead. It also deliberately does NOT carry
                     the NIC's underlay address: every interface on a node shares that node's one VTEP, which the
                     dataplane resolves at startup, and the agent obtains it from the local DataplaneNode
-                    (ListInterfaces) to announce overlay routes with the correct node nexthop. Keeping node-local state out of this central object avoids a
+                    (ListInterfaces) to announce overlay routes with the correct node nexthop. Keeping node-local state out of this dispatch-side object avoids a
                     compile->sync round-trip that would lag (and flap) the announced nexthop.
                   properties:
                     clusterName:
                       description: |-
                         ClusterName is the cluster this compiled NIC is bound to (the pod->node
-                        binding). Set by the compiler from the owning VirtualMachine's placement,
-                        or the compiler's --cluster-name default for NICs with no owning VM.
-                        The per-cluster broker selects on this field.
+                        binding). The compiler resolves it in order: the owning Container, the owning
+                        VirtualMachine, the NIC's own spec.clusterName, then the compiler's --cluster-name
+                        default. The twin is written into that pool's pool-<clusterName> namespace on the
+                        dispatch, which is the namespace the pool's broker syncs.
                       type: string
                     firewall:
                       description: Firewall holds the compiled ingress and egress firewall rules.
@@ -3985,7 +3997,7 @@ renders (ebpf hw):
                       type: object
                     vni:
                       description: |-
-                        VNI is the effective VXLAN network identifier for this NIC (resolved from the NIC's
+                        VNI is the effective Geneve virtual network identifier for this NIC (resolved from the NIC's
                         status.vni, falling back to its VPC's status.vni).
                       format: int32
                       type: integer
@@ -4065,7 +4077,8 @@ renders (ebpf hw):
                     clusterName:
                       description: |-
                         ClusterName is the cluster this compiled VM is bound to (the pod->node binding).
-                        The per-cluster broker selects on this field.
+                        The twin lives in the pool's pool-<clusterName> namespace on the dispatch, which is the
+                        namespace the pool's broker syncs.
                       type: string
                     image:
                       description: Image is the containerDisk image to boot from.
@@ -4249,8 +4262,9 @@ renders (ebpf hw):
                       type: string
                     clusterName:
                       description: |-
-                        ClusterName is the cluster this attachment is bound to (the pod->node binding);
-                        the per-cluster broker selects on this field.
+                        ClusterName is the cluster this attachment is bound to (the pod->node binding). The twin
+                        lives in the pool's pool-<clusterName> namespace on the dispatch, which is the namespace
+                        the pool's broker syncs.
                       type: string
                     diskIdentity:
                       description: |-
@@ -5043,7 +5057,9 @@ renders (ebpf hw):
         - name: v1alpha1
           schema:
             openAPIV3Schema:
-              description: LoadBalancer is a scaffold-only resource. Selector-target load balancer (§3.5).
+              description: |-
+                LoadBalancer is a Maglev load balancer: one address that spreads flows across the
+                NetworkInterfaces matched by spec.targetSelector or named by spec.targetRefs.
               properties:
                 apiVersion:
                   description: |-
@@ -5067,11 +5083,11 @@ renders (ebpf hw):
                     LoadBalancerSpec is the desired state of a LoadBalancer. The IP is the LB's identity (v4 or v6);
                     backends are the NetworkInterfaces matched by TargetSelector or named by TargetRefs.
 
-                    Deliberately NOT called a "LB address". A load-balancer address is 1:N and ingress-only — clients reach
-                    it and it Maglev-hashes to a backend, but a backend's own egress is SNATed to its NATGateway
-                    address, never to this one. The 1:1, bidirectional "virtual IP" that a single interface owns for
-                    both directions (ironcore/dpservice VirtualIP, AWS Elastic IP) is a different object: FloatingIP.
-                    Naming both "LB address" conflated them once too often.
+                    It is deliberately not called a VIP. A load-balancer address is 1:N and ingress-only: clients
+                    reach it and it Maglev-hashes to a backend, but a backend's own egress is SNATed to its
+                    NATGateway address, never to this one. The 1:1, bidirectional "virtual IP" that a single
+                    interface owns for both directions (ironcore/dpservice VirtualIP, AWS Elastic IP) is a
+                    different object: FloatingIP.
                   properties:
                     ip:
                       description: |-
@@ -5180,7 +5196,9 @@ renders (ebpf hw):
                       format: int64
                       type: integer
                     state:
-                      description: State is the lifecycle state (Pending | Ready).
+                      description: |-
+                        State is the address allocation state: Allocated, Pending (waiting on the pool),
+                        Exhausted (the pool has no free address) or Invalid (the request cannot be satisfied).
                       type: string
                   type: object
               type: object
@@ -5556,7 +5574,7 @@ renders (ebpf hw):
                         single VTEP, shared by every interface on that node.
                       type: string
                     vni:
-                      description: VNI is the effective VXLAN network identifier resolved from the VPC.
+                      description: VNI is the effective Geneve virtual network identifier resolved from the VPC.
                       format: int32
                       type: integer
                   type: object
@@ -5796,8 +5814,8 @@ renders (ebpf hw):
                       type: string
                     vni:
                       description: |-
-                        VNI optionally pins the VXLAN network identifier. When nil or 0, the VNI is
-                        allocated by the central cluster from the global VNI space.
+                        VNI optionally pins the Geneve virtual network identifier. When nil or 0, the VNI is
+                        allocated by the dispatch from the global VNI space.
                       format: int32
                       type: integer
                   type: object
@@ -5869,7 +5887,7 @@ renders (ebpf hw):
                       description: State is the current lifecycle state (e.g. Pending, Ready).
                       type: string
                     vni:
-                      description: VNI is the effective, allocated VXLAN network identifier.
+                      description: VNI is the effective, allocated Geneve virtual network identifier.
                       format: int32
                       type: integer
                   type: object
@@ -6610,7 +6628,9 @@ renders (tier1 on):
                         type: string
                       type: array
                     clusterName:
-                      description: ClusterName is the cluster this compiled container is bound to. The broker selects on this field.
+                      description: |-
+                        ClusterName is the cluster this compiled container is bound to. The twin lives in the pool's
+                        pool-<clusterName> namespace on the dispatch, which is the namespace the pool's broker syncs.
                       type: string
                     command:
                       description: Command overrides the image entrypoint.
@@ -6917,15 +6937,16 @@ renders (tier1 on):
                     on the NetworkInterface instead. It also deliberately does NOT carry
                     the NIC's underlay address: every interface on a node shares that node's one VTEP, which the
                     dataplane resolves at startup, and the agent obtains it from the local DataplaneNode
-                    (ListInterfaces) to announce overlay routes with the correct node nexthop. Keeping node-local state out of this central object avoids a
+                    (ListInterfaces) to announce overlay routes with the correct node nexthop. Keeping node-local state out of this dispatch-side object avoids a
                     compile->sync round-trip that would lag (and flap) the announced nexthop.
                   properties:
                     clusterName:
                       description: |-
                         ClusterName is the cluster this compiled NIC is bound to (the pod->node
-                        binding). Set by the compiler from the owning VirtualMachine's placement,
-                        or the compiler's --cluster-name default for NICs with no owning VM.
-                        The per-cluster broker selects on this field.
+                        binding). The compiler resolves it in order: the owning Container, the owning
+                        VirtualMachine, the NIC's own spec.clusterName, then the compiler's --cluster-name
+                        default. The twin is written into that pool's pool-<clusterName> namespace on the
+                        dispatch, which is the namespace the pool's broker syncs.
                       type: string
                     firewall:
                       description: Firewall holds the compiled ingress and egress firewall rules.
@@ -7133,7 +7154,7 @@ renders (tier1 on):
                       type: object
                     vni:
                       description: |-
-                        VNI is the effective VXLAN network identifier for this NIC (resolved from the NIC's
+                        VNI is the effective Geneve virtual network identifier for this NIC (resolved from the NIC's
                         status.vni, falling back to its VPC's status.vni).
                       format: int32
                       type: integer
@@ -7213,7 +7234,8 @@ renders (tier1 on):
                     clusterName:
                       description: |-
                         ClusterName is the cluster this compiled VM is bound to (the pod->node binding).
-                        The per-cluster broker selects on this field.
+                        The twin lives in the pool's pool-<clusterName> namespace on the dispatch, which is the
+                        namespace the pool's broker syncs.
                       type: string
                     image:
                       description: Image is the containerDisk image to boot from.
@@ -7397,8 +7419,9 @@ renders (tier1 on):
                       type: string
                     clusterName:
                       description: |-
-                        ClusterName is the cluster this attachment is bound to (the pod->node binding);
-                        the per-cluster broker selects on this field.
+                        ClusterName is the cluster this attachment is bound to (the pod->node binding). The twin
+                        lives in the pool's pool-<clusterName> namespace on the dispatch, which is the namespace
+                        the pool's broker syncs.
                       type: string
                     diskIdentity:
                       description: |-
@@ -8191,7 +8214,9 @@ renders (tier1 on):
         - name: v1alpha1
           schema:
             openAPIV3Schema:
-              description: LoadBalancer is a scaffold-only resource. Selector-target load balancer (§3.5).
+              description: |-
+                LoadBalancer is a Maglev load balancer: one address that spreads flows across the
+                NetworkInterfaces matched by spec.targetSelector or named by spec.targetRefs.
               properties:
                 apiVersion:
                   description: |-
@@ -8215,11 +8240,11 @@ renders (tier1 on):
                     LoadBalancerSpec is the desired state of a LoadBalancer. The IP is the LB's identity (v4 or v6);
                     backends are the NetworkInterfaces matched by TargetSelector or named by TargetRefs.
 
-                    Deliberately NOT called a "LB address". A load-balancer address is 1:N and ingress-only — clients reach
-                    it and it Maglev-hashes to a backend, but a backend's own egress is SNATed to its NATGateway
-                    address, never to this one. The 1:1, bidirectional "virtual IP" that a single interface owns for
-                    both directions (ironcore/dpservice VirtualIP, AWS Elastic IP) is a different object: FloatingIP.
-                    Naming both "LB address" conflated them once too often.
+                    It is deliberately not called a VIP. A load-balancer address is 1:N and ingress-only: clients
+                    reach it and it Maglev-hashes to a backend, but a backend's own egress is SNATed to its
+                    NATGateway address, never to this one. The 1:1, bidirectional "virtual IP" that a single
+                    interface owns for both directions (ironcore/dpservice VirtualIP, AWS Elastic IP) is a
+                    different object: FloatingIP.
                   properties:
                     ip:
                       description: |-
@@ -8328,7 +8353,9 @@ renders (tier1 on):
                       format: int64
                       type: integer
                     state:
-                      description: State is the lifecycle state (Pending | Ready).
+                      description: |-
+                        State is the address allocation state: Allocated, Pending (waiting on the pool),
+                        Exhausted (the pool has no free address) or Invalid (the request cannot be satisfied).
                       type: string
                   type: object
               type: object
@@ -8704,7 +8731,7 @@ renders (tier1 on):
                         single VTEP, shared by every interface on that node.
                       type: string
                     vni:
-                      description: VNI is the effective VXLAN network identifier resolved from the VPC.
+                      description: VNI is the effective Geneve virtual network identifier resolved from the VPC.
                       format: int32
                       type: integer
                   type: object
@@ -8944,8 +8971,8 @@ renders (tier1 on):
                       type: string
                     vni:
                       description: |-
-                        VNI optionally pins the VXLAN network identifier. When nil or 0, the VNI is
-                        allocated by the central cluster from the global VNI space.
+                        VNI optionally pins the Geneve virtual network identifier. When nil or 0, the VNI is
+                        allocated by the dispatch from the global VNI space.
                       format: int32
                       type: integer
                   type: object
@@ -9017,7 +9044,7 @@ renders (tier1 on):
                       description: State is the current lifecycle state (e.g. Pending, Ready).
                       type: string
                     vni:
-                      description: VNI is the effective, allocated VXLAN network identifier.
+                      description: VNI is the effective, allocated Geneve virtual network identifier.
                       format: int32
                       type: integer
                   type: object
@@ -9798,7 +9825,9 @@ renders (tier1 watchdog):
                         type: string
                       type: array
                     clusterName:
-                      description: ClusterName is the cluster this compiled container is bound to. The broker selects on this field.
+                      description: |-
+                        ClusterName is the cluster this compiled container is bound to. The twin lives in the pool's
+                        pool-<clusterName> namespace on the dispatch, which is the namespace the pool's broker syncs.
                       type: string
                     command:
                       description: Command overrides the image entrypoint.
@@ -10105,15 +10134,16 @@ renders (tier1 watchdog):
                     on the NetworkInterface instead. It also deliberately does NOT carry
                     the NIC's underlay address: every interface on a node shares that node's one VTEP, which the
                     dataplane resolves at startup, and the agent obtains it from the local DataplaneNode
-                    (ListInterfaces) to announce overlay routes with the correct node nexthop. Keeping node-local state out of this central object avoids a
+                    (ListInterfaces) to announce overlay routes with the correct node nexthop. Keeping node-local state out of this dispatch-side object avoids a
                     compile->sync round-trip that would lag (and flap) the announced nexthop.
                   properties:
                     clusterName:
                       description: |-
                         ClusterName is the cluster this compiled NIC is bound to (the pod->node
-                        binding). Set by the compiler from the owning VirtualMachine's placement,
-                        or the compiler's --cluster-name default for NICs with no owning VM.
-                        The per-cluster broker selects on this field.
+                        binding). The compiler resolves it in order: the owning Container, the owning
+                        VirtualMachine, the NIC's own spec.clusterName, then the compiler's --cluster-name
+                        default. The twin is written into that pool's pool-<clusterName> namespace on the
+                        dispatch, which is the namespace the pool's broker syncs.
                       type: string
                     firewall:
                       description: Firewall holds the compiled ingress and egress firewall rules.
@@ -10321,7 +10351,7 @@ renders (tier1 watchdog):
                       type: object
                     vni:
                       description: |-
-                        VNI is the effective VXLAN network identifier for this NIC (resolved from the NIC's
+                        VNI is the effective Geneve virtual network identifier for this NIC (resolved from the NIC's
                         status.vni, falling back to its VPC's status.vni).
                       format: int32
                       type: integer
@@ -10401,7 +10431,8 @@ renders (tier1 watchdog):
                     clusterName:
                       description: |-
                         ClusterName is the cluster this compiled VM is bound to (the pod->node binding).
-                        The per-cluster broker selects on this field.
+                        The twin lives in the pool's pool-<clusterName> namespace on the dispatch, which is the
+                        namespace the pool's broker syncs.
                       type: string
                     image:
                       description: Image is the containerDisk image to boot from.
@@ -10585,8 +10616,9 @@ renders (tier1 watchdog):
                       type: string
                     clusterName:
                       description: |-
-                        ClusterName is the cluster this attachment is bound to (the pod->node binding);
-                        the per-cluster broker selects on this field.
+                        ClusterName is the cluster this attachment is bound to (the pod->node binding). The twin
+                        lives in the pool's pool-<clusterName> namespace on the dispatch, which is the namespace
+                        the pool's broker syncs.
                       type: string
                     diskIdentity:
                       description: |-
@@ -11379,7 +11411,9 @@ renders (tier1 watchdog):
         - name: v1alpha1
           schema:
             openAPIV3Schema:
-              description: LoadBalancer is a scaffold-only resource. Selector-target load balancer (§3.5).
+              description: |-
+                LoadBalancer is a Maglev load balancer: one address that spreads flows across the
+                NetworkInterfaces matched by spec.targetSelector or named by spec.targetRefs.
               properties:
                 apiVersion:
                   description: |-
@@ -11403,11 +11437,11 @@ renders (tier1 watchdog):
                     LoadBalancerSpec is the desired state of a LoadBalancer. The IP is the LB's identity (v4 or v6);
                     backends are the NetworkInterfaces matched by TargetSelector or named by TargetRefs.
 
-                    Deliberately NOT called a "LB address". A load-balancer address is 1:N and ingress-only — clients reach
-                    it and it Maglev-hashes to a backend, but a backend's own egress is SNATed to its NATGateway
-                    address, never to this one. The 1:1, bidirectional "virtual IP" that a single interface owns for
-                    both directions (ironcore/dpservice VirtualIP, AWS Elastic IP) is a different object: FloatingIP.
-                    Naming both "LB address" conflated them once too often.
+                    It is deliberately not called a VIP. A load-balancer address is 1:N and ingress-only: clients
+                    reach it and it Maglev-hashes to a backend, but a backend's own egress is SNATed to its
+                    NATGateway address, never to this one. The 1:1, bidirectional "virtual IP" that a single
+                    interface owns for both directions (ironcore/dpservice VirtualIP, AWS Elastic IP) is a
+                    different object: FloatingIP.
                   properties:
                     ip:
                       description: |-
@@ -11516,7 +11550,9 @@ renders (tier1 watchdog):
                       format: int64
                       type: integer
                     state:
-                      description: State is the lifecycle state (Pending | Ready).
+                      description: |-
+                        State is the address allocation state: Allocated, Pending (waiting on the pool),
+                        Exhausted (the pool has no free address) or Invalid (the request cannot be satisfied).
                       type: string
                   type: object
               type: object
@@ -11892,7 +11928,7 @@ renders (tier1 watchdog):
                         single VTEP, shared by every interface on that node.
                       type: string
                     vni:
-                      description: VNI is the effective VXLAN network identifier resolved from the VPC.
+                      description: VNI is the effective Geneve virtual network identifier resolved from the VPC.
                       format: int32
                       type: integer
                   type: object
@@ -12132,8 +12168,8 @@ renders (tier1 watchdog):
                       type: string
                     vni:
                       description: |-
-                        VNI optionally pins the VXLAN network identifier. When nil or 0, the VNI is
-                        allocated by the central cluster from the global VNI space.
+                        VNI optionally pins the Geneve virtual network identifier. When nil or 0, the VNI is
+                        allocated by the dispatch from the global VNI space.
                       format: int32
                       type: integer
                   type: object
@@ -12205,7 +12241,7 @@ renders (tier1 watchdog):
                       description: State is the current lifecycle state (e.g. Pending, Ready).
                       type: string
                     vni:
-                      description: VNI is the effective, allocated VXLAN network identifier.
+                      description: VNI is the effective, allocated Geneve virtual network identifier.
                       format: int32
                       type: integer
                   type: object
@@ -12996,7 +13032,9 @@ renders with vm-materializer enabled:
                         type: string
                       type: array
                     clusterName:
-                      description: ClusterName is the cluster this compiled container is bound to. The broker selects on this field.
+                      description: |-
+                        ClusterName is the cluster this compiled container is bound to. The twin lives in the pool's
+                        pool-<clusterName> namespace on the dispatch, which is the namespace the pool's broker syncs.
                       type: string
                     command:
                       description: Command overrides the image entrypoint.
@@ -13303,15 +13341,16 @@ renders with vm-materializer enabled:
                     on the NetworkInterface instead. It also deliberately does NOT carry
                     the NIC's underlay address: every interface on a node shares that node's one VTEP, which the
                     dataplane resolves at startup, and the agent obtains it from the local DataplaneNode
-                    (ListInterfaces) to announce overlay routes with the correct node nexthop. Keeping node-local state out of this central object avoids a
+                    (ListInterfaces) to announce overlay routes with the correct node nexthop. Keeping node-local state out of this dispatch-side object avoids a
                     compile->sync round-trip that would lag (and flap) the announced nexthop.
                   properties:
                     clusterName:
                       description: |-
                         ClusterName is the cluster this compiled NIC is bound to (the pod->node
-                        binding). Set by the compiler from the owning VirtualMachine's placement,
-                        or the compiler's --cluster-name default for NICs with no owning VM.
-                        The per-cluster broker selects on this field.
+                        binding). The compiler resolves it in order: the owning Container, the owning
+                        VirtualMachine, the NIC's own spec.clusterName, then the compiler's --cluster-name
+                        default. The twin is written into that pool's pool-<clusterName> namespace on the
+                        dispatch, which is the namespace the pool's broker syncs.
                       type: string
                     firewall:
                       description: Firewall holds the compiled ingress and egress firewall rules.
@@ -13519,7 +13558,7 @@ renders with vm-materializer enabled:
                       type: object
                     vni:
                       description: |-
-                        VNI is the effective VXLAN network identifier for this NIC (resolved from the NIC's
+                        VNI is the effective Geneve virtual network identifier for this NIC (resolved from the NIC's
                         status.vni, falling back to its VPC's status.vni).
                       format: int32
                       type: integer
@@ -13599,7 +13638,8 @@ renders with vm-materializer enabled:
                     clusterName:
                       description: |-
                         ClusterName is the cluster this compiled VM is bound to (the pod->node binding).
-                        The per-cluster broker selects on this field.
+                        The twin lives in the pool's pool-<clusterName> namespace on the dispatch, which is the
+                        namespace the pool's broker syncs.
                       type: string
                     image:
                       description: Image is the containerDisk image to boot from.
@@ -13783,8 +13823,9 @@ renders with vm-materializer enabled:
                       type: string
                     clusterName:
                       description: |-
-                        ClusterName is the cluster this attachment is bound to (the pod->node binding);
-                        the per-cluster broker selects on this field.
+                        ClusterName is the cluster this attachment is bound to (the pod->node binding). The twin
+                        lives in the pool's pool-<clusterName> namespace on the dispatch, which is the namespace
+                        the pool's broker syncs.
                       type: string
                     diskIdentity:
                       description: |-
@@ -14577,7 +14618,9 @@ renders with vm-materializer enabled:
         - name: v1alpha1
           schema:
             openAPIV3Schema:
-              description: LoadBalancer is a scaffold-only resource. Selector-target load balancer (§3.5).
+              description: |-
+                LoadBalancer is a Maglev load balancer: one address that spreads flows across the
+                NetworkInterfaces matched by spec.targetSelector or named by spec.targetRefs.
               properties:
                 apiVersion:
                   description: |-
@@ -14601,11 +14644,11 @@ renders with vm-materializer enabled:
                     LoadBalancerSpec is the desired state of a LoadBalancer. The IP is the LB's identity (v4 or v6);
                     backends are the NetworkInterfaces matched by TargetSelector or named by TargetRefs.
 
-                    Deliberately NOT called a "LB address". A load-balancer address is 1:N and ingress-only — clients reach
-                    it and it Maglev-hashes to a backend, but a backend's own egress is SNATed to its NATGateway
-                    address, never to this one. The 1:1, bidirectional "virtual IP" that a single interface owns for
-                    both directions (ironcore/dpservice VirtualIP, AWS Elastic IP) is a different object: FloatingIP.
-                    Naming both "LB address" conflated them once too often.
+                    It is deliberately not called a VIP. A load-balancer address is 1:N and ingress-only: clients
+                    reach it and it Maglev-hashes to a backend, but a backend's own egress is SNATed to its
+                    NATGateway address, never to this one. The 1:1, bidirectional "virtual IP" that a single
+                    interface owns for both directions (ironcore/dpservice VirtualIP, AWS Elastic IP) is a
+                    different object: FloatingIP.
                   properties:
                     ip:
                       description: |-
@@ -14714,7 +14757,9 @@ renders with vm-materializer enabled:
                       format: int64
                       type: integer
                     state:
-                      description: State is the lifecycle state (Pending | Ready).
+                      description: |-
+                        State is the address allocation state: Allocated, Pending (waiting on the pool),
+                        Exhausted (the pool has no free address) or Invalid (the request cannot be satisfied).
                       type: string
                   type: object
               type: object
@@ -15090,7 +15135,7 @@ renders with vm-materializer enabled:
                         single VTEP, shared by every interface on that node.
                       type: string
                     vni:
-                      description: VNI is the effective VXLAN network identifier resolved from the VPC.
+                      description: VNI is the effective Geneve virtual network identifier resolved from the VPC.
                       format: int32
                       type: integer
                   type: object
@@ -15330,8 +15375,8 @@ renders with vm-materializer enabled:
                       type: string
                     vni:
                       description: |-
-                        VNI optionally pins the VXLAN network identifier. When nil or 0, the VNI is
-                        allocated by the central cluster from the global VNI space.
+                        VNI optionally pins the Geneve virtual network identifier. When nil or 0, the VNI is
+                        allocated by the dispatch from the global VNI space.
                       format: int32
                       type: integer
                   type: object
@@ -15403,7 +15448,7 @@ renders with vm-materializer enabled:
                       description: State is the current lifecycle state (e.g. Pending, Ready).
                       type: string
                     vni:
-                      description: VNI is the effective, allocated VXLAN network identifier.
+                      description: VNI is the effective, allocated Geneve virtual network identifier.
                       format: int32
                       type: integer
                   type: object

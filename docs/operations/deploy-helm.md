@@ -1,71 +1,328 @@
-# Deploying with Helm
+# Deploy with Helm
 
-!!! success "Status: Implemented"
-    ectobase deploys as two Helm charts, one for the fleet/dispatch cluster and one per
-    compute/pool cluster. The charts are the generated deploy artifact: their CRDs and RBAC
-    are produced by `make generate` directly into the chart trees, so they never drift from
-    the API types or the component code.
+ectobase installs as two Helm charts: one for the **dispatch** (the fleet control plane) and one
+for each **pool** (a compute cluster). This page walks through a first install, the per-pool
+enrollment that sits between the two charts, and the order to follow when you upgrade.
 
-ectobase is a multi-cluster substrate. A single dispatch cluster runs the control plane (an
-aggregated apiserver, the dispatch controller, the mesh compiler, and the reflector); each
-compute/pool cluster runs the dataplane, the mesh agent, and a broker that syncs
-compiled objects down from the dispatch. Those two roles map onto the two charts:
+The charts are generated deploy artifacts. `make generate` writes their CRDs and RBAC straight
+into the chart trees from the API types and the components' RBAC markers, so a chart cannot fall
+behind the code it deploys (see [Generated artifacts](../reference/generated-artifacts.md)).
+
+## The two charts
+
+Each chart maps onto one role in the fleet. The dispatch runs once; every pool runs its own copy
+of the pool chart.
 
 | Chart | Runs on | Installs |
 |---|---|---|
-| `charts/ectobase-dispatch` | the dispatch cluster | aggregated apiserver + kine (+ postgres), dispatch-controller, mesh compiler, reflector, the `ectobase-ca` root + ClusterIssuer |
-| `charts/ectobase-pool` | each compute cluster | dataplane (`ebpf`), mesh agent, broker, cni, KubeVirt NAD, pod-materializer (always), vm-materializer / tier1 (gated), the `net` + `compiled` CRDs |
+| `charts/ectobase-dispatch` | the dispatch cluster | `dispatch-apiserver` (aggregated apiserver) with kine and postgres, `dispatch-controller`, `mesh-controller` (the compiler), the `reflector`, and the `ectobase-ca` root CA with its `ClusterIssuer` |
+| `charts/ectobase-pool` | each pool cluster | the `flowplane` dataplane, `mesh-agent`, the broker (`dispatch-broker`), the `flowplane-cni` installer, `pod-materializer`, the `net` and `compiled` CRDs, two Multus `NetworkAttachmentDefinition`s, and, when enabled, `vm-materializer` and the [Tier-1](../architecture/failover.md#two-tiers) failover objects |
 
-The reference install sequence lives in `test/lab/internal/deploy/ectobase.go` — the lab CLI
-installs both charts exactly the way an operator would, so it is the source of truth for the
-namespaces and the two `helm install`s below.
+Every value is listed in the [Helm values reference](../reference/helm-values.md). What each
+component does is in [Components](../reference/components.md).
 
-## 1. Dispatch cluster
+The reference install is the lab's deploy code, `test/lab/internal/deploy/ectobase.go`. `make
+lab-up` installs both charts the way this page describes, so when this page and that file
+disagree, the file is right.
 
-The dispatch chart carries two namespaces:
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Op as Operator
+    participant D as Dispatch cluster
+    participant P as Pool cluster
+    Op->>D: cert-manager, PSA-privileged namespace "system"
+    Op->>D: helm install ectobase-dispatch
+    Op->>D: wait until the aggregated API serves clusterpools
+    Op->>D: enroll the pool (namespace, ClusterPool, RouteBusIdentity, RBAC, bootstrap SA)
+    Op->>P: NAD CRD, PSA-privileged namespace "ectobase-system", cert-manager
+    Op->>P: Secrets dispatch-root-ca and broker-dispatch-bootstrap
+    Op->>P: helm install ectobase-pool
+    P->>D: broker bootstraps the pool CA, then switches to mTLS
+    Op->>P: Multus
+    D-->>Op: ClusterPool phase Ready with nodePrefixes
+```
 
-- The release namespace (`namespace`, default `system`) holds the aggregated apiserver,
-  dispatch-controller, kine, and the ectobase root CA. With the default `pki.enabled=true` the
-  apiserver runs `hostNetwork` (direct `:6444` exposure), which baseline PSA rejects — on a
-  PSA-enforcing cluster (Talos) create the namespace PSA-privileged *before* `helm install`
-  rather than relying on `--create-namespace`.
-- The chart itself creates the PSA-privileged `ectobase-system` namespace
-  (`agentNamespace`) for the hostNetwork mesh compiler and reflector.
+## Before you install
+
+Both charts assume a few things exist already. A missing one shows up as a pod that never
+starts or a `helm install` that the API rejects.
+
+| Requirement | Where | Why |
+|---|---|---|
+| cert-manager | every cluster | Route-bus mTLS and the broker's dispatch credential are cert-manager objects. The lab pins v1.21.1. |
+| cert-manager `--cluster-resource-namespace=system` | dispatch | The `ectobase-ca` `ClusterIssuer` reads its CA Secret from cert-manager's cluster-resource namespace, and the chart puts that Secret in the release namespace (`system` by default). |
+| A PSA-privileged `system` namespace | dispatch | `dispatch-apiserver` runs `hostNetwork` on port 6444, which the baseline Pod Security level rejects. |
+| A StorageClass | dispatch | Only for `postgres.persistence.type=pvc` (the default). Without one, postgres stays `Pending`. |
+| A PSA-privileged `ectobase-system` namespace | each pool | `flowplane` is privileged with `hostPID` and host paths; the agent and broker run `hostNetwork`. The chart does not create its release namespace. |
+| The `NetworkAttachmentDefinition` CRD | each pool | The chart renders two NADs unconditionally. |
+| Multus | each pool | Pods and VMs reach the overlay as a secondary network through Multus and `flowplane-cni`. The lab installs a thin Multus DaemonSet after the pool chart. |
+| KubeVirt and CDI | pools with `vmMaterializer.enabled` | `vm-materializer` creates KubeVirt `VirtualMachine`s and CDI `DataVolume`s. The KubeVirt CR also needs the `NetworkBindingPlugins` feature gate and a `flowplane` network binding (`domainAttachmentType: tap`, NAD `ectobase-system/flowplane`); the lab sets both in `test/lab/internal/deploy/kubevirt.go`. |
+| medik8s NodeHealthCheck and Self Node Remediation | pools with `tier1Failover.enabled` | The chart renders their custom resources, not the operators. |
+| The six ectobase images | every cluster | The charts default to `ghcr.io/trevex/ectobase/<name>:dev`, but CI (`.github/workflows/docker.yml`) publishes only `flowplane`, tagged by commit SHA, `main` or git tag. Build all six with `make lab-app-images`, push them to a registry the nodes can reach, and set `images.*` on both charts. |
+
+Talos enforces the baseline Pod Security level cluster-wide, so on Talos the privileged
+namespaces are not optional. A plain kind cluster does not enforce PSA, but labelling the
+namespaces costs nothing.
+
+!!! warning "Dev-grade defaults"
+    Treat both charts as unhardened. In particular:
+
+    - `kine.password` defaults to `kine`. Postgres reads it only when it initialises an empty
+      data directory, so set it before the first install.
+    - The five `APIService`s that register the ectobase groups with the dispatch's host
+      apiserver use `insecureSkipTLSVerify: true`.
+    - The kubeconfig the pool chart writes for `mesh-agent` skips TLS verification of the pool's
+      apiserver; it authenticates with the agent's ServiceAccount token.
+
+## Install the dispatch chart
+
+The dispatch chart uses two namespaces. The release namespace (`namespace`, default `system`)
+holds `dispatch-apiserver`, `dispatch-controller`, kine, postgres and the root CA. The chart
+creates a second, PSA-privileged namespace (`agentNamespace`, default `ectobase-system`) for the
+`hostNetwork` compiler and reflector.
 
 ```sh
 kubectl create namespace system
 kubectl label namespace system pod-security.kubernetes.io/enforce=privileged
 
-helm install ectobase-dispatch charts/ectobase-dispatch \
+helm upgrade --install ectobase-dispatch charts/ectobase-dispatch \
   --namespace system \
-  --set reflectorAdmin='[fd00:cafe:1::1]:1339'
+  --set reflectorAdmin='[fd00:db8:0:1::1]:1339' \
+  --set pki.reflectorIP=fd00:db8:0:1::1 \
+  --set dispatchApiserver.serviceIP=fd00:db8:0:1::1
 ```
 
-`reflectorAdmin` is the RouteBusAdmin fence address the dispatch-controller dials (the
-`-reflector-admin` flag): the reflector's admin port 1339, separate from the agent-facing session
-port 1338 so a session-cert holder cannot reach the fence API. Point it at the dispatch's reachable
-address on the underlay.
+Replace `fd00:db8:0:1::1` (the chart default) with the dispatch node's address on the underlay.
+All three values name the same host, and each one ends up somewhere that is checked:
 
-Wait for the aggregated API to serve before proceeding — the apiserver pod must start and its
-`APIService` become `Available`:
+- `reflectorAdmin` is the reflector's admin port, 1339, which the `dispatch-controller` dials to
+  set and lift route fences. It is a separate port from the agent-facing session port, 1338, so
+  holding an agent certificate does not reach the fence API.
+- `pki.reflectorIP` becomes an IP SAN on the reflector's server certificate.
+- `dispatchApiserver.serviceIP` becomes an IP SAN on the apiserver's serving certificate. Brokers
+  verify that certificate, so it must equal the host in each pool's `dispatchServer`.
+
+If the dispatch fences Ceph during failover, also pass `--set-string ceph.clusterID=<fsid>`. An
+empty `clusterID` leaves the storage fence unable to act: the ceph-csi driver rejects a
+`NetworkFence` without one.
+
+Wait until the aggregated API serves before you enroll anything. The lab allows twelve minutes
+for this on a cold start:
 
 ```sh
 kubectl get clusterpools.platform.ectobase.dev
 ```
 
-### Upgrading from a chart version before Recreate
+Use the fully qualified resource name: short-name discovery on the aggregated API is not
+reliable.
 
-The `postgres` and `reflector` Deployments now roll out with `Recreate`. A Deployment first
-created under the default `RollingUpdate` carries an apiserver-defaulted
-`spec.strategy.rollingUpdate` that Helm 4's server-side apply does not own and so never removes,
-and the API rejects `Recreate` next to it. Upgrading such a release fails with:
+### Where postgres keeps the dispatch state
+
+kine stores the aggregated apiserver's data in postgres, so postgres holds all dispatch state.
+`postgres.persistence.type` decides where its data directory lives.
+
+| `type` | Data lives in | Use it when |
+|---|---|---|
+| `pvc` (default) | a ReadWriteOnce `PersistentVolumeClaim` named `postgres-data`, sized by `size`, from `storageClass` (empty means the cluster default) | the cluster has a StorageClass. The claim carries `helm.sh/resource-policy: keep`, so `helm uninstall` leaves it behind; delete it by hand to drop the state. |
+| `hostPath` | a node directory, `path`, created if missing | the dispatch is a single node and postgres cannot reschedule elsewhere. The lab uses this, because its dispatch has no StorageClass until `make lab-ceph` runs. |
+| `emptyDir` | scratch space that dies with the pod | a throwaway cluster. Every postgres restart, and every change to its pod template, loses all dispatch state. |
+
+Postgres is a single replica with the `Recreate` strategy, because two pods cannot share one
+data directory. The kine password comes from `kine.password` through the `kine-db` Secret.
+Postgres reads it only when it initialises an empty data directory, so changing it later on
+persistent storage locks kine out.
+
+## Enroll a pool on the dispatch
+
+Each pool needs a set of objects on the dispatch before its broker can connect. No chart renders
+them, because each one is scoped to a single pool. The lab generates them in
+`clusterPoolsManifest` (`test/lab/internal/deploy/ectobase.go`).
+
+| Object | Purpose |
+|---|---|
+| Namespace `pool-<pool>` | Where the compiler writes this pool's `Compiled*` twins. |
+| `ClusterPool` `<pool>` | The pool's inventory entry. Its name must be a DNS-1123 label of at most 58 characters, so that `pool-<pool>` is itself a legal namespace name. |
+| `RouteBusIdentity` `<pool>` | Carries the pool's intermediate-CA request and the signed certificate. |
+| Role and RoleBinding `dispatch-broker` in `pool-<pool>` | The broker's access to this pool's twins. Bound to the user `ectobase:cluster:<pool>`. |
+| ServiceAccount `dispatch-broker-bootstrap-<pool>` in `system` | The identity behind the short-lived first-boot token. |
+| ClusterRole and ClusterRoleBinding `dispatch-broker-pool-<pool>` | `resourceNames: [<pool>]` access to its own `RouteBusIdentity` (get and update, so it can file its CSR in `spec.request`) and its own `ClusterPool` (read, plus status writes). Bound to both the user and the bootstrap ServiceAccount. |
+
+The verbs each grant carries are listed in
+[Architecture overview](../architecture/overview.md#trust-boundaries).
+
+The scoping is the security boundary. A `RouteBusIdentity` holds a pool's intermediate CA, so a
+fleet-wide grant would let one pool's credential obtain another pool's CA and mint certificates
+for that pool's nodes. The identity is created ahead of time because RBAC cannot scope `create`
+by name. Apart from filing its own CSR, a broker writes only status subresources, so it can
+never change a workload's spec, create a twin or delete one.
+
+## Install the pool chart
+
+The pool chart does not manage its release namespace, so create it first:
+
+```sh
+kubectl create namespace ectobase-system
+kubectl label namespace ectobase-system pod-security.kubernetes.io/enforce=privileged
+```
+
+### Fresh-pool enrollment (bootstrap)
+
+The broker's steady-state certificate comes from the pool's own intermediate CA, and the broker
+obtains that CA over its connection to the dispatch. A new pool therefore needs two Secrets in
+`ectobase-system` before the broker first starts:
+
+- `dispatch-root-ca`, key `ca.crt`: the `ectobase-ca` root certificate, copied from the
+  dispatch's `ectobase-ca` Secret in `system`. The broker verifies the dispatch's serving
+  certificate against it.
+- `broker-dispatch-bootstrap`, key `kubeconfig`: a kubeconfig for this pool's bootstrap
+  ServiceAccount, with the root as `certificate-authority-data` and the server at
+  `https://[<dispatch-ip>]:6444`. Mint the token with
+  `kubectl create token dispatch-broker-bootstrap-<pool> -n system --duration=1h` on the dispatch.
+
+On first boot the broker generates the pool key, submits its CSR through the bootstrap token, and
+writes the signed intermediate into the `pki.intermediateSecret` Secret. cert-manager then issues
+`broker-dispatch-tls` from it, and the broker switches to mTLS for everything after that,
+including later renewals of the intermediate. The lab (`installPool` in the same file) creates
+both Secrets for you.
+
+Then install the chart:
+
+```sh
+helm upgrade --install ectobase-pool charts/ectobase-pool \
+  --namespace ectobase-system \
+  --set broker.clusterName=k02 \
+  --set apiserverAddress='https://127.0.0.1:6443' \
+  --set reflectorAddress='[fd00:db8:0:1::1]:1338' \
+  --set dispatchServer='https://[fd00:db8:0:1::1]:6444' \
+  --set underlayWithin='fd00:cafe::/32' \
+  --set pki.underlayCIDRs='fd00:cafe:2::/48' \
+  --wait --timeout 12m
+```
+
+- `broker.clusterName` is required and must match the `ClusterPool` name. The chart refuses to
+  render without it.
+- `apiserverAddress` is this pool's own apiserver, which the agent reads its `CompiledNIC`s from.
+  The agent never talks to the dispatch apiserver; its only link to the dispatch cluster is its
+  route-bus session to the reflector. `mesh-agent` is a `hostNetwork` DaemonSet on every node, so
+  `127.0.0.1:6443` works only where every node runs an apiserver, as in the lab's single-node
+  pools. On a pool with worker nodes, set an address every node can reach over the fabric.
+- `reflectorAddress` and `dispatchServer` point at the dispatch: the reflector's session port and
+  `dispatch-apiserver` on 6444.
+- `underlayWithin` tells `flowplane` which host address is the underlay, past management and
+  host-DNS addresses.
+- `pki.underlayCIDRs` name-constrains the pool intermediate, so it can only issue node
+  certificates whose IP SAN lies inside the pool's underlay.
+
+The lab gives `--wait` twelve minutes because the agent's readiness waits on a chain: broker CSR,
+dispatch signer, intermediate Secret, pool `Issuer`, then cert-manager issuing each node's agent
+certificate.
+
+When both sides are up, the `ClusterPool` reaches phase `Ready` with a non-empty
+`status.nodePrefixes`.
+
+### The broker's dispatch credential
+
+The broker authenticates to the dispatch with a client certificate, not a token.
+`broker-dispatch-tls` has `CN=ectobase:cluster:<pool>` and `O=ectobase:brokers`, is issued by
+the pool's `ectobase-pool-ca` `Issuer` with a 90-day lifetime, and is renewed by cert-manager.
+The broker reloads the files as they rotate, so there is nothing to re-mint.
+
+The broker dials `dispatch-apiserver` directly on port 6444 rather than through the host
+kube-apiserver's aggregation layer, because the host apiserver on 6443 serves the host cluster's
+CA, not `ectobase-ca`. In-cluster clients on the dispatch keep using aggregation. In the lab the
+direct path is `hostNetwork` on the single dispatch node; a production dispatch would put a stable
+load-balancer address in front of it.
+
+`pki.enabled` defaults to `true` on both charts and has to stay that way: with it off, the chart
+passes the broker no dispatch address and the broker exits at startup.
+
+## WAN edges
+
+No chart deploys the WAN edges. An edge is a router, not a Kubernetes node, so its `flowplane`
+(in `--role edge`) and its `mesh-agent` (with `--edge-loopback` and no kubeconfig) run beside the
+router. In the lab they are containerlab nodes sharing each VyOS edge's network namespace, and
+the lab provisions the edge fleet's route-bus identity, a `RouteBusIdentity` named `edge`. See
+[The WAN edge](../features/ns-edge.md).
+
+## Upgrade order
+
+A rolling fleet runs old and new components side by side for a while. Three rules keep that
+window safe; each one exists because the old side lacks something the new side waits for.
+
+1. Upgrade every pool chart before the dispatch chart.
+2. Upgrade the dispatch chart's components together, from one `helm upgrade`.
+3. Within a pool, `flowplane` must run the new image before `mesh-agent` does.
+
+```mermaid
+flowchart LR
+    subgraph pools["1. Every pool chart"]
+        fp["flowplane"] --> ag["mesh-agent"]
+        br["dispatch-broker"]
+    end
+    subgraph dispatch["2. Dispatch chart, one release"]
+        api["dispatch-apiserver"]
+        dc["dispatch-controller"]
+        mc["mesh-controller"]
+        rf["reflector"]
+    end
+    pools --> dispatch
+```
+
+### Pools first
+
+A planned move and a VM delete both rely on the pool's broker reporting that it has let a
+retired `CompiledVM` twin go (`ReportReleases` in `dispatch/pkg/broker/release.go`). An old broker
+has no such report, so every move off that pool and every delete of a VM on it waits until the
+new broker lands.
+
+### Dispatch components together
+
+`dispatch-apiserver`, `dispatch-controller` and `mesh-controller` come from one release. Don't
+patch one image ahead of the others. An old `dispatch-controller` never runs `releaseFencedTwins`
+(`dispatch/pkg/failover/failover.go`), so a failover fences a lost pool but never releases its
+retired twins, and the VMs it rebinds wait on a release that never comes.
+
+The `reflector` must not lag the controller either. Before the controller lifts a recovered
+pool's fence, it asks the reflector (`AnnouncedFrom`) whether that pool still announces any
+address now placed on another pool. An old reflector answers `Unimplemented`; the controller
+treats that as a failed check and holds the fence until the reflector is upgraded too.
+[Runbook](runbook.md#a-pool-that-will-not-let-go) covers what that looks like.
+
+### flowplane before mesh-agent
+
+The agent hands the dataplane routes for its own guests' addresses and relies on `flowplane`
+keeping a local guest's self-route on that key. An old `flowplane` lets the route overwrite the
+self-route, and a later withdraw deletes it, which cuts the guest off on its own node. A normal
+`helm upgrade` of the pool chart can briefly run the new agent against the old dataplane on a
+node; the new `flowplane` repairs any self-route damaged that way when it adopts its maps at
+startup. Never upgrade the `mesh` image on a pool on its own.
+
+## Upgrading an existing release
+
+!!! warning "Never drop the CRDs from a live pool"
+    The pool chart renders the `net` and `compiled` CRDs from `templates/crds.yaml` as ordinary
+    chart resources, without `helm.sh/resource-policy: keep`. Helm updates them on upgrade and
+    deletes any it no longer renders. Never upgrade a live pool to `installCRDs=false`, and never
+    `helm uninstall` it: removing the compiled CRDs deletes every twin, and garbage collection
+    then deletes the KubeVirt VMs, Pods and DataVolumes the materializers own through their
+    controller owner references.
+
+Three one-time steps apply to releases installed by older chart versions.
+
+### Switching Deployments to Recreate
+
+The `postgres` and `reflector` Deployments now use the `Recreate` strategy. A Deployment created
+under the default `RollingUpdate` carries an apiserver-defaulted `spec.strategy.rollingUpdate`.
+Helm 4's server-side apply does not own that field and never removes it, and the API rejects
+`Recreate` next to it, so the upgrade fails:
 
 ```text
 Error: UPGRADE FAILED: server-side apply failed for object system/postgres apps/v1, Kind=Deployment: Deployment.apps "postgres" is invalid: spec.strategy.rollingUpdate: Forbidden: may not be specified when strategy `type` is 'Recreate'
 ```
 
-Before that first upgrade, switch both Deployments once (the namespaces are the defaults of
-`namespace` and `agentNamespace`; use yours if you override them):
+Switch both Deployments once before that upgrade. Use your namespaces if you override
+`namespace` or `agentNamespace`:
 
 ```sh
 kubectl -n system patch deploy postgres --type=merge \
@@ -74,236 +331,57 @@ kubectl -n ectobase-system patch deploy reflector --type=merge \
   -p '{"spec":{"strategy":{"type":"Recreate","rollingUpdate":null}}}'
 ```
 
-This is a one-time step. The strategy is not part of the pod template, so the patch starts no
-rollout, and it sets the value the chart applies, so it never conflicts with Helm afterwards. The
-lab runs it on every deploy (`migrateRecreateDeployments` in `test/lab/internal/deploy/ectobase.go`).
+The strategy is not part of the pod template, so the patch starts no rollout, and it sets the
+value the chart applies, so it never conflicts with Helm afterwards. The lab runs this on every
+deploy (`migrateRecreateDeployments`).
 
-Moving `postgres.persistence.type` from `emptyDir` to `pvc` (or `hostPath`) is a separate one-time
-transition with its own cost, seen live on 2026-09-30: nothing carries the old emptyDir's data
-across, so the first upgrade starts postgres on an empty data directory.
+### Moving postgres from emptyDir to persistent storage
 
-1. All dispatch state from before that upgrade is lost — once, on this transition only.
-2. kine keeps failing with `relation "kine" does not exist`, because it creates its schema only
-   at startup and had already done so against the emptyDir before postgres came back empty.
-   Restart it: `kubectl -n system rollout restart deploy/kine`.
-3. The dispatch apiserver keeps serving pre-upgrade objects from its watch cache (for example a
-   `ClusterPool` with the old `creationTimestamp`), and nothing converges until it and the
-   controllers reading the same objects are restarted too:
-   `kubectl -n system rollout restart deploy/dispatch-apiserver deploy/dispatch-controller` and
-   `kubectl -n ectobase-system rollout restart deploy/mesh-controller`. Then re-run the
-   install/upgrade so the objects are recreated against the now-empty store.
+Changing `postgres.persistence.type` from `emptyDir` to `pvc` or `hostPath` is a separate
+one-time transition. Nothing copies the old emptyDir across, so the upgrade starts postgres on an
+empty data directory:
 
-This sequence is only needed on the emptyDir-to-persistent transition. After that, postgres
-restarting on its own keeps all state: deleting the postgres pod live left every `ClusterPool` in
-place with its lease still renewing, with no manual step.
+1. All dispatch state from before the upgrade is lost, once.
+2. kine keeps failing with `relation "kine" does not exist`: it creates its schema only at
+   startup and did so against the old emptyDir. Restart it:
+   `kubectl -n system rollout restart deploy/kine`.
+3. `dispatch-apiserver` keeps serving pre-upgrade objects from its watch cache (a `ClusterPool`
+   with yesterday's `creationTimestamp`, say), and nothing converges until it and the
+   controllers reading the same objects restart:
+   `kubectl -n system rollout restart deploy/dispatch-apiserver deploy/dispatch-controller`
+   and `kubectl -n ectobase-system rollout restart deploy/mesh-controller deploy/reflector`.
+   Then run the install again so the enrollment objects are recreated against the empty store.
 
-### Dispatch values
+After this transition, a postgres restart keeps all state: deleting the postgres pod on a live
+dispatch leaves every `ClusterPool` in place with its lease still renewing.
 
-Source of truth: `charts/ectobase-dispatch/values.yaml` (schema: `values.schema.json`).
+!!! warning "Any storage reset under a running apiserver needs an apiserver restart"
+    The watch-cache problem in step 3 is not specific to this migration. Whenever the store
+    behind `dispatch-apiserver` is emptied or replaced while it runs, restart it before trusting
+    what it serves.
 
-| Value | Default | Meaning |
-|---|---|---|
-| `namespace` | `system` | Release namespace for the apiserver/controller/kine + the `ectobase-ca` root. Must be PSA-privileged: the apiserver is hostNetwork when `pki.enabled`. |
-| `agentNamespace` | `ectobase-system` | PSA-privileged namespace the chart creates for the hostNetwork compiler + reflector. |
-| `reflectorAdmin` | `[fd00:db8:0:1::1]:1339` | Fence address the dispatch-controller dials via `-reflector-admin`: the reflector's admin port 1339, separate from the agent session port 1338. |
-| `pki.enabled` | `true` | Cert-manager PKI: route-bus mTLS, the dispatch serving cert, and trusting `ectobase-ca` as a client CA for cert-authenticated brokers. Mandatory — REQUIRES cert-manager in the cluster. MUST match the pool chart's `pki.enabled`. |
-| `pki.clusterIssuer` / `pki.caSecretName` | `ectobase-ca` | The shared root `ClusterIssuer` / CA Secret name. |
-| `dispatchApiserver.serviceIP` | `fd00:db8:0:1::1` | IPv6 fabric address the broker dials the aggregated apiserver at; set as an IP SAN on the serving cert. Must equal the host the pool chart's `dispatchServer` dials. |
-| `imagePullPolicy` | `IfNotPresent` | Applied to every container. |
-| `images.dispatchApiserver` | `…/dispatch-apiserver:dev` | Aggregated apiserver image. |
-| `images.dispatchController` | `…/dispatch-controller:dev` | Dispatch controller (ClusterPool reconciler + scheduler). |
-| `images.mesh` | `…/mesh:dev` | Shared image for the mesh compiler + reflector. |
-| `images.kine` | `rancher/kine:v0.13.0` | etcd-v3 shim over postgres. |
-| `images.postgres` | `postgres:16` | Backing store for kine (dev/smoke; not HA). |
-| `postgres.persistence.type` | `pvc` | Where postgres keeps all dispatch state: `pvc` (ReadWriteOnce, `storageClass` empty = cluster default, `size` 1Gi), `hostPath` (`path`, single-node clusters only), or `emptyDir` (lost on every postgres pod restart). A `pvc` needs a StorageClass before the install, or postgres stays Pending. |
+### imagePullPolicy and mutable tags
 
-## 2. Each compute/pool cluster
+`imagePullPolicy` applies to every container in a chart, and the default is `IfNotPresent`. That
+is right for immutable tags. The `:dev` tags are mutable, since every rebuild pushes the same tag,
+so under `IfNotPresent` a node keeps its cached image and a rollout reports success without
+running the new code. The lab therefore sets `imagePullPolicy=Always` along with its registry
+overrides (`imageSetArgs` in `test/lab/internal/deploy/ectobase.go`).
 
-The pool chart does not manage its own release namespace, so one fixture must exist before
-`helm install`:
-
-1. A PSA-privileged `ectobase-system` namespace (the dataplane pods are
-   privileged/hostPID/hostPath, the agent/broker are hostNetwork — Talos enforces baseline PSA
-   cluster-wide and would reject them; the lab fabric runs on Talos today, so this always
-   applies there; a bare `kind` cluster outside the lab does not enforce PSA by
-   default).
-
-```sh
-# 1. privileged namespace
-kubectl create namespace ectobase-system
-kubectl label namespace ectobase-system pod-security.kubernetes.io/enforce=privileged
-
-# 2. the chart
-helm install ectobase-pool charts/ectobase-pool \
-  --namespace ectobase-system \
-  --set broker.clusterName=k02 \
-  --set apiserverAddress='https://[fd00:cafe:2::1]:6443' \
-  --set reflectorAddress='[fd00:cafe:1::1]:1338' \
-  --set installCRDs=true \
-  --set underlayWithin='fd00:cafe::/32' \
-  --set pki.enabled=true \
-  --set pki.underlayCIDRs='fd00:cafe:2::/48' \
-  --set dispatchServer='https://[fd00:cafe:1::1]:6444'
-```
-
-`broker.clusterName` is the pool's name (must match a `ClusterPool` on the dispatch) and is
-required. `apiserverAddress` is this cluster's local apiserver (the agent reads/writes
-its own cluster); `reflectorAddress` is the dispatch's reflector on the fabric. The NAD CRD
-(`NetworkAttachmentDefinition`) must exist first — the chart renders a NAD unconditionally.
-
-### The broker's dispatch credential
-
-The broker's credential to the dispatch is a cert-manager `Certificate`, not a token. With
-`pki.enabled=true` on both charts, the pool chart renders `broker-dispatch-tls`: `CN=ectobase:cluster:<pool>`,
-`O=ectobase:brokers`, issued by the pool's `ectobase-pool-ca` Issuer (the same intermediate the
-agent's node leaves come from) on a 90d lifetime, auto-rotated by cert-manager well before
-expiry. There is no `kubectl create token`, no hand-minted kubeconfig, and nothing to re-mint —
-client-go reloads the cert+key files off disk as cert-manager rotates them.
-
-On the dispatch side, the aggregated apiserver trusts the `ectobase-ca` root as a client CA
-(`--client-ca-file`) and serves a cert-manager-issued serving cert instead of its self-signed
-default, so the broker verifies the server instead of setting `insecure-skip-tls-verify`. That
-serving cert needs the dispatch's fabric IPv6 as an IP SAN — set it via
-`dispatchApiserver.serviceIP` on the dispatch chart, and it must equal the host in the pool
-chart's `dispatchServer` URL (the address the broker actually dials):
-
-The broker connects **directly** to the aggregated apiserver, not through the host
-kube-apiserver's aggregation layer. With `pki.enabled`, the aggregated apiserver runs
-`hostNetwork` on the dispatch node's fabric IP at **port 6444** (`6443` is the host
-kube-apiserver, which serves the *host* cluster CA, not `ectobase-ca`) — so `dispatchServer`
-is `https://[<serviceIP>]:6444`. In-cluster clients (mesh compiler, dispatch-controller) keep
-using aggregation unchanged; direct exposure is an additional ingress the apiserver's auth
-stack already supports. In the single-node lab this is `hostNetwork`; a production dispatch
-would front the apiserver with a stable LoadBalancer/LB address instead.
-
-```sh
-# dispatch cluster
-helm install ectobase-dispatch charts/ectobase-dispatch \
-  --namespace system \
-  --set reflectorAdmin='[fd00:cafe:1::1]:1339' \
-  --set pki.enabled=true \
-  --set dispatchApiserver.serviceIP='fd00:cafe:1::1'
-```
-
-The `CN=ectobase:cluster:<pool>` identity is also the subject each pool's per-pool RBAC binds —
-the namespaced `Role` in `pool-<pool>` and the `resourceNames`-scoped `ClusterRole` — see
-[Multi-cluster control plane](../architecture/multi-cluster-control-plane.md#the-brokers-dispatch-credential).
-
-`pki.enabled` defaults to `true` on both charts and is mandatory: mTLS is the sole
-broker→dispatch auth path. The legacy `broker-dispatch-kubeconfig` token Secret and the
-shared full-privilege dispatch-side `dispatch-broker` ServiceAccount have been removed —
-cert-manager must be installed in every cluster before `helm install`.
-
-#### Fresh-pool enrollment (bootstrap)
-
-The broker's steady-state cert (`broker-dispatch-tls`) is issued from the pool's intermediate
-CA, which the broker itself bootstraps *over* the dispatch connection — so a fresh pool needs
-two Secrets pre-provisioned out-of-band (in `ectobase-system`) *before* the broker starts:
-
-- **`dispatch-root-ca`** (key `ca.crt`) — the `ectobase-ca` root cert (copy it from the
-  dispatch cluster's `ectobase-ca` Secret). The broker's trust anchor for verifying the
-  dispatch serving cert.
-- **`broker-dispatch-bootstrap`** (key `kubeconfig`) — a short-lived kubeconfig for **this
-  pool's own** bootstrap ServiceAccount (`kubectl create token
-  dispatch-broker-bootstrap-<pool> -n system --duration=1h`), with the root as
-  `certificate-authority-data`. Used only for the first-boot `RouteBusIdentity` CSR.
-
-On the dispatch side, enrollment also creates seven per-pool objects alongside the `ClusterPool`
-(the lab generates them; see `clusterPoolsManifest` in `test/lab/internal/deploy/ectobase.go`):
-the **`pool-<pool>` Namespace** the compiler writes this pool's twins into, a **`dispatch-broker`
-Role + RoleBinding** in it — `get`/`list`/`watch` on `compilednics`, `compiledvms`,
-`compiledvolumeattachments`, `compiledcontainers`, and `get`/`update`/`patch` on
-`compiledvms/status` and `compiledvolumeattachments/status` (the `patch` on `compiledvms/status`
-is what lets the broker report a retired twin's release; see
-[Broker sync](../architecture/multi-cluster-control-plane.md#broker-sync)) — bound to
-`ectobase:cluster:<pool>`, a pre-created **`RouteBusIdentity`** named `<pool>`, the
-**`dispatch-broker-bootstrap-<pool>`** ServiceAccount, and a **`dispatch-broker-pool-<pool>`**
-ClusterRole + Binding scoped with `resourceNames: [<pool>]` and bound to both that SA and the
-pool's cert identity `ectobase:cluster:<pool>`.
-
-That per-pool scoping is load-bearing, not cosmetic: a `RouteBusIdentity` carries a pool's
-intermediate-CA CSR and signed cert, so a fleet-wide grant (or one shared bootstrap SA) would let
-any pool's credential obtain **another** pool's intermediate CA and mint leaves impersonating that
-pool's nodes on the route bus. The object is pre-created precisely so the grant can omit `create`,
-which RBAC cannot scope by name.
-
-On first boot the broker uses the bootstrap token to submit its CSR and write the intermediate
-Secret; cert-manager then mints `broker-dispatch-tls`; the broker waits for it and switches to
-steady-state mTLS (and uses that leaf, not the bootstrap token, for all later intermediate
-renewals). The lab deploy (`test/lab`) provisions both Secrets automatically.
-
-### Pool values
-
-Source of truth: `charts/ectobase-pool/values.yaml` (schema: `values.schema.json`).
-
-| Value | Default | Meaning |
-|---|---|---|
-| `namespace` | `ectobase-system` | Namespace all pool resources deploy into. |
-| `env` | `clab` | Deployment environment: `clab` or `hw`. |
-| `uplink` | `eth1` | Overlay uplink interface. |
-| `underlayWithin` | `""` | Node-underlay aggregate CIDR. When set, flowplane picks the host address inside it as the underlay (the authoritative filter past mgmt/hostDNS addresses). Empty = infer from the fabric loopback. |
-| `reflectorAddress` | `[fd00:db8:0:1::1]:1338` | Dispatch reflector address the agent dials. |
-| `apiserverAddress` | `https://[fd00:db8:0:1::1]:6443` | This cluster's local apiserver (the agent's kubeconfig server URL). |
-| `installCRDs` | `true` | Install the `net`/`compiled` CRDs with the chart (managed on `helm upgrade`). |
-| `broker.clusterName` | `""` | Required. This cluster's pool name (e.g. `k02`). |
-| `pki.enabled` | `true` | Mint the broker's dispatch credential as a cert-manager `Certificate` (`broker-dispatch-tls`); also turns on route-bus mTLS. Mandatory — REQUIRES cert-manager in the pool. MUST match the dispatch chart's `pki.enabled`. |
-| `pki.intermediateSecret` | `ectobase-pool-ca` | Pool CA Secret the broker requests from dispatch and backs its local `Issuer` with (mints the broker leaf and the agent's node leaves). |
-| `pki.underlayCIDRs` | `""` | Comma-separated pool underlay range(s); name-constrains the pool intermediate. |
-| `dispatchServer` | `https://[fd00:db8:0:1::1]:6444` | The directly-exposed dispatch aggregated-apiserver URL the broker dials (`:6444`, not the host kube-apiserver's `:6443`). Host must equal the dispatch chart's `dispatchApiserver.serviceIP`. |
-| `vmMaterializer.enabled` | `false` | Deploy the vm-materializer (CompiledVM → KubeVirt VM). Pools with KubeVirt only. |
-| `tier1Failover.enabled` | `false` | Render the Tier-1 local-failover objects (medik8s NHC + SNR). Opt-in per pool. |
-| `images.flowplane` | `…/flowplane:dev` | eBPF dataplane image. |
-| `images.mesh` | `…/mesh:dev` | mesh agent image. |
-| `images.cni` | `…/cni:dev` | flowplane CNI plugin image. |
-| `images.dispatchBroker` | `…/dispatch-broker:dev` | Per-pool broker image. |
-
-The Tier-1 knobs live under `tier1Failover.*` (`snrNamespace`, `nodeSelector`, `unhealthyThreshold`,
-`minHealthy`, `remediationStrategy`, `watchdog.*`). See the
-[Helm values reference](../reference/helm-values.md) for the complete list.
-
-## Upgrade order
-
-A planned move or a VM delete relies on both sides of the fleet speaking the release protocol
-(see [Broker sync](../architecture/multi-cluster-control-plane.md#broker-sync)), so upgrade every
-pool chart before the dispatch chart.
-
-An un-upgraded pool's broker still treats a `CompiledVM` twin with a deletion timestamp as
-desired — it keeps recreating the twin's VM and disks downstream instead of letting them go — and
-it has no `ReportReleases` call (`dispatch/pkg/broker/release.go`) to make the report the dispatch
-side is waiting on. Nothing is destroyed and nothing runs on two pools — the design fails closed —
-but every move off that pool, and every delete of a VM on it, hangs until `helm upgrade` lands the
-pool chart's new broker image.
-
-The dispatch chart's `dispatch-apiserver`, `dispatch-controller` and `mesh-controller`
-Deployments come from one Helm release and move together; don't patch one of their images ahead
-of the others. An old `dispatch-controller` never runs `releaseFencedTwins`
-(`dispatch/pkg/failover/failover.go`), so a Tier-2 failover fences a lost pool correctly but never
-releases its retired twins, and the VMs it tries to rebind stay stuck waiting on a release that
-will never be reported. The `reflector` in the same chart must not lag the `dispatch-controller`
-either: before a recovered pool's fence is released, the controller asks the reflector
-(`AnnouncedFrom`) whether that pool still announces an address placed on another pool. An older
-reflector answers `Unimplemented`, and the controller holds the fence on that, so a release waits
-until the reflector runs the new image too.
-
-Within a pool chart, `flowplane` must run the new image before `mesh-agent` does. The agent hands
-routes for its own guests' addresses to the dataplane and relies on flowplane letting a local
-guest's self-route hold that key; an older flowplane lets such a route overwrite the self-route,
-and a later withdraw then deletes it, which cuts the guest off on its own node. A normal
-`helm upgrade` of the pool chart can briefly run the new agent against the old flowplane on a
-node; the new flowplane repairs any self-route damaged that way when it starts. Never upgrade the
-`mesh` image on a pool on its own.
-
-## Trying it end to end
-
-The [local fabric](../tutorials/local-fabric.md) runs this exact two-chart install across a
-dispatch + compute-pool Talos fabric: `make lab-up` renders the charts, brings up the clusters,
-and installs both charts with mTLS mandatory. Read `test/lab/internal/deploy/ectobase.go` to see
-the reference sequence (namespaces, the `pki.enabled` flags, the two `helm install`s) that this
-page mirrors.
+Changing `imagePullPolicy` changes every pod template, so that upgrade restarts every pod,
+postgres included. With `emptyDir` persistence that restart loses all dispatch state.
 
 ## Releasing the charts
 
 !!! note "Status: Planned"
-    The charts are consumed today from the repo tree (`charts/ectobase-dispatch`,
-    `charts/ectobase-pool`). Publishing them as versioned OCI chart releases is planned;
-    until then, install from a checkout of the repository at the desired revision.
+    The charts are used from the repository tree (`charts/ectobase-dispatch`,
+    `charts/ectobase-pool`, both at version `0.1.0`). Publishing them as versioned chart
+    releases is planned; until then, install from a checkout at the revision you want.
+
+## Where to go next
+
+- [Helm values](../reference/helm-values.md): every value in both charts.
+- [Runbook](runbook.md): symptoms, causes and fixes for a running fleet.
+- [Bring up the lab](../guides/lab.md): the same install, driven end to end.
+- [Multi-cluster orchestration](../architecture/multi-cluster.md): what the broker and the
+  per-pool RBAC do once installed.

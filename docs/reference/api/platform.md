@@ -19,9 +19,6 @@ ClusterPool is an attached cluster exposed as a schedulable capacity domain.
 
 
 
-_Appears in:_
-- [ClusterPoolList](#clusterpoollist)
-
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `metadata` _[ObjectMeta](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30/#objectmeta-v1-meta)_ | Refer to Kubernetes API documentation for fields of `metadata`. |  |  |
@@ -64,7 +61,7 @@ _Appears in:_
 | --- | --- | --- | --- |
 | `region` _string_ | Region is the region the attached cluster resides in. |  |  |
 | `endpoint` _string_ | Endpoint is the reachable API endpoint of the attached cluster. |  |  |
-| `underlayPrefix` _string_ | UnderlayPrefix is this cluster's underlay aggregate (a CIDR that contains every node's<br />underlay address, e.g. "fd00:cafe:1a2b::/48"). Declaring it makes Tier-2 fencing COMPLETE by<br />construction: central fences this one prefix instead of enumerating node /64s, so a node it<br />never observed — one that joined while the pool was unreachable — is fenced too.<br />It is central configuration, set when the pool is registered, deliberately NOT reported by<br />the broker: a fence coordinate must never be derived from the entity being fenced, because<br />that entity is by definition the one you have lost contact with.<br />When empty, central falls back to the broker-reported node /64s, which is only safe while<br />every node in the cluster shares one /64 (each node's identity being a /128 inside it). If<br />the reported set contains MORE than one distinct /64, the cluster spans /64s, an unobserved<br />node could sit in an unreported one, and failover blocks rather than fencing incompletely —<br />set this field to unblock it. See docs/architecture/rescheduling-and-failover.md. |  | Optional: \{\} <br /> |
+| `underlayPrefix` _string_ | UnderlayPrefix is this cluster's underlay aggregate (a CIDR that contains every node's<br />underlay address, e.g. "fd00:cafe:1a2b::/48"). Declaring it makes Tier-2 fencing COMPLETE by<br />construction: the dispatch fences this one prefix instead of enumerating node /64s, so a node it<br />never observed — one that joined while the pool was unreachable — is fenced too.<br />It is dispatch configuration, set when the pool is registered, deliberately NOT reported by<br />the broker: a fence coordinate must never be derived from the entity being fenced, because<br />that entity is by definition the one you have lost contact with.<br />When empty, the dispatch falls back to the broker-reported node /64s, which is only safe while<br />every node in the cluster shares one /64 (each node's identity being a /128 inside it). If<br />the reported set contains MORE than one distinct /64, the cluster spans /64s, an unobserved<br />node could sit in an unreported one. Failover then fences the /64s it knows about but blocks<br />the rebind, because fencing incompletely must not reattach a disk an unfenced node may still<br />write to. Set this field to unblock it. See docs/architecture/failover.md. |  | Optional: \{\} <br /> |
 
 
 #### ClusterPoolStatus
@@ -84,8 +81,8 @@ _Appears in:_
 | `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30/#condition-v1-meta) array_ | Conditions represent the latest available observations of the ClusterPool's state. |  | Optional: \{\} <br /> |
 | `allocatable` _[ResourceList](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30/#resourcelist-v1-core)_ | Allocatable is the schedulable capacity the broker reports for this pool. |  | Optional: \{\} <br /> |
 | `lease` _[ClusterPoolLease](#clusterpoollease)_ | Lease is the broker heartbeat; a stale RenewTime drives Phase to Unknown. |  | Optional: \{\} <br /> |
-| `nodePrefixes` _string array_ | NodePrefixes is the set of node /64 underlay prefixes composing this cluster,<br />reported by the broker. Central fences these (Ceph NetworkFence + route<br />blocklist) to evacuate a lost pool without reaching it. |  | Optional: \{\} <br /> |
-| `fencedPrefixes` _string array_ | FencedPrefixes is the subset of NodePrefixes central has fenced (evacuation). |  | Optional: \{\} <br /> |
+| `nodePrefixes` _string array_ | NodePrefixes is the set of node /64 underlay prefixes composing this cluster,<br />reported by the broker. The dispatch fences these (Ceph NetworkFence + route<br />blocklist) to evacuate a lost pool without reaching it. |  | Optional: \{\} <br /> |
+| `fencedPrefixes` _string array_ | FencedPrefixes is the subset of NodePrefixes the dispatch has fenced (evacuation). |  | Optional: \{\} <br /> |
 | `nodeDrain` _[NodeDrainStatus](#nodedrainstatus) array_ | NodeDrain reports, per fenced /64, whether the returning broker has confirmed<br />its stale VMIs are terminated (safe to release the fence). |  | Optional: \{\} <br /> |
 
 
@@ -114,9 +111,6 @@ RouteBusIdentity is a pool's route-bus intermediate-CA request + signed response
 by the dispatch aggregated apiserver. The broker creates it; the dispatch signer fills status.
 
 
-
-_Appears in:_
-- [RouteBusIdentityList](#routebusidentitylist)
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |

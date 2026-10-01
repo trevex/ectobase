@@ -1,91 +1,126 @@
 # Workloads: containers and VMs
 
-ectobase treats containers and KubeVirt virtual machines as first-class, co-equal workloads.
-Both are authored as declarative intent, compiled, synced to a pool, and materialized into a real
-Kubernetes object — and both attach to the same overlay NIC model. A workload does not know or
-care whether its neighbor on the overlay is a container or a VM; they share VNIs, routes, firewall,
-LB, and NAT identically.
-
-The two paths mirror the [intent → compiled → materialized](intent-to-datapath.md) loop:
+ectobase runs two kinds of workload: a `Container`, which becomes a Pod, and a
+`VirtualMachine`, which becomes a KubeVirt VM. Both are scheduled onto a pool the same way,
+and both reach the overlay through the same object, a `NetworkInterface`. This page covers
+that shared NIC model, then each workload kind, and how the two compare.
 
 ```mermaid
 flowchart LR
-    ctr["Container<br/>(compute.ectobase.dev)"] --> cctr["CompiledContainer"] --> pod["v1.Pod<br/>(pod-materializer)"]
-    vm["VirtualMachine<br/>(compute.ectobase.dev)"] --> cvm["CompiledVM"] --> kvvm["KubeVirt VirtualMachine<br/>(vm-materializer)"]
-    ctr -.owns.-> nic["NetworkInterface(s)"]
-    vm -.owns.-> nic
-    nic --> cnic["CompiledNIC → agent → dataplane"]
-    pod & kvvm -->|Multus + flowplane-cni| overlay["overlay NIC"]
+    nic["NetworkInterface"] --> cnic["CompiledNIC"] --> agent["mesh-agent<br/>programs flowplane"]
+
+    ctr["Container"] -->|owns| nic
+    vm["VirtualMachine"] -->|owns| nic
+    vol["Volume"] -.->|attached by| vm
+
+    ctr --> cctr["CompiledContainer"] --> pod["Pod<br/>(pod-materializer)"]
+    vm --> cvm["CompiledVM"] --> kv["KubeVirt VirtualMachine<br/>(vm-materializer)"]
+    vol --> cva["CompiledVolumeAttachment"] --> kv
+
+    pod & kv -->|"Multus + flowplane-cni"| fp["overlay interface<br/>on flowplane"]
 ```
 
 ## The shared NIC model
 
-A workload references one or more `NetworkInterface` objects it owns. The workload's placement —
-its `ClusterName` (and, for containers, `NodeName`) — is the authority for where those NICs live:
-the compiler propagates that binding onto each owned `CompiledNIC`, so a NIC is always materialized
-and programmed on the same cluster/node as the workload that owns it. Whichever workload type it
-belongs to, a NIC becomes a `CompiledNIC` that the agent programs into flowplane, and the workload's
-Pod or VM is wired to that overlay interface via Multus + flowplane-cni at sandbox-creation time.
+A `NetworkInterface` is a workload's identity on the overlay. It belongs to a VPC, and
+it carries everything that should stay the same wherever the workload runs.
+
+| Field | What it holds |
+|---|---|
+| `spec.vpcRef`, `spec.subnetRef` | The VPC and the subnet to allocate from. The subnet is optional when the VPC has exactly one. |
+| `spec.ips` | Optional. Requested overlay IPs; empty means the platform allocates them. |
+| `spec.mac` | Optional. A requested MAC; empty means the platform derives a stable, VPC-unique one. |
+| `spec.qos` | Optional egress shaping and ingress policing caps. |
+| `status.vni`, `status.allocatedIPs`, `status.allocatedMAC` | What the platform actually assigned. These, not the spec, are what gets compiled. |
+
+A workload claims its interfaces by name in `spec.interfaceRefs`, in the same namespace.
+The interface follows its owner: the compiler places each `CompiledNIC` on the owning
+workload's pool. An interface with no owner can name a pool itself with `spec.clusterName`.
+
+Policy attaches to interfaces, not to workloads. A `FirewallPolicy` selects interfaces by
+label, and a `LoadBalancer` picks its backends by label selector or by name. Because a
+container and a VM both end up as a `CompiledNIC`, they share VNIs, routes, firewall,
+load balancing and NAT on equal terms. Neither can tell which kind its neighbor is.
+
+!!! note
+    To revoke a workload's network access, delete its `NetworkInterface`. An edit that
+    makes the interface invalid keeps it on its last good configuration rather than
+    cutting it off.
 
 ## Containers
 
-!!! success "Status: Implemented"
-    The container path — `Container` → `CompiledContainer` → `v1.Pod` on the overlay — is built and
-    exercised end-to-end.
+A `Container` (`compute.ectobase.dev`) is a single-container workload. Its spec is a
+small pod template: `image`, `command`, `args`, `env`, `resources`, `restartPolicy`, plus
+`interfaceRefs`.
 
-A `Container` (in the `compute.ectobase.dev` group) is a schedulable container workload: it owns
-`NetworkInterface`s and carries a pod template (image, command, args). Its placement fields
-(`ClusterName`, `NodeName`) are the placement authority for the NICs it owns.
+- Placement: leave `spec.clusterName` empty and the dispatch-controller binds the
+  container to a `Ready` pool with room for its resource requests. Inside the pool,
+  kube-scheduler picks the node, unless you pin one with `spec.nodeName`.
+- Materialization: the pod-materializer turns the `CompiledContainer` into a Pod with two
+  annotations, the Multus networks annotation and `net.ectobase.dev/network-interface`.
+  flowplane-cni reads the second to find the `CompiledNIC` and attach the interface.
+- Changing pools: edit `spec.clusterName` and the compiler moves the `CompiledContainer`
+  to the new pool and drops the old one. Unlike a VM move, there is no release handshake
+  between the two.
+- Failover: when a pool is lost, failover rebinds VMs only. A container on a lost pool
+  stays bound to it.
 
-The compiler lowers a `Container` into a `CompiledContainer`. The pod-materializer then creates a
-`v1.Pod` from it: a pod attached to the flowplane overlay via the Multus secondary-network annotation
-and the `net.ectobase.dev/network-interface` annotation that flowplane-cni resolves to the
-broker-synced `CompiledNIC`. The pod is pinned to its target node with a `nodeSelector`.
-
-!!! note
-    In the current model a `Container`'s placement (`ClusterName`/`NodeName`) is set explicitly.
-    There is no automatic container scheduler binding it to a pool yet.
+!!! warning "Status: Partial"
+    A container gets one overlay interface. The `net.ectobase.dev/network-interface`
+    annotation names a single interface, so only the first entry in `interfaceRefs` is
+    attached.
 
 ## Virtual machines
 
+A `VirtualMachine` (`compute.ectobase.dev`) owns interfaces and, optionally,
+persistent `Volume`s. Its spec holds `resources`, a boot `image` (a containerDisk), a
+KubeVirt `runStrategy`, optional `cloudInit` user data, `interfaceRefs` and `volumeRefs`.
+
+- Placement: an unbound VM goes to a `Ready` pool that matches its optional
+  `poolSelector` and fits its resource requests. Among the pools that fit, the scheduler
+  picks the one with the most headroom. An `antiAffinity` group spreads VMs across pools
+  when failover rebinds them; the first bind doesn't consult it.
+- Materialization: the vm-materializer turns the `CompiledVM` into a KubeVirt
+  `VirtualMachine`. Each interface gets its allocated MAC pinned and the `flowplane`
+  network binding plugin, which attaches it through a tap device. KubeVirt creates the
+  launcher pod itself, so flowplane-cni finds that pod's `CompiledNIC` by MAC.
+- Disks: each attached `Volume` becomes a `CompiledVolumeAttachment`, and the
+  vm-materializer turns that into a CDI `DataVolume` on Ceph RBD, boot disk first. A VM
+  with no volumes boots from its containerDisk image. The materializer waits until every
+  attachment the VM needs has arrived, so a VM never starts without its disks.
+- Moving: change `spec.clusterName` and the VM [moves](../architecture/vm-moves.md) to the
+  new pool. On pool loss, [failover](../architecture/failover.md) rebinds it.
+
 !!! warning "Status: Partial"
-    The VM path — `VirtualMachine` → `CompiledVM` → KubeVirt VM — is built, and the tap-based overlay
-    datapath for VMs is proven. Some of the surrounding KubeVirt control-plane integration (for
-    example the network-binding plugin registration and persistent-volume boot flow on a live pool)
-    is still being completed; validate against your target pool before relying on it.
+    A VM gets one overlay interface. flowplane-cni finds the interface by the MAC in the
+    launcher pod's Multus annotation and cannot tell several flowplane interfaces apart, so
+    only single-interface VMs are supported.
 
-A `VirtualMachine` (also `compute.ectobase.dev`) owns `NetworkInterface`s and, optionally,
-`Volume`s, and carries compute resources plus boot intent (a containerDisk `Image` or persistent
-volumes, and a KubeVirt `RunStrategy`). Its `ClusterName` is the placement anchor for its NICs.
+### Volumes
 
-Unlike containers, VMs are scheduled: the dispatch-controller binds an unbound `VirtualMachine` to a
-`ClusterPool` that fits its resource requests before compilation proceeds. The compiler then lowers
-the VM into a `CompiledVM` (and its interfaces into `CompiledNIC`s carrying the same cluster binding).
+A `Volume` (`storage.ectobase.dev`) is a persistent RBD disk: a `size`, an optional
+`storageClass`, and an optional `bootImage` to import into it. The disk belongs to the
+`Volume`, not to the pool it was first provisioned on. Once a pool provisions it, the
+broker (`dispatch-broker`) reports the disk's CSI identity, and the compiler records it on the `Volume`'s
+`status.diskIdentity`. When the VM lands on another pool, that pool binds the same RBD
+image through a static PersistentVolume instead of provisioning a new one.
+[Storage and VMs](../architecture/storage-and-vms.md) covers the details.
 
-The vm-materializer turns a `CompiledVM` into a KubeVirt `kubevirt.io/v1.VirtualMachine` whose
-overlay interfaces carry the NIC's centrally-allocated MAC (`status.allocatedMAC`) on the flowplane
-Multus network, attached through a KubeVirt network-binding plugin (`flowplane`) that wires the
-overlay via a tap device. Boot disks come from CDI `DataVolume`s when the VM references persistent
-`Volume`s (an RBD-backed boot disk first, then data disks); with no volumes it falls back to an
-ephemeral containerDisk from the VM's `Image`. The launcher pod carries no
-`net.ectobase.dev/network-interface` annotation, so flowplane-cni resolves the VM's `CompiledNIC`
-by that MAC instead.
+## Containers and VMs compared
 
-## Containers vs VMs at a glance
-
-| | Container | VirtualMachine |
+| | `Container` | `VirtualMachine` |
 |---|---|---|
-| API kind | `Container` (`compute.ectobase.dev`) | `VirtualMachine` (`compute.ectobase.dev`) |
-| Compiled form | `CompiledContainer` | `CompiledVM` (+ `CompiledVolumeAttachment`) |
-| Materialized as | `v1.Pod` | KubeVirt `VirtualMachine` |
-| Overlay attach | Multus + flowplane-cni (netkit L3, or veth) | KubeVirt binding plugin + flowplane-cni (tap) |
-| Placement | explicit `ClusterName` / `NodeName` | scheduled onto a `ClusterPool` by the dispatch-controller |
-| Boot / image | container image | containerDisk `Image` or CDI `DataVolume` (RBD) |
-| Status | Implemented | Partial |
+| Compiled form | `CompiledContainer` | `CompiledVM`, plus a `CompiledVolumeAttachment` per volume |
+| Materialized as | Pod | KubeVirt `VirtualMachine` |
+| Pool choice | resource fit | resource fit, `poolSelector` |
+| Node choice | kube-scheduler, or `spec.nodeName` | KubeVirt |
+| Overlay attach | Multus + flowplane-cni, found by annotation | Multus + `flowplane` binding + flowplane-cni, found by MAC |
+| Boot | container image | containerDisk image or a persistent `Volume` |
+| On pool loss | stays bound | failed over to another pool |
+| Change of `spec.clusterName` | recompiled into the new pool, no release handshake | break-before-make move, gated on release |
 
 ## Where to go next
 
-- [Intent to datapath](intent-to-datapath.md) — the compile/sync/materialize loop these paths follow.
-- [KubeVirt / VM integration](../architecture/kubevirt-integration.md) — the VM binding plugin and tap datapath.
-- [CNI integration](../architecture/cni-integration.md) — how Multus + flowplane-cni attach the overlay NIC.
-- [Storage / CSI integration](../architecture/storage-csi-integration.md) — the RBD/CDI boot-volume path.
+- [Attaching workloads](../architecture/attaching-workloads.md): how flowplane-cni and the binding plugin wire an interface into flowplane.
+- [Storage and VMs](../architecture/storage-and-vms.md): the RBD and CDI disk path, and how a disk follows its VM.
+- [VMs across clusters](../guides/vms-across-clusters.md): run VMs on two pools and connect them.

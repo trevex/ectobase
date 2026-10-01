@@ -17,8 +17,9 @@ spec:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: LoadBalancer is a scaffold-only resource. Selector-target load
-          balancer (§3.5).
+        description: |-
+          LoadBalancer is a Maglev load balancer: one address that spreads flows across the
+          NetworkInterfaces matched by spec.targetSelector or named by spec.targetRefs.
         properties:
           apiVersion:
             description: |-
@@ -42,11 +43,11 @@ spec:
               LoadBalancerSpec is the desired state of a LoadBalancer. The IP is the LB's identity (v4 or v6);
               backends are the NetworkInterfaces matched by TargetSelector or named by TargetRefs.
 
-              Deliberately NOT called a "LB address". A load-balancer address is 1:N and ingress-only — clients reach
-              it and it Maglev-hashes to a backend, but a backend's own egress is SNATed to its NATGateway
-              address, never to this one. The 1:1, bidirectional "virtual IP" that a single interface owns for
-              both directions (ironcore/dpservice VirtualIP, AWS Elastic IP) is a different object: FloatingIP.
-              Naming both "LB address" conflated them once too often.
+              It is deliberately not called a VIP. A load-balancer address is 1:N and ingress-only: clients
+              reach it and it Maglev-hashes to a backend, but a backend's own egress is SNATed to its
+              NATGateway address, never to this one. The 1:1, bidirectional "virtual IP" that a single
+              interface owns for both directions (ironcore/dpservice VirtualIP, AWS Elastic IP) is a
+              different object: FloatingIP.
             properties:
               ip:
                 description: |-
@@ -161,7 +162,9 @@ spec:
                 format: int64
                 type: integer
               state:
-                description: State is the lifecycle state (Pending | Ready).
+                description: |-
+                  State is the address allocation state: Allocated, Pending (waiting on the pool),
+                  Exhausted (the pool has no free address) or Invalid (the request cannot be satisfied).
                 type: string
             type: object
         type: object

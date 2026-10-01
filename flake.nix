@@ -123,10 +123,9 @@
             pkgs.cargo-edit
             pkgs.cargo-nextest
             pkgs.wasm-tools
-            # Documentation: mkdocs + Material theme (mermaid via pymdownx.superfences); the API
-            # reference is generated per group by crd-ref-docs (see `make docs` / `make generate`).
-            pkgs.mkdocs
-            pkgs.python3Packages.mkdocs-material
+            # Documentation: zensical (Material-compatible; mermaid via pymdownx.superfences); the
+            # API reference is generated per group by crd-ref-docs (see `make docs` / `make generate`).
+            pkgs.zensical
             crd-ref-docs
             pkgs.kubernetes-controller-tools # controller-gen: regenerates deepcopy + CRDs (see `make generate`)
             # eBPF + gRPC + VM/e2e harness tooling. Everything the test scripts need is

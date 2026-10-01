@@ -17,15 +17,16 @@ package v1alpha1
 // on the NetworkInterface instead. It also deliberately does NOT carry
 // the NIC's underlay address: every interface on a node shares that node's one VTEP, which the
 // dataplane resolves at startup, and the agent obtains it from the local DataplaneNode
-// (ListInterfaces) to announce overlay routes with the correct node nexthop. Keeping node-local state out of this central object avoids a
+// (ListInterfaces) to announce overlay routes with the correct node nexthop. Keeping node-local state out of this dispatch-side object avoids a
 // compile->sync round-trip that would lag (and flap) the announced nexthop.
 type CompiledNICSpecApplyConfiguration struct {
 	// ClusterName is the cluster this compiled NIC is bound to (the pod->node
-	// binding). Set by the compiler from the owning VirtualMachine's placement,
-	// or the compiler's --cluster-name default for NICs with no owning VM.
-	// The per-cluster broker selects on this field.
+	// binding). The compiler resolves it in order: the owning Container, the owning
+	// VirtualMachine, the NIC's own spec.clusterName, then the compiler's --cluster-name
+	// default. The twin is written into that pool's pool-<clusterName> namespace on the
+	// dispatch, which is the namespace the pool's broker syncs.
 	ClusterName *string `json:"clusterName,omitempty"`
-	// VNI is the effective VXLAN network identifier for this NIC (resolved from the NIC's
+	// VNI is the effective Geneve virtual network identifier for this NIC (resolved from the NIC's
 	// status.vni, falling back to its VPC's status.vni).
 	VNI *int32 `json:"vni,omitempty"`
 	// Port describes the dataplane port allocated for this interface.

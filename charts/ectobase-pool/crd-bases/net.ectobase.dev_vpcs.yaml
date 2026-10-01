@@ -54,8 +54,8 @@ spec:
                 type: string
               vni:
                 description: |-
-                  VNI optionally pins the VXLAN network identifier. When nil or 0, the VNI is
-                  allocated by the central cluster from the global VNI space.
+                  VNI optionally pins the Geneve virtual network identifier. When nil or 0, the VNI is
+                  allocated by the dispatch from the global VNI space.
                 format: int32
                 type: integer
             type: object
@@ -128,7 +128,8 @@ spec:
                 description: State is the current lifecycle state (e.g. Pending, Ready).
                 type: string
               vni:
-                description: VNI is the effective, allocated VXLAN network identifier.
+                description: VNI is the effective, allocated Geneve virtual network
+                  identifier.
                 format: int32
                 type: integer
             type: object

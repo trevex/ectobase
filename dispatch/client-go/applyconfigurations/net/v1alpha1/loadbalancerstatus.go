@@ -7,7 +7,8 @@ package v1alpha1
 //
 // LoadBalancerStatus is the observed state of a LoadBalancer.
 type LoadBalancerStatusApplyConfiguration struct {
-	// State is the lifecycle state (Pending | Ready).
+	// State is the address allocation state: Allocated, Pending (waiting on the pool),
+	// Exhausted (the pool has no free address) or Invalid (the request cannot be satisfied).
 	State *string `json:"state,omitempty"`
 	// AllocatedIP is the authoritative address assigned by the LB address allocator. Mirrors
 	// NetworkInterface.status.allocatedIPs: spec is the request, status is the truth.

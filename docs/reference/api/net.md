@@ -51,9 +51,6 @@ selector matches; the distributed firewall enforces it per interface in the data
 
 
 
-_Appears in:_
-- [FirewallPolicyList](#firewallpolicylist)
-
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `apiVersion` _string_ | `net.ectobase.dev/v1alpha1` | | |
@@ -79,12 +76,12 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `cidr` _string_ | CIDR is the source (ingress) or destination (egress) CIDR to match.<br />"0.0.0.0/0" matches all IPv4 addresses, "::/0" all IPv6 addresses. |  |  |
-| `proto` _string_ | Proto is the IP protocol to match ("TCP", "UDP", "ICMP", or "" for any). ICMP means the ICMP<br />of the CIDR's family (ICMPv6 for an IPv6 CIDR). |  | Enum: [TCP UDP ICMP] <br />Optional: \{\} <br /> |
+| `proto` _string_ | Proto is the IP protocol to match ("TCP", "UDP", "ICMP", or "" for any). ICMP means the ICMP<br />of the CIDR's family (ICMPv6 for an IPv6 CIDR). |  | Enum: \[TCP UDP ICMP] <br />Optional: \{\} <br /> |
 | `port` _integer_ | Port is the destination port to match (0 = any). Requires Proto TCP or UDP. |  | Maximum: 65535 <br />Minimum: 0 <br />Optional: \{\} <br /> |
 | `endPort` _integer_ | EndPort, if set, makes the rule match the inclusive destination-port range Port-EndPort.<br />Requires Port, and must not be below it. |  | Maximum: 65535 <br />Minimum: 1 <br />Optional: \{\} <br /> |
 | `icmpType` _integer_ | ICMPType restricts an ICMP rule to one ICMP (or, on an IPv6 CIDR, ICMPv6) message type,<br />e.g. 8 for IPv4 echo request, 128 for ICMPv6 echo request. Unset matches every type.<br />Requires Proto ICMP. |  | Maximum: 255 <br />Minimum: 0 <br />Optional: \{\} <br /> |
 | `icmpCode` _integer_ | ICMPCode restricts the rule further to one code of ICMPType. Unset matches every code.<br />Requires ICMPType. |  | Maximum: 255 <br />Minimum: 0 <br />Optional: \{\} <br /> |
-| `action` _string_ | Action is "Allow" or "Deny". |  | Enum: [Allow Deny] <br /> |
+| `action` _string_ | Action is "Allow" or "Deny". |  | Enum: \[Allow Deny] <br /> |
 | `priority` _integer_ | Priority orders this rule against the other rules of equally-prioritized policies: lower<br />wins. 0-65535; unset means 32768. Rules of equal priority keep their list order. |  | Maximum: 65535 <br />Minimum: 0 <br />Optional: \{\} <br /> |
 
 
@@ -129,9 +126,6 @@ _Appears in:_
 FloatingIP is a scaffold-only resource. Floating/movable virtual IP (§3.7).
 
 
-
-_Appears in:_
-- [FloatingIPList](#floatingiplist)
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
@@ -185,9 +179,6 @@ consumer is deleted.
 
 
 
-_Appears in:_
-- [IPAllocationList](#ipallocationlist)
-
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `apiVersion` _string_ | `net.ectobase.dev/v1alpha1` | | |
@@ -230,9 +221,6 @@ IPPool is a fleet-scoped, typed range of IPv4/IPv6 prefixes that any consumer
 
 
 
-_Appears in:_
-- [IPPoolList](#ippoollist)
-
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `apiVersion` _string_ | `net.ectobase.dev/v1alpha1` | | |
@@ -257,7 +245,7 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `type` _[IPPoolType](#ippooltype)_ | Type is what the addresses in this pool are for. |  | Enum: [public internal] <br /> |
+| `type` _[IPPoolType](#ippooltype)_ | Type is what the addresses in this pool are for. |  | Enum: \[public internal] <br /> |
 | `v4Prefix` _string_ | V4Prefix optionally pins the IPv4 CIDR for this pool. |  | Optional: \{\} <br /> |
 | `v6Prefix` _string_ | V6Prefix optionally pins the IPv6 CIDR for this pool. |  | Optional: \{\} <br /> |
 | `reservedIPs` _string array_ | ReservedIPs are addresses held back from allocation within this pool. |  | Optional: \{\} <br /> |
@@ -290,7 +278,7 @@ refused a pool of any other type, so an internal range can never be handed out a
 or LB address.
 
 _Validation:_
-- Enum: [public internal]
+- Enum: \[public internal]
 
 _Appears in:_
 - [IPPoolSpec](#ippoolspec)
@@ -323,12 +311,10 @@ _Appears in:_
 
 
 
-LoadBalancer is a scaffold-only resource. Selector-target load balancer (§3.5).
+LoadBalancer is a Maglev load balancer: one address that spreads flows across the
+NetworkInterfaces matched by spec.targetSelector or named by spec.targetRefs.
 
 
-
-_Appears in:_
-- [LoadBalancerList](#loadbalancerlist)
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
@@ -365,11 +351,11 @@ _Appears in:_
 LoadBalancerSpec is the desired state of a LoadBalancer. The IP is the LB's identity (v4 or v6);
 backends are the NetworkInterfaces matched by TargetSelector or named by TargetRefs.
 
-Deliberately NOT called a "LB address". A load-balancer address is 1:N and ingress-only — clients reach
-it and it Maglev-hashes to a backend, but a backend's own egress is SNATed to its NATGateway
-address, never to this one. The 1:1, bidirectional "virtual IP" that a single interface owns for
-both directions (ironcore/dpservice VirtualIP, AWS Elastic IP) is a different object: FloatingIP.
-Naming both "LB address" conflated them once too often.
+It is deliberately not called a VIP. A load-balancer address is 1:N and ingress-only: clients
+reach it and it Maglev-hashes to a backend, but a backend's own egress is SNATed to its
+NATGateway address, never to this one. The 1:1, bidirectional "virtual IP" that a single
+interface owns for both directions (ironcore/dpservice VirtualIP, AWS Elastic IP) is a
+different object: FloatingIP.
 
 
 
@@ -398,7 +384,7 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `state` _string_ | State is the lifecycle state (Pending \| Ready). |  | Optional: \{\} <br /> |
+| `state` _string_ | State is the address allocation state: Allocated, Pending (waiting on the pool),<br />Exhausted (the pool has no free address) or Invalid (the request cannot be satisfied). |  | Optional: \{\} <br /> |
 | `allocatedIP` _string_ | AllocatedIP is the authoritative address assigned by the LB address allocator. Mirrors<br />NetworkInterface.status.allocatedIPs: spec is the request, status is the truth. |  | Optional: \{\} <br /> |
 | `observedGeneration` _integer_ | ObservedGeneration is the Spec generation the allocation reflects. |  | Optional: \{\} <br /> |
 
@@ -438,7 +424,7 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `source` _string_ | Source is the overlay IP (a NetworkInterface IP) being SNATed. |  |  |
-| `publicIP` _string_ | PublicIP + [PortMin,PortMax] is the deterministic block. |  |  |
+| `publicIP` _string_ | PublicIP + \[PortMin,PortMax] is the deterministic block. |  |  |
 | `portMin` _integer_ |  |  |  |
 | `portMax` _integer_ |  |  |  |
 
@@ -451,9 +437,6 @@ NATGateway is a drain-safe egress SNAT for the sources in a VPC, using
 deterministic (public-IP, port-block) allocation.
 
 
-
-_Appears in:_
-- [NATGatewayList](#natgatewaylist)
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
@@ -512,9 +495,6 @@ NetworkInterface is a thin NIC attached to a VM: identity plus user-specified ov
 
 
 
-_Appears in:_
-- [NetworkInterfaceList](#networkinterfacelist)
-
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `apiVersion` _string_ | `net.ectobase.dev/v1alpha1` | | |
@@ -561,7 +541,7 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `vni` _integer_ | VNI is the effective VXLAN network identifier resolved from the VPC. |  | Optional: \{\} <br /> |
+| `vni` _integer_ | VNI is the effective Geneve virtual network identifier resolved from the VPC. |  | Optional: \{\} <br /> |
 | `underlayRoute` _string_ | UnderlayRoute is the underlay address this interface is reached at: the host node's<br />single VTEP, shared by every interface on that node. |  | Optional: \{\} <br /> |
 | `port` _[PortStatus](#portstatus)_ | Port describes the dataplane port allocated for this interface. |  | Optional: \{\} <br /> |
 | `state` _string_ | State is the current lifecycle state (e.g. Pending, Ready). |  | Optional: \{\} <br /> |
@@ -584,7 +564,7 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `type` _[PortType](#porttype)_ | Type is the port type (e.g. tap or vf). |  | Enum: [tap vf] <br /> |
+| `type` _[PortType](#porttype)_ | Type is the port type (e.g. tap or vf). |  | Enum: \[tap vf] <br /> |
 | `name` _string_ | Name is the host-side interface name (e.g. dtapvf_0) for tap ports. |  | Optional: \{\} <br /> |
 | `pciAddress` _string_ | PCIAddress is the PCI address for vf ports. |  | Optional: \{\} <br /> |
 
@@ -596,7 +576,7 @@ _Underlying type:_ _string_
 PortType is the kind of dataplane port backing a NetworkInterface.
 
 _Validation:_
-- Enum: [tap vf]
+- Enum: \[tap vf]
 
 _Appears in:_
 - [PortStatus](#portstatus)
@@ -631,9 +611,6 @@ _Appears in:_
 Subnet is a VPC-scoped range of IPv4/IPv6 prefixes.
 
 
-
-_Appears in:_
-- [SubnetList](#subnetlist)
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
@@ -709,9 +686,6 @@ VPC is an isolation domain (overlay network) identified by a VNI on the shared u
 
 
 
-_Appears in:_
-- [VPCList](#vpclist)
-
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `apiVersion` _string_ | `net.ectobase.dev/v1alpha1` | | |
@@ -731,9 +705,6 @@ VPCPeering is one direction of a mutual-consent VPC peering; a reciprocal pair (
 forms an active peering. Reachability only — it grants no firewall permission.
 
 
-
-_Appears in:_
-- [VPCPeeringList](#vpcpeeringlist)
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
@@ -789,7 +760,7 @@ _Appears in:_
 
 
 VPCReference references a VPC by namespace + name (peering may be cross-namespace,
-since it is central-authored).
+since it is authored on the dispatch).
 
 
 
@@ -815,8 +786,8 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `vni` _integer_ | VNI optionally pins the VXLAN network identifier. When nil or 0, the VNI is<br />allocated by the central cluster from the global VNI space. |  | Optional: \{\} <br /> |
-| `defaultPolicy` _string_ | DefaultPolicy sets what happens to traffic no firewall rule matches. Allow: it passes (rules<br />carve out denies). Deny: it drops, in every direction (rules carve out allows). Unset keeps<br />Kubernetes NetworkPolicy semantics per direction: a direction no policy governs is open, a<br />governed direction admits only what its rules allow. The VPC's FirewallDefault condition<br />reports the posture in effect. |  | Enum: [Allow Deny] <br />Optional: \{\} <br /> |
+| `vni` _integer_ | VNI optionally pins the Geneve virtual network identifier. When nil or 0, the VNI is<br />allocated by the dispatch from the global VNI space. |  | Optional: \{\} <br /> |
+| `defaultPolicy` _string_ | DefaultPolicy sets what happens to traffic no firewall rule matches. Allow: it passes (rules<br />carve out denies). Deny: it drops, in every direction (rules carve out allows). Unset keeps<br />Kubernetes NetworkPolicy semantics per direction: a direction no policy governs is open, a<br />governed direction admits only what its rules allow. The VPC's FirewallDefault condition<br />reports the posture in effect. |  | Enum: \[Allow Deny] <br />Optional: \{\} <br /> |
 
 
 #### VPCStatus
@@ -832,7 +803,7 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `vni` _integer_ | VNI is the effective, allocated VXLAN network identifier. |  | Optional: \{\} <br /> |
+| `vni` _integer_ | VNI is the effective, allocated Geneve virtual network identifier. |  | Optional: \{\} <br /> |
 | `state` _string_ | State is the current lifecycle state (e.g. Pending, Ready). |  | Optional: \{\} <br /> |
 | `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30/#condition-v1-meta) array_ | Conditions report observations about the VPC. FirewallDefault states the default firewall<br />posture in effect (reason Allow, Deny or PerDirection). |  | Optional: \{\} <br /> |
 

@@ -1,0 +1,175 @@
+[project]
+site_url = "https://trevex.github.io/ectobase/"
+site_name = "ectobase"
+site_description = "Kubernetes-native, multi-cluster IaaS for containers and KubeVirt VMs on one eBPF overlay network."
+site_author = "ectobase"
+
+copyright = "Copyright &copy; 2026 ectobase"
+
+repo_url = "https://github.com/trevex/ectobase"
+repo_name = "trevex/ectobase"
+edit_uri = "edit/main/docs/"
+
+nav = [
+  { "Home" = "index.md" },
+  { "Concepts" = [
+    { "What ectobase is" = "concepts/what-is-ectobase.md" },
+    { "The fleet: dispatch and pools" = "concepts/fleet.md" },
+    { "From intent to a running workload" = "concepts/intent-to-running.md" },
+    { "Workloads" = "concepts/workloads.md" },
+  ] },
+  { "Architecture" = [
+    { "Overview" = "architecture/overview.md" },
+    { "Multi-cluster orchestration" = "architecture/multi-cluster.md" },
+    { "The overlay network" = [
+      { "Overlay" = "architecture/overlay.md" },
+      { "The route bus" = "architecture/route-bus.md" },
+      { "Attaching workloads" = "architecture/attaching-workloads.md" },
+    ] },
+    { "The flowplane dataplane" = [
+      { "Overview" = "architecture/dataplane/index.md" },
+      { "Programs and hooks" = "architecture/dataplane/programs.md" },
+      { "Maps and state" = "architecture/dataplane/maps.md" },
+      { "The pure core" = "architecture/dataplane/pure-core.md" },
+      { "The flowplane CLI" = "architecture/dataplane/cli.md" },
+    ] },
+    { "Storage and VMs" = "architecture/storage-and-vms.md" },
+    { "Moving a VM between clusters" = "architecture/vm-moves.md" },
+    { "Failover and rescheduling" = "architecture/failover.md" },
+    { "HA and restarts" = "architecture/ha-and-restarts.md" },
+  ] },
+  { "Networking" = [
+    { "Routing and VNIs" = "features/routing-vni.md" },
+    { "Firewall" = "features/firewall.md" },
+    { "NAT gateway" = "features/nat.md" },
+    { "Load balancing" = "features/loadbalancer.md" },
+    { "VPC peering" = "features/vpc-peering.md" },
+    { "The WAN edge" = "features/ns-edge.md" },
+    { "QoS" = "features/qos.md" },
+    { "DHCP, ARP and ND" = "features/dhcp-arp-nd.md" },
+  ] },
+  { "Guides" = [
+    { "About the guides" = "guides/index.md" },
+    { "Bring up the lab" = "guides/lab.md" },
+    { "Your first VPC" = "guides/first-vpc.md" },
+    { "VMs across clusters" = "guides/vms-across-clusters.md" },
+    { "Expose a service to the WAN" = "guides/expose-to-wan.md" },
+    { "Egress through NAT" = "guides/nat-egress.md" },
+    { "Firewall and peering" = "guides/firewall-and-peering.md" },
+    { "Fail over a cluster" = "guides/failover.md" },
+    { "Move a VM" = "guides/move-a-vm.md" },
+  ] },
+  { "Operating" = [
+    { "Deploy with Helm" = "operations/deploy-helm.md" },
+    { "Runbook" = "operations/runbook.md" },
+    { "IPAM migration" = "operations/ipam-migration.md" },
+  ] },
+  { "Reference" = [
+    { "CRD interactions" = "reference/crd-interactions.md" },
+    { "API: net" = "reference/api/net.md" },
+    { "API: compute" = "reference/api/compute.md" },
+    { "API: storage" = "reference/api/storage.md" },
+    { "API: compiled" = "reference/api/compiled.md" },
+    { "API: platform" = "reference/api/platform.md" },
+    { "Helm values" = "reference/helm-values.md" },
+    { "Components" = "reference/components.md" },
+    { "Generated artifacts" = "reference/generated-artifacts.md" },
+  ] },
+  { "Contributing" = [
+    { "Overview" = "contributing/index.md" },
+    { "Development" = "contributing/development.md" },
+    { "Repository layout" = "contributing/repository-layout.md" },
+    { "Testing strategy" = "contributing/testing/strategy.md" },
+    { "The in-process sim" = "contributing/testing/sim.md" },
+    { "Conformance map" = "contributing/testing/conformance-map.md" },
+    { "Writing docs" = "contributing/documentation.md" },
+  ] },
+]
+
+extra_css = ["stylesheets/extra.css"]
+extra_javascript = ["javascripts/mermaid-zoom.js"]
+
+[project.theme]
+favicon = "assets/favicon.svg"
+logo = "assets/logo.svg"
+language = "en"
+features = [
+  "announce.dismiss",
+  "content.code.annotate",
+  "content.code.copy",
+  "content.code.select",
+  "content.footnote.tooltips",
+  "content.tabs.link",
+  "content.tooltips",
+  "navigation.footer",
+  "navigation.indexes",
+  "navigation.instant",
+  "navigation.instant.prefetch",
+  "navigation.path",
+  "navigation.sections",
+  "navigation.tabs",
+  "navigation.top",
+  "navigation.tracking",
+  "search.highlight",
+  "search.suggest",
+  "toc.follow",
+]
+
+[project.theme.font]
+text = "Inter"
+code = "JetBrains Mono"
+
+# Brand teal (#0D9488) is applied via docs/stylesheets/extra.css so it holds in both light
+# and dark. The palette here only drives the light/dark background scheme and the toggle.
+[[project.theme.palette]]
+media = "(prefers-color-scheme)"
+toggle.icon = "lucide/sun-moon"
+toggle.name = "Switch to light mode"
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: light)"
+scheme = "default"
+toggle.icon = "lucide/sun"
+toggle.name = "Switch to dark mode"
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: dark)"
+scheme = "slate"
+toggle.icon = "lucide/moon"
+toggle.name = "Switch to system preference"
+
+[[project.extra.social]]
+icon = "fontawesome/brands/github"
+link = "https://github.com/trevex/ectobase"
+
+[project.markdown_extensions]
+abbr = {}
+admonition = {}
+attr_list = {}
+def_list = {}
+footnotes = {}
+md_in_html = {}
+toc.permalink = true
+# GitHub-compatible heading slugs so cross-page anchor links written for GitHub's renderer
+# also resolve on the built site.
+toc.slugify = { object = "pymdownx.slugs.slugify", kwds = { case = "lower" } }
+pymdownx.betterem = {}
+pymdownx.caret = {}
+pymdownx.details = {}
+pymdownx.emoji.emoji_generator = "zensical.extensions.emoji.to_svg"
+pymdownx.emoji.emoji_index = "zensical.extensions.emoji.twemoji"
+pymdownx.highlight.anchor_linenums = true
+pymdownx.highlight.line_spans = "__span"
+pymdownx.highlight.pygments_lang_class = true
+pymdownx.inlinehilite = {}
+pymdownx.keys = {}
+pymdownx.magiclink = {}
+pymdownx.mark = {}
+pymdownx.smartsymbols = {}
+pymdownx.superfences.custom_fences = [
+  { name = "mermaid", class = "mermaid", format = "pymdownx.superfences.fence_code_format" },
+]
+pymdownx.tabbed.alternate_style = true
+pymdownx.tabbed.combine_header_slug = true
+pymdownx.tasklist.custom_checkbox = true
+pymdownx.tilde = {}

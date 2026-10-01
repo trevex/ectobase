@@ -585,7 +585,7 @@ func schema_ectobase_api_compiled_v1alpha1_CompiledContainerSpec(ref common.Refe
 				Properties: map[string]spec.Schema{
 					"clusterName": {
 						SchemaProps: spec.SchemaProps{
-							Description: "ClusterName is the cluster this compiled container is bound to. The broker selects on this field.",
+							Description: "ClusterName is the cluster this compiled container is bound to. The twin lives in the pool's pool-<clusterName> namespace on the dispatch, which is the namespace the pool's broker syncs.",
 							Type:        []string{"string"},
 							Format:      "",
 						},
@@ -1025,19 +1025,19 @@ func schema_ectobase_api_compiled_v1alpha1_CompiledNICSpec(ref common.ReferenceC
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
-				Description: "CompiledNICSpec is the fully lowered per-NIC STATIC POLICY the control plane hands to a node: identity, VNI, overlay IPs, firewall rules (resolved from FirewallPolicy selectors), egress-SNAT allocations, LB membership, and peer imports — derived from the NetworkInterface + VPC + FirewallPolicy + LoadBalancer + NATGateway + VPCPeering so the agent never reads those directly.\n\nThe source NetworkInterface is recorded in the compiled.ectobase.dev/source-namespace and /source-name annotations and encoded in the object name (<sourceNamespace>-<sourceName>) — so the spec carries no NICRef. There is no ownerReference: the twin is written into a per-pool namespace on the dispatch and Kubernetes forbids a cross-namespace owner, so teardown runs off a finalizer on the NetworkInterface instead. It also deliberately does NOT carry the NIC's underlay address: every interface on a node shares that node's one VTEP, which the dataplane resolves at startup, and the agent obtains it from the local DataplaneNode (ListInterfaces) to announce overlay routes with the correct node nexthop. Keeping node-local state out of this central object avoids a compile->sync round-trip that would lag (and flap) the announced nexthop.",
+				Description: "CompiledNICSpec is the fully lowered per-NIC STATIC POLICY the control plane hands to a node: identity, VNI, overlay IPs, firewall rules (resolved from FirewallPolicy selectors), egress-SNAT allocations, LB membership, and peer imports — derived from the NetworkInterface + VPC + FirewallPolicy + LoadBalancer + NATGateway + VPCPeering so the agent never reads those directly.\n\nThe source NetworkInterface is recorded in the compiled.ectobase.dev/source-namespace and /source-name annotations and encoded in the object name (<sourceNamespace>-<sourceName>) — so the spec carries no NICRef. There is no ownerReference: the twin is written into a per-pool namespace on the dispatch and Kubernetes forbids a cross-namespace owner, so teardown runs off a finalizer on the NetworkInterface instead. It also deliberately does NOT carry the NIC's underlay address: every interface on a node shares that node's one VTEP, which the dataplane resolves at startup, and the agent obtains it from the local DataplaneNode (ListInterfaces) to announce overlay routes with the correct node nexthop. Keeping node-local state out of this dispatch-side object avoids a compile->sync round-trip that would lag (and flap) the announced nexthop.",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
 					"clusterName": {
 						SchemaProps: spec.SchemaProps{
-							Description: "ClusterName is the cluster this compiled NIC is bound to (the pod->node binding). Set by the compiler from the owning VirtualMachine's placement, or the compiler's --cluster-name default for NICs with no owning VM. The per-cluster broker selects on this field.",
+							Description: "ClusterName is the cluster this compiled NIC is bound to (the pod->node binding). The compiler resolves it in order: the owning Container, the owning VirtualMachine, the NIC's own spec.clusterName, then the compiler's --cluster-name default. The twin is written into that pool's pool-<clusterName> namespace on the dispatch, which is the namespace the pool's broker syncs.",
 							Type:        []string{"string"},
 							Format:      "",
 						},
 					},
 					"vni": {
 						SchemaProps: spec.SchemaProps{
-							Description: "VNI is the effective VXLAN network identifier for this NIC (resolved from the NIC's status.vni, falling back to its VPC's status.vni).",
+							Description: "VNI is the effective Geneve virtual network identifier for this NIC (resolved from the NIC's status.vni, falling back to its VPC's status.vni).",
 							Default:     0,
 							Type:        []string{"integer"},
 							Format:      "int32",
@@ -1366,7 +1366,7 @@ func schema_ectobase_api_compiled_v1alpha1_CompiledVMSpec(ref common.ReferenceCa
 				Properties: map[string]spec.Schema{
 					"clusterName": {
 						SchemaProps: spec.SchemaProps{
-							Description: "ClusterName is the cluster this compiled VM is bound to (the pod->node binding). The per-cluster broker selects on this field.",
+							Description: "ClusterName is the cluster this compiled VM is bound to (the pod->node binding). The twin lives in the pool's pool-<clusterName> namespace on the dispatch, which is the namespace the pool's broker syncs.",
 							Type:        []string{"string"},
 							Format:      "",
 						},
@@ -1575,7 +1575,7 @@ func schema_ectobase_api_compiled_v1alpha1_CompiledVolumeAttachmentSpec(ref comm
 				Properties: map[string]spec.Schema{
 					"clusterName": {
 						SchemaProps: spec.SchemaProps{
-							Description: "ClusterName is the cluster this attachment is bound to (the pod->node binding); the per-cluster broker selects on this field.",
+							Description: "ClusterName is the cluster this attachment is bound to (the pod->node binding). The twin lives in the pool's pool-<clusterName> namespace on the dispatch, which is the namespace the pool's broker syncs.",
 							Type:        []string{"string"},
 							Format:      "",
 						},
@@ -2262,7 +2262,7 @@ func schema_ectobase_api_compute_v1alpha1_VirtualMachineSpec(ref common.Referenc
 					},
 					"antiAffinity": {
 						SchemaProps: spec.SchemaProps{
-							Description: "AntiAffinity, if set, spreads VMs sharing a Group across ClusterPools during scheduling and failover (best-effort: availability wins if no non-violating pool).",
+							Description: "AntiAffinity, if set, spreads VMs sharing a Group across ClusterPools when failover re-places them (best-effort: availability wins if no non-violating pool). The initial scheduler does not consult it yet.",
 							Ref:         ref(computev1alpha1.VMAntiAffinity{}.OpenAPIModelName()),
 						},
 					},
@@ -2320,7 +2320,7 @@ func schema_ectobase_api_compute_v1alpha1_VirtualMachineStatus(ref common.Refere
 					},
 					"placement": {
 						SchemaProps: spec.SchemaProps{
-							Description: "Placement is the VM's actual running location. The pool's broker reports it onto the matching CompiledVM's status — its RBAC is scoped to its own pool namespace — and a mesh controller mirrors it here. Central uses NodePrefix as the fence coordinate and to gate recovery drain.",
+							Description: "Placement is the VM's actual running location. The pool's broker reports it onto the matching CompiledVM's status — its RBAC is scoped to its own pool namespace — and a mesh controller mirrors it here. The dispatch uses NodePrefix as the fence coordinate and to gate recovery drain.",
 							Ref:         ref(computev1alpha1.VMPlacement{}.OpenAPIModelName()),
 						},
 					},
@@ -3059,7 +3059,7 @@ func schema_ectobase_api_net_v1alpha1_LoadBalancer(ref common.ReferenceCallback)
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
-				Description: "LoadBalancer is a scaffold-only resource. Selector-target load balancer (§3.5).",
+				Description: "LoadBalancer is a Maglev load balancer: one address that spreads flows across the NetworkInterfaces matched by spec.targetSelector or named by spec.targetRefs.",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
 					"kind": {
@@ -3185,7 +3185,7 @@ func schema_ectobase_api_net_v1alpha1_LoadBalancerSpec(ref common.ReferenceCallb
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
-				Description: "LoadBalancerSpec is the desired state of a LoadBalancer. The IP is the LB's identity (v4 or v6); backends are the NetworkInterfaces matched by TargetSelector or named by TargetRefs.\n\nDeliberately NOT called a \"LB address\". A load-balancer address is 1:N and ingress-only — clients reach it and it Maglev-hashes to a backend, but a backend's own egress is SNATed to its NATGateway address, never to this one. The 1:1, bidirectional \"virtual IP\" that a single interface owns for both directions (ironcore/dpservice VirtualIP, AWS Elastic IP) is a different object: FloatingIP. Naming both \"LB address\" conflated them once too often.",
+				Description: "LoadBalancerSpec is the desired state of a LoadBalancer. The IP is the LB's identity (v4 or v6); backends are the NetworkInterfaces matched by TargetSelector or named by TargetRefs.\n\nIt is deliberately not called a VIP. A load-balancer address is 1:N and ingress-only: clients reach it and it Maglev-hashes to a backend, but a backend's own egress is SNATed to its NATGateway address, never to this one. The 1:1, bidirectional \"virtual IP\" that a single interface owns for both directions (ironcore/dpservice VirtualIP, AWS Elastic IP) is a different object: FloatingIP.",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
 					"ip": {
@@ -3255,7 +3255,7 @@ func schema_ectobase_api_net_v1alpha1_LoadBalancerStatus(ref common.ReferenceCal
 				Properties: map[string]spec.Schema{
 					"state": {
 						SchemaProps: spec.SchemaProps{
-							Description: "State is the lifecycle state (Pending | Ready).",
+							Description: "State is the address allocation state: Allocated, Pending (waiting on the pool), Exhausted (the pool has no free address) or Invalid (the request cannot be satisfied).",
 							Type:        []string{"string"},
 							Format:      "",
 						},
@@ -3713,7 +3713,7 @@ func schema_ectobase_api_net_v1alpha1_NetworkInterfaceStatus(ref common.Referenc
 				Properties: map[string]spec.Schema{
 					"vni": {
 						SchemaProps: spec.SchemaProps{
-							Description: "VNI is the effective VXLAN network identifier resolved from the VPC.",
+							Description: "VNI is the effective Geneve virtual network identifier resolved from the VPC.",
 							Type:        []string{"integer"},
 							Format:      "int32",
 						},
@@ -4340,7 +4340,7 @@ func schema_ectobase_api_net_v1alpha1_VPCReference(ref common.ReferenceCallback)
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
-				Description: "VPCReference references a VPC by namespace + name (peering may be cross-namespace, since it is central-authored).",
+				Description: "VPCReference references a VPC by namespace + name (peering may be cross-namespace, since it is authored on the dispatch).",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
 					"namespace": {
@@ -4373,7 +4373,7 @@ func schema_ectobase_api_net_v1alpha1_VPCSpec(ref common.ReferenceCallback) comm
 				Properties: map[string]spec.Schema{
 					"vni": {
 						SchemaProps: spec.SchemaProps{
-							Description: "VNI optionally pins the VXLAN network identifier. When nil or 0, the VNI is allocated by the central cluster from the global VNI space.",
+							Description: "VNI optionally pins the Geneve virtual network identifier. When nil or 0, the VNI is allocated by the dispatch from the global VNI space.",
 							Type:        []string{"integer"},
 							Format:      "int32",
 						},
@@ -4400,7 +4400,7 @@ func schema_ectobase_api_net_v1alpha1_VPCStatus(ref common.ReferenceCallback) co
 				Properties: map[string]spec.Schema{
 					"vni": {
 						SchemaProps: spec.SchemaProps{
-							Description: "VNI is the effective, allocated VXLAN network identifier.",
+							Description: "VNI is the effective, allocated Geneve virtual network identifier.",
 							Type:        []string{"integer"},
 							Format:      "int32",
 						},
@@ -4591,7 +4591,7 @@ func schema_ectobase_api_platform_v1alpha1_ClusterPoolSpec(ref common.ReferenceC
 					},
 					"underlayPrefix": {
 						SchemaProps: spec.SchemaProps{
-							Description: "UnderlayPrefix is this cluster's underlay aggregate (a CIDR that contains every node's underlay address, e.g. \"fd00:cafe:1a2b::/48\"). Declaring it makes Tier-2 fencing COMPLETE by construction: central fences this one prefix instead of enumerating node /64s, so a node it never observed — one that joined while the pool was unreachable — is fenced too.\n\nIt is central configuration, set when the pool is registered, deliberately NOT reported by the broker: a fence coordinate must never be derived from the entity being fenced, because that entity is by definition the one you have lost contact with.\n\nWhen empty, central falls back to the broker-reported node /64s, which is only safe while every node in the cluster shares one /64 (each node's identity being a /128 inside it). If the reported set contains MORE than one distinct /64, the cluster spans /64s, an unobserved node could sit in an unreported one, and failover blocks rather than fencing incompletely — set this field to unblock it. See docs/architecture/rescheduling-and-failover.md.",
+							Description: "UnderlayPrefix is this cluster's underlay aggregate (a CIDR that contains every node's underlay address, e.g. \"fd00:cafe:1a2b::/48\"). Declaring it makes Tier-2 fencing COMPLETE by construction: the dispatch fences this one prefix instead of enumerating node /64s, so a node it never observed — one that joined while the pool was unreachable — is fenced too.\n\nIt is dispatch configuration, set when the pool is registered, deliberately NOT reported by the broker: a fence coordinate must never be derived from the entity being fenced, because that entity is by definition the one you have lost contact with.\n\nWhen empty, the dispatch falls back to the broker-reported node /64s, which is only safe while every node in the cluster shares one /64 (each node's identity being a /128 inside it). If the reported set contains MORE than one distinct /64, the cluster spans /64s, an unobserved node could sit in an unreported one. Failover then fences the /64s it knows about but blocks the rebind, because fencing incompletely must not reattach a disk an unfenced node may still write to. Set this field to unblock it. See docs/architecture/failover.md.",
 							Type:        []string{"string"},
 							Format:      "",
 						},
@@ -4662,7 +4662,7 @@ func schema_ectobase_api_platform_v1alpha1_ClusterPoolStatus(ref common.Referenc
 					},
 					"nodePrefixes": {
 						SchemaProps: spec.SchemaProps{
-							Description: "NodePrefixes is the set of node /64 underlay prefixes composing this cluster, reported by the broker. Central fences these (Ceph NetworkFence + route blocklist) to evacuate a lost pool without reaching it.",
+							Description: "NodePrefixes is the set of node /64 underlay prefixes composing this cluster, reported by the broker. The dispatch fences these (Ceph NetworkFence + route blocklist) to evacuate a lost pool without reaching it.",
 							Type:        []string{"array"},
 							Items: &spec.SchemaOrArray{
 								Schema: &spec.Schema{
@@ -4677,7 +4677,7 @@ func schema_ectobase_api_platform_v1alpha1_ClusterPoolStatus(ref common.Referenc
 					},
 					"fencedPrefixes": {
 						SchemaProps: spec.SchemaProps{
-							Description: "FencedPrefixes is the subset of NodePrefixes central has fenced (evacuation).",
+							Description: "FencedPrefixes is the subset of NodePrefixes the dispatch has fenced (evacuation).",
 							Type:        []string{"array"},
 							Items: &spec.SchemaOrArray{
 								Schema: &spec.Schema{

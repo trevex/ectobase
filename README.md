@@ -1,82 +1,84 @@
 # ectobase
 
-**ectobase** is a Kubernetes-native, multi-cluster IaaS layer for running **containers and KubeVirt VMs** on a shared **eBPF overlay network**. A single fleet control plane compiles high-level intent (VPCs, interfaces, firewalls, load balancers, VMs, volumes) and distributes it to any number of compute clusters, where a map-driven kernel dataplane gives every workload an address on a shared IPv6-underlay overlay.
+ectobase runs containers and KubeVirt VMs across a fleet of Kubernetes clusters, behind one API and on one eBPF overlay network. You write intent (VPCs, network interfaces, firewall policies, load balancers, VMs, containers, volumes) once, against the fleet control plane. ectobase places each workload on one of many compute clusters (pools), compiles the intent for that pool, and turns it into a real Pod or KubeVirt VM there. Every workload gets an overlay address that stays the same whichever pool it runs on, and reaches the rest of its VPC across pool boundaries.
 
-It is built from two planes and a fleet:
+The code has three parts:
 
-- **flowplane** — the eBPF **dataplane** (Rust, attached with tcx). Every forwarding decision is a per-flow table lookup: IPv6 underlay, Geneve overlay, multi-VNI tenancy, stateful NAT, Maglev load balancing with DSR, a deny-by-default firewall, DHCP/ARP/ND responders, QoS shaping, and NAT64 — all in the Linux kernel. Established east-west flows can additionally be pushed into SR-IOV NIC hardware as tc-flower filters.
-- **mesh** — the per-cluster **control plane** (Go/Kubernetes). CRDs describe intent; controllers compile it into per-workload `Compiled*` objects; a per-node agent programs the local dataplane; a reflector distributes overlay routes over a custom route bus.
-- **the dispatch** — the **fleet control plane**. An aggregated apiserver serves the whole API for many clusters; a per-cluster broker syncs each cluster's compiled objects down into it; a controller schedules workloads across clusters and drives failover.
+- **flowplane**: the eBPF dataplane (Rust, aya, tcx), on every pool node and every WAN edge. Every forwarding decision is a map lookup. It carries tenant traffic as Geneve over a routed IPv6 fabric, and implements multi-VNI routing, stateful NAT (including NAT64), Maglev load balancing with DSR, a per-interface firewall, DHCP/ARP/ND responders and QoS shaping.
+- **mesh**: the network control plane (Go). The compiler lowers intent into per-pool `Compiled*` objects, a per-node agent programs flowplane from them, and the reflector distributes overlay routes over a custom route bus. The materializers that create Pods and KubeVirt VMs live here too.
+- **dispatch**: fleet orchestration (Go). An aggregated apiserver backed by kine and postgres serves the whole API; a per-pool broker (`dispatch-broker`) syncs each pool's compiled objects down and status back up; the dispatch-controller schedules workloads onto pools and fails over VMs from a lost pool.
 
 ```mermaid
 flowchart TB
   subgraph dispatch["Dispatch cluster (fleet control plane)"]
-    api["Aggregated apiserver + kine"]
-    ctl["dispatch-controller<br/>(schedule / failover)"]
-    cmp["mesh compiler"]
+    api["dispatch-apiserver + kine/postgres"]
+    ctl["dispatch-controller<br/>(schedule, failover)"]
+    cmp["compiler (mesh-controller)"]
     rfl["reflector"]
   end
-  subgraph pool["Compute cluster (a ClusterPool)"]
+  subgraph pool["Pool cluster (a ClusterPool), one of many"]
     brk["broker"]
-    agt["mesh agent"]
-    mat["pod / vm materializers"]
-    dp["flowplane dataplane"]
+    mat["pod- / vm-materializer"]
+    agt["mesh-agent"]
+    dp["flowplane"]
   end
-  api -- "Compiled* (per pool)" --> brk
+  api -- "Compiled* in pool-&lt;name&gt;" --> brk
   brk --> mat
   brk --> agt
   agt --> dp
   agt <-. "route bus" .-> rfl
-  api -. "many pools" .-> pool
 ```
 
 ## The API
 
-Intent is authored as CRDs across five groups; the control plane lowers it into the `compiled` group, which the brokers sync to the owning cluster and the agents and materializers execute.
+You write intent in four groups. The compiler writes the fifth, `compiled`, which the brokers sync to the pool each object is placed on.
 
 | Group | Kinds |
 |---|---|
-| `net.ectobase.dev` | VPC, Subnet, NetworkInterface, FirewallPolicy, LoadBalancer, IPPool, NATGateway, FloatingIP, VPCPeering, IPAllocation *(controller-written)* |
+| `net.ectobase.dev` | VPC, Subnet, NetworkInterface, FirewallPolicy, LoadBalancer, NATGateway, FloatingIP, VPCPeering, IPPool, IPAllocation *(controller-written)* |
 | `compute.ectobase.dev` | VirtualMachine, Container |
 | `storage.ectobase.dev` | Volume |
+| `platform.ectobase.dev` | ClusterPool, RouteBusIdentity |
 | `compiled.ectobase.dev` | CompiledNIC, CompiledVM, CompiledContainer, CompiledVolumeAttachment *(controller-written)* |
-| `platform.ectobase.dev` | ClusterPool, RouteBusIdentity *(broker-written)* |
 
 ## Getting started
 
-Everything is provided by the Nix flake — the Rust toolchain, `bpf-linker`, Go, `controller-gen`, `kind`/`containerlab`, Helm, `mkdocs`, and the eBPF/VM tooling the tests need.
+The Nix flake provides everything: the Rust toolchain and `bpf-linker`, Go, `controller-gen`, `kind` and `containerlab`, Helm, `zensical`, and the eBPF and VM tooling the tests need.
 
 ```sh
 nix develop            # enter the dev shell (all targets assume you are inside it)
 make                   # list all targets
-make build             # build the flowplane dataplane (host crates + the eBPF object)
-make test              # host unit + datapath sim tests (no root)
-make generate          # regenerate CRDs, RBAC, conversions, and the CRD API reference
+make build             # build the flowplane binary (host crates + the eBPF object)
+make test              # host Rust unit tests (no root)
+make sim               # in-process datapath tests (no root)
+make generate          # regenerate deepcopy/conversions, CRDs, RBAC and the API reference
 make ci                # everything CI runs: lint, sim, host tests, chart tests, every Go module
 ```
 
-The datapath conformance suite runs in-process (`make sim`) and against a real kernel/gRPC path; the full multi-cluster integration suite runs on a local Talos + containerlab fabric (`make lab-up` / `make lab-test`). See the documentation for the test tiers.
+The multi-cluster integration suite runs on a local Talos + containerlab fabric with a dispatch cluster and two pools (`make lab-up`, then `make lab-test`). The docs describe the test tiers.
 
 ## Deploying
 
-ectobase ships as two Helm charts — install `ectobase-dispatch` on the fleet control-plane cluster and `ectobase-pool` on each compute cluster:
+ectobase ships as two Helm charts: `ectobase-dispatch` on the fleet control-plane cluster and `ectobase-pool` on each compute cluster.
 
 ```sh
-helm install ectobase-dispatch  charts/ectobase-dispatch  -n system --create-namespace
+helm install ectobase-dispatch charts/ectobase-dispatch -n system --create-namespace
 helm install ectobase-pool charts/ectobase-pool -n ectobase-system --set broker.clusterName=<pool>
 ```
 
-The charts are the generated deploy artifact — their CRDs and RBAC are generated from the Go types and `//+kubebuilder:rbac` markers by `make generate`, so they never drift. See the **Deploying with Helm** guide for the full flow (namespaces, the broker credential, and the values that matter).
+A real install needs more values than these, such as the reflector and dispatch addresses and the PKI settings. The charts' CRDs and RBAC are generated from the Go types and `//+kubebuilder:rbac` markers by `make generate`, so they don't drift. See [Deploy with Helm](https://trevex.github.io/ectobase/operations/deploy-helm/) for the full flow.
 
 ## Documentation
 
-Full documentation — the vision, architecture deep-dives (multi-cluster control plane, the compile→sync→materialize pipeline, CNI/KubeVirt/CSI integration, rescheduling & failover, the dataplane), feature references, guides, and the generated CRD API reference — is built with mkdocs-material:
+The documentation lives at https://trevex.github.io/ectobase/. It covers the concepts, the architecture (multi-cluster orchestration, the overlay and route bus, the dataplane, storage, failover and VM moves), the networking features, walkthrough guides on the lab, operations, and the generated API reference.
+
+The site is built with zensical from `docs/`:
 
 ```sh
-make docs-serve        # serve the docs locally at http://127.0.0.1:8000
-make docs              # build the static site (strict)
+make docs-serve        # serve the docs with live reload at http://127.0.0.1:8000/
+make docs              # build the static site into ./site (strict)
 ```
 
-## Lineage & scope
+## Lineage
 
-`flowplane` began as an eBPF/XDP reimagining of the DPDK-based [`dpservice`](https://github.com/ironcore-dev/dpservice), but ectobase has since grown its own Kubernetes control plane (`mesh`), a five-group CRD API, a route-distribution bus, a CNI, and a fleet control plane, and now targets containers and KubeVirt VMs directly. metalnet/ironcore compatibility is no longer a design constraint.
+flowplane began as an eBPF port of [ironcore dpservice](https://github.com/ironcore-dev/dpservice)'s datapath model and has since diverged; ectobase's control plane is its own Kubernetes-native design. Every applicable test in dpservice's Python conformance suite has a named native replacement, and the conformance map in the docs records which.

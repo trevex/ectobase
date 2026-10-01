@@ -41,8 +41,9 @@ type VirtualMachineSpec struct {
 	// PoolSelector, if set, restricts scheduling to ClusterPools whose labels match.
 	// +optional
 	PoolSelector *metav1.LabelSelector `json:"poolSelector,omitempty"`
-	// AntiAffinity, if set, spreads VMs sharing a Group across ClusterPools during
-	// scheduling and failover (best-effort: availability wins if no non-violating pool).
+	// AntiAffinity, if set, spreads VMs sharing a Group across ClusterPools when failover
+	// re-places them (best-effort: availability wins if no non-violating pool). The initial
+	// scheduler does not consult it yet.
 	// +optional
 	AntiAffinity *VMAntiAffinity `json:"antiAffinity,omitempty"`
 	// CloudInit, if set, provides guest bootstrap (users, SSH keys, packages) delivered to
@@ -73,7 +74,7 @@ type VirtualMachineStatus struct {
 	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type"`
 	// Placement is the VM's actual running location. The pool's broker reports it onto the
 	// matching CompiledVM's status — its RBAC is scoped to its own pool namespace — and a mesh
-	// controller mirrors it here. Central uses NodePrefix as the fence coordinate and to gate
+	// controller mirrors it here. The dispatch uses NodePrefix as the fence coordinate and to gate
 	// recovery drain.
 	// +optional
 	Placement *VMPlacement `json:"placement,omitempty"`

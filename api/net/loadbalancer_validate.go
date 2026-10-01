@@ -17,7 +17,7 @@ func (o *LoadBalancer) Validate(ctx context.Context) field.ErrorList {
 	var errs field.ErrorList
 	if o.Spec.IP != "" {
 		if _, err := netip.ParseAddr(o.Spec.IP); err != nil {
-			errs = append(errs, field.Invalid(field.NewPath("spec", "lbIP"), o.Spec.IP, "not a valid IP address"))
+			errs = append(errs, field.Invalid(field.NewPath("spec", "ip"), o.Spec.IP, "not a valid IP address"))
 		}
 	}
 	if o.Spec.PoolRef.Name == "" {

@@ -11,7 +11,7 @@ import (
 //
 // NetworkInterfaceStatus is the observed state of a NetworkInterface.
 type NetworkInterfaceStatusApplyConfiguration struct {
-	// VNI is the effective VXLAN network identifier resolved from the VPC.
+	// VNI is the effective Geneve virtual network identifier resolved from the VPC.
 	VNI *int32 `json:"vni,omitempty"`
 	// UnderlayRoute is the underlay address this interface is reached at: the host node's
 	// single VTEP, shared by every interface on that node.

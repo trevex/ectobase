@@ -1,73 +1,110 @@
-# DHCP / ARP / IPv6 ND responders
+# DHCP, ARP and ND
 
-`flowplane` answers a guest's address-configuration protocols in the dataplane; there is no
-userspace `dhcpd`/`radvd` and no per-node responder daemon. A guest DHCPv4/DHCPv6 request, ARP
-request, or IPv6 Neighbor Solicitation is caught at the guest edge, answered from the port's
-configured identity, and reflected straight back to the guest. Every reply is built from the
-per-port `PortMeta` (its IPs, the virtual gateway MAC/IP, DNS, MTU); no round trip leaves the node.
+flowplane answers a guest's address-configuration traffic inside the datapath: ARP for the gateway,
+IPv6 Neighbor Solicitation and Router Solicitation, DHCPv4 and DHCPv6. The reply is built in place
+from the interface's configured identity and sent straight back to the guest, so no request leaves
+the node and no `dhcpd` or `radvd` runs anywhere.
 
-## What each responder does
+## Where the answers come from
 
-| Protocol | Trigger | Reply |
-|---|---|---|
-| ARP | request for the virtual gateway IPv4 | in-place rewrite to an ARP reply (sender = gateway MAC/IP, Ethernet src/dst swapped) |
-| IPv6 ND | Neighbor Solicitation for the gateway IPv6 | solicited Neighbor Advertisement (type 136, target-link-layer = gateway MAC, solicited+override, recomputed ICMPv6 checksum) |
-| DHCPv4 | DISCOVER / REQUEST (UDP dport 67) | OFFER / ACK: `yiaddr` = the port's IPv4, gateway as server identity, plus MTU, DNS, subnet-mask, classless-route, optional host-name |
-| DHCPv6 | guest v6 solicit/request | reply echoing the client DUID, conditional IA_NA/RapidCommit, DNS, BootFileUrl |
+The responders have no CRD of their own. Their inputs come from two places:
 
-ARP, ND, and DHCPv4 live in `flowplane-core` (`arp_nd.rs`, `dhcp.rs`), the pure `no_std` layer
-generic over the `Pkt`/`Maps` traits, so the same reply builder runs in the eBPF datapath, in the
-in-process sim, and under the `BPF_PROG_TEST_RUN` byte-parity anchor. DHCPv6 is the deliberate
-exception (below): it stays a hand-written eBPF responder in `flowplane-ebpf`.
+- Per interface, from the `NetworkInterface`: the guest's addresses (`status.allocatedIPs`), which
+  the attach writes into the interface's `PORT_META` entry.
+- Per node, from `flowplane serve` flags: the virtual gateway addresses, the DNS servers, and the
+  guest MTU.
 
-## Why these fit the pure-core `Pkt` seam
+| Flag | Used by |
+|---|---|
+| `--gateway <ipv4>` | ARP replies, DHCPv4 server identity and routes. Required. |
+| `--gateway6 <ipv6>` | Neighbor Advertisements and Router Advertisements. Unset disables both. |
+| `--dhcp-dns`, `--dhcpv6-dns` | DNS option of DHCPv4 and DHCPv6 replies. |
+| `--guest-mtu` | DHCPv4 option 26 and the RA MTU option. Unset derives it from the smallest uplink MTU minus 80 bytes (Geneve plus the DSR option reserve). |
 
-The verifier keeps packet-bound provenance only across constant-offset accesses. A response
-built entirely from compile-time-constant offsets is verifiable through the `Pkt` trait; one that
-advances a runtime write cursor is not.
-
-- ARP / ND are fixed-size in-place rewrites: NS/NA is always 14 Eth + 40 IPv6 + 32 ICMPv6,
-  so every access is a constant-offset `read_array`/`write_array` (`arp_nd.rs`). The responder does
-  only the byte rewrite; the eBPF glue owns the classification (`ingress_ifindex → PortMeta`) and
-  the reflect verdict (`bpf_redirect(ingress_ifindex)`).
-- DHCPv4 has a compile-time-constant total length (`REPLY_LEN`) with every option at a
-  constant offset. Variable parts (which DNS servers, whether a host-name is present) are handled by
-  writing option bytes into fixed slots and PAD-filling the unused tail of each slot, never by
-  advancing a cursor. The glue resizes the frame to `REPLY_LEN` (`bpf_xdp_adjust_tail` /
-  `bpf_skb_change_tail` / `VecPkt::grow_tail`) before calling the writer, so the writer only ever
-  sees an already-`REPLY_LEN` frame.
-
-Both responders are `#[inline(always)]` on purpose: the `tc_guest_tx` caller is stack-heavy
-(conntrack / NAT / v6), and keeping these out-of-line would make each a separate BPF subprogram whose
-frame is summed with the caller's, blowing the 512-byte BPF stack limit.
-
-## Why DHCPv6 stays in eBPF
-
-The DHCPv6 reply option block is genuinely runtime-variable-length: the echoed client DUID, the
-conditional IA_NA / RapidCommit, a runtime DNS count, and a runtime BootFileUrl mean options are
-emitted at runtime offsets via `bpf_skb_store_bytes`. That is an idiom the fixed-size
-const-generic `Pkt` trait cannot express — there is no compile-time-constant layout to write into
-fixed slots.
-
-This is a verifier instruction / variable-offset ceiling, not a policy choice: the verifier
-cannot track packet-pointer provenance across a variable offset without a bounds-check the raw
-`Pkt`-trait model doesn't provide. The limitation is identical for tc and XDP, so unifying the guest
-edge on tcx does not, on its own, let DHCPv6 move into `flowplane-core`. The DHCPv6 responder
-therefore stays a hand-written eBPF program (`tc_dhcpv6_respond`); its conformance is covered by a
-real-lease smoke test rather than the pure-core sim + anchor path the others use.
-
-```mermaid
-flowchart LR
-    G[guest] -->|"ARP / NS / DHCP request"| E["guest edge (tcx)"]
-    E --> C{classify by<br/>ingress_ifindex → PortMeta}
-    C -->|ARP / ND / DHCPv4| PC["flowplane-core responder<br/>(arp_nd.rs / dhcp.rs)"]
-    C -->|DHCPv6| EB["eBPF responder<br/>(variable-offset, tc_dhcpv6_respond)"]
-    PC --> R["reflect: bpf_redirect(ingress_ifindex)"]
-    EB --> R
-    R --> G
+```sh
+flowplane serve --addr unix:///run/flowplane/dataplane.sock --uplink eth1 \
+  --gateway-mac <fabric router MAC> --gateway 169.254.0.1 --gateway6 fe80::1 \
+  --dhcp-dns 10.0.0.53 --dhcpv6-dns fd00::53
 ```
 
-A future `Pkt`-trait redesign around `bpf_skb_load_bytes`/`bpf_skb_store_bytes` — which
-bounds-check internally and so permit verifiable variable-offset access — could bring DHCPv6 (and
-other variable-length parsing) into `flowplane-core`, at the cost of the clean const-generic model.
-That is out of scope of the current design; DHCPv6 works today as a dedicated eBPF responder.
+The gateway answers at one shared virtual router MAC, `02:00:00:00:00:01`, the same source MAC the
+datapath puts on every frame it delivers to a guest. See
+[`NetworkInterface`](../reference/api/net.md#networkinterface) in the API reference.
+
+## How a request is answered
+
+`tc_guest_tx` classifies each frame from the guest by its ethertype and the interface's
+`PORT_META[ifindex]`, rewrites the request into a reply, and redirects it back out the interface it
+arrived on.
+
+```mermaid
+flowchart TD
+    g["frame from the guest"] --> tx["tc_guest_tx<br/>PORT_META[ifindex]"]
+    tx -->|ARP| arp["arp_reply: request for the gateway<br/>→ reply in place"]
+    tx -->|IPv6| v6{"which IPv6?"}
+    v6 -->|"dst in 64:ff9b::/96"| nat64["NAT64 program (tail call)"]
+    v6 -->|"NS for gateway6"| nd["nd_reply → Neighbor Advertisement"]
+    v6 -->|"Router Solicitation"| ra["grow to 86 bytes, ra_reply<br/>→ Managed RA + MTU"]
+    v6 -->|"UDP 547"| d6["DHCPv6 responder (tail call)"]
+    tx -->|"DHCPv4 (UDP 67)"| d4["DHCPv4 responder (tail call)"]
+    arp --> back["bpf_redirect(ingress ifindex)"]
+    nd --> back
+    ra --> back
+    d6 --> back
+    d4 --> back
+    back --> g
+```
+
+| Request | Reply |
+|---|---|
+| ARP request for the gateway IPv4 | ARP reply with the gateway MAC, Ethernet source and destination swapped. |
+| Neighbor Solicitation for the gateway IPv6 | Solicited Neighbor Advertisement (type 136) with the gateway MAC as target link-layer address, solicited and override flags set, ICMPv6 checksum recomputed. |
+| Router Solicitation | Router Advertisement (type 134) naming the gateway as default router, with a source link-layer option and the MTU option. The M flag is set and no SLAAC prefix is advertised, so addressing stays with DHCPv6 and central IPAM. |
+| DHCPv4 DISCOVER or REQUEST | OFFER or ACK: `yiaddr` is the interface's IPv4; the gateway is the server identity; options carry an infinite lease, subnet mask, classless static route, MTU, DNS and, when configured, a host name. |
+| DHCPv6 SOLICIT, REQUEST or CONFIRM | Advertise for a SOLICIT without Rapid Commit, Reply otherwise. It echoes the client DUID and carries an IA_NA with the interface's IPv6 when the client asks for one, and DNS. |
+
+The Router Advertisement exists because DHCPv6 has no MTU option: a self-configuring IPv6 guest
+learns its link MTU and default router only from an RA.
+
+## Why DHCPv6 stays in the eBPF crate
+
+ARP, ND, RA and DHCPv4 replies are built in `flowplane-core` (`arp_nd.rs`, `dhcp.rs`), the `no_std`
+layer generic over the `Pkt` and `Maps` traits. The same code then runs in the kernel, in the
+simulator and under the `BPF_PROG_TEST_RUN` byte-parity tests. They fit because every reply has a
+fixed layout, and the verifier keeps packet-bounds facts only across constant-offset accesses:
+
+- ARP, NS/NA and RA are fixed-size in-place rewrites. An RA is larger than the RS it answers, so the
+  glue grows the skb to 86 bytes first.
+- A DHCPv4 reply has a constant total length, `REPLY_LEN`, with every option in a fixed slot.
+  Variable parts, such as how many DNS servers or whether a host name is present, are written into
+  their slots and the unused tail of each slot is filled with PAD options. The glue resizes the
+  frame to `REPLY_LEN` before the writer runs.
+
+A DHCPv6 reply cannot be built that way. Its options vary in length at runtime (the echoed client
+DUID, the conditional IA_NA and Rapid Commit, the DNS count), so they are written at runtime offsets
+with `bpf_skb_store_bytes`, which the constant-offset `Pkt` trait cannot express. The DHCPv6
+responder therefore stays a hand-written eBPF function, `tc_dhcpv6_respond`, and its conformance
+comes from a real-lease test instead of the simulator.
+
+The responders that run inside `tc_guest_tx` are `#[inline(always)]`. As separate BPF subprograms,
+their stack frames would add to the caller's, which is already near the 512-byte BPF stack limit.
+DHCP and NAT64 run as tail-called programs for the same reason: a tail call starts with a fresh
+stack.
+
+## Limits
+
+- The pool Helm chart starts flowplane with `--gateway 169.254.0.1` only. It passes no `--gateway6`
+  and no DNS servers, so on a chart-deployed node the ND and RA responders are disabled and DHCP
+  replies carry no DNS option. DHCPv6 still answers.
+- Host-name and PXE options exist in the responders (`DHCP_META`), but no control-plane path
+  populates that map today, so replies never carry them.
+- DNS servers and MTU are node-wide, not per interface or per VPC.
+- The live test `TestDhcpLeaseSmoke` attaches a dual-stack guest and checks the DHCPv4 `yiaddr` and
+  the DHCPv6 IA address and client ID; it treats MTU and DNS as optional because the lab does not
+  set them.
+
+## Where to go next
+
+- [Attaching workloads](../architecture/attaching-workloads.md)
+- [Programs and hooks](../architecture/dataplane/programs.md)
+- [The pure core](../architecture/dataplane/pure-core.md)

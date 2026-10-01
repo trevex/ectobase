@@ -77,7 +77,7 @@ type RateLimit struct {
 
 // NetworkInterfaceStatus is the observed state of a NetworkInterface.
 type NetworkInterfaceStatus struct {
-	// VNI is the effective VXLAN network identifier resolved from the VPC.
+	// VNI is the effective Geneve virtual network identifier resolved from the VPC.
 	// +optional
 	VNI int32 `json:"vni,omitempty" protobuf:"varint,1,opt,name=vni"`
 	// UnderlayRoute is the underlay address this interface is reached at: the host node's

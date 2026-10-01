@@ -1,157 +1,199 @@
-# Datapath programs
+# Programs and hooks
 
-`flowplane` runs the overlay as tc (tcx) classifiers, not as a hand-rolled XDP tunnel. The
-kernel's Geneve `collect_md` device owns the wire encapsulation: on egress it builds the outer
-Ethernet/IPv6/UDP/Geneve header from a tunnel key the datapath stamps; on ingress it strips that
-header before any eBPF program runs. The eBPF programs are tc classifiers that stamp the tunnel key
-(`bpf_skb_set_tunnel_key`) on the way out and read it (`bpf_skb_get_tunnel_key`) on the way in. They
-never read or write outer-header bytes.
+flowplane's datapath is a set of tc classifiers attached through tcx and netkit, working with the
+kernel's Geneve device. This page goes through each program: where it attaches, what it does, and the
+kernel behaviour it depends on. Each program body is thin glue around a function in
+[the pure core](pure-core.md); the entry points named here are in `flowplane/flowplane-ebpf/src/`.
 
-Guest egress is intercepted on the guest edge tap (tcx ingress), classified, and either delivered
-locally or handed to the geneve device with a tunnel key. Fabric ingress arrives already decapped on
-the geneve device (tcx ingress), where the datapath reconstructs the delivery target from the VNI
-plus the inner destination and redirects to the guest.
+## The programs
 
-The program bodies are deliberately thin: each builds the `Pkt`/`Maps` trait impls and calls into
-[`flowplane-core`](pure-core.md), so the same forwarding code runs in eBPF and in the simulator. The
-tables below name the real entry points in `flowplane-ebpf/src/`.
-
-## Attachment map
-
-```mermaid
-flowchart LR
-    subgraph guestns["guest (container / VM)"]
-        g["eth0<br/>(overlay IP)"]
-    end
-    subgraph host["hypervisor / worker node"]
-        tap["guest tap / netkit / veth"]
-        gen["geneve0<br/>(kernel collect_md device)"]
-        wan["WAN uplink (edge only)"]
-    end
-    fabric(["IPv6 fabric"])
-    g <--> tap
-    tap -. "tc_guest_tx (tcx ingress = guest egress)" .- tap
-    gen -. "uplink_dsr_note + uplink_rx (tcx ingress)" .- gen
-    wan -. "wan_rx (tcx ingress, edge role)" .- wan
-    tap -->|"set_tunnel_key + redirect"| gen
-    gen -->|"kernel builds outer header"| fabric
-    fabric -->|"kernel strips outer header"| gen
-    gen -->|"redirect to tap"| tap
-```
-
-| Program | Attach type | Where it attaches | Direction |
+| Program | Type | Attached to | Direction |
 |---|---|---|---|
-| `uplink_dsr_note` | tcx ingress (ordered first) | geneve `collect_md` device | fabric → local, DSR-note pre-pass |
-| `uplink_rx` | tcx ingress | geneve `collect_md` device | fabric → local guest |
-| `xdp_uplink_v6` | tc classifier (tail-call only) | not attached; reached via `UPLINK_PROGS` | inner-IPv6 firewall/conntrack |
-| `wan_rx` | tcx ingress | WAN uplink (edge role only) | internet → overlay return |
-| `tc_guest_tx` | tcx ingress | each guest's tap/netkit/veth | guest → fabric |
-| `tc_guest_nat64` | tc classifier (tail-call only) | reached via `GUEST_PROGS_TC` | guest NAT64 egress |
-| `tc_guest_egress_v6` | tc classifier (tail-call only) | reached via `GUEST_PROGS_TC` | guest IPv6 overlay egress |
-| `tc_guest_dhcp` | tc classifier (tail-call only) | reached via `GUEST_PROGS_TC` | guest DHCP responder |
-| `xdp_inspect` | XDP | any interface (debug) | packet dump |
+| `tc_guest_tx` | tc classifier | each guest device: the netkit primary through a `BPF_NETKIT_PEER` link; a veth, tap or VF representor through tcx ingress | guest → overlay |
+| `tc_guest_dhcp` | tc classifier | not attached; tail call from `tc_guest_tx` (`GUEST_PROGS_TC` slot 0) | DHCPv4 and DHCPv6 responder |
+| `tc_guest_nat64` | tc classifier | not attached; tail call (slot 2) | guest IPv6 to `64:ff9b::/96`, NAT64 |
+| `tc_guest_egress_v6` | tc classifier | not attached; tail call (slot 3) | guest IPv6 overlay egress |
+| `uplink_dsr_note` | tc classifier | `fp-geneve0` tcx ingress, ordered first | DSR note, then hand on |
+| `uplink_rx` | tc classifier | `fp-geneve0` tcx ingress | overlay → local delivery |
+| `xdp_uplink_v6` | tc classifier | not attached; tail call from `uplink_rx` (`UPLINK_PROGS` slot 0) | overlay IPv6 → local delivery |
+| `wan_rx` | tc classifier | the WAN uplink's tcx ingress, edge role only | internet → overlay |
+| `xdp_inspect` | XDP | any interface, by `flowplane inspect` | debugging only |
 
-Only `xdp_inspect` is an actual `#[xdp]` program. Every forwarding program is a `#[classifier]`,
-including `xdp_uplink_v6`, which keeps its historical name to minimize the loader diff but is a tc
-program reached only by tail-call.
+Every forwarding program is a tc classifier. `xdp_uplink_v6` keeps an old name from before the
+datapath moved off XDP; it is a tc program reached only by tail call.
 
-## Geneve device ingress: `uplink_dsr_note` + `uplink_rx`
+### Why tc and not XDP
 
-Fabric ingress attaches to the kernel geneve `collect_md` device, not to a physical NIC. A single
-virtual device demuxes every decapped overlay frame regardless of which uplink carried it, so a
-dual-homed host needs no per-NIC attach. Two separate tcx programs share the geneve ingress hook,
-ordered by the loader's `LinkOrder::first()` attach.
+The overlay is built on skb tunnel metadata. `bpf_skb_set_tunnel_key`, `bpf_skb_get_tunnel_key` and
+the tunnel option helpers exist only for skb-based programs; XDP runs before an skb exists, so it has
+none of them. tc programs also run after `eth_type_trans`, so they see a correct `skb->protocol` and
+packet type, and they carry non-linear (jumbo) packets with no linear-buffer MTU limit. The cost is
+running later in the receive path than XDP would.
 
-`uplink_dsr_note` runs first. Its only job is the DSR reverse-LB address note: it reads the Geneve DSR
-option off the skb tunnel metadata (`bpf_skb_get_tunnel_opt`) and records the reverse-LB address conntrack
-entry (`conntrack::dsr_note`/`dsr_note6`). It always returns `TC_ACT_UNSPEC` (`TCX_NEXT`) so
-`uplink_rx` runs next. It exists as its own program because folding the note into `uplink_rx` blows
-the verifier's 512-byte combined-stack budget, and out-of-lining it onto `uplink_rx`'s call graph is
-rejected outright (see the module doc in `flowplane-ebpf/src/ingress.rs`).
+### Why tail calls
 
-`uplink_rx` (`ingress::try_uplink_rx`) handles delivery. On entry the frame is already the inner
-frame the sender handed the geneve device; the VNI comes from `bpf_skb_get_tunnel_key`, not from any
-outer address. The shared orchestrator `flowplane_core::datapath::process_uplink_rx` reconstructs
-the delivery target from `(vni, inner destination)` across four mechanisms:
+The eBPF verifier gives a program 512 bytes of stack across its whole call chain. The IPv6 firewall
+and conntrack structures, NAT64 and the DHCP responders do not fit on top of `tc_guest_tx` or
+`uplink_rx`. A tail call replaces the running program and starts with a fresh stack, so each of those
+paths is its own program reached through a program array. tc programs can only tail-call tc programs,
+so the guest side (`GUEST_PROGS_TC`) and the uplink side (`UPLINK_PROGS`) each have their own array.
+If a slot is empty the tail call returns and the packet is passed to the stack unchanged.
 
-- Local delivery: `INTERFACES[(vni, inner_ipv4)]` / `INTERFACES6[(vni, inner_ipv6)]` marks the
-  destination local. Rewrite the inner Ethernet (dst = guest MAC, src = gateway MAC) and redirect to
-  the tap, using `bpf_redirect_peer` when the delivery device has a pod-netns peer (veth/netkit) and
-  a plain `bpf_redirect` otherwise. Keying on the overlay `(vni, ip)` is what makes overlapping
-  overlay IPv4 across VNIs safe.
-- Load balancing: Maglev-select a backend underlay for the LB address. If the backend is remote, re-stamp
-  the tunnel key at the backend node and redirect back to the geneve device without decapping. The
-  inner destination stays the LB address (DSR). See [Load balancing](../../features/loadbalancer.md).
-- NAT return: a conntrack `CT_REWRITE_DST` entry restores the guest's inner destination (and, for
-  NAT64, expands an IPv4 reply back to IPv6).
-- Edge local-deliver: on the WAN edge, an `INTERFACES` miss against the edge's own
-  `UNDERLAY_LOCAL_DELIVER` sentinel hands the inner packet to the local kernel (VyOS), which
-  masquerades it to the internet.
+## tc_guest_tx: guest egress
 
-An `INTERFACES` miss on a non-edge node is a genuine miss and drops. Before delivery, the path
-applies the firewall (deny-by-default) and touches or creates conntrack. Inner-IPv6 frames tail-call
-`xdp_uplink_v6` through the `UPLINK_PROGS` program array, which resets the BPF stack so the v6
-firewall and conntrack path gets a fresh 512-byte budget; tc programs can only tail-call other tc
-programs, hence the dedicated array.
+`tc_guest_tx` sees everything a guest sends. It looks up the device's `PORT_META` entry (no entry:
+pass), then dispatches on the ethertype:
 
-## Guest egress: `tc_guest_tx`
+1. ARP for the gateway: answered in place and redirected back to the guest.
+2. IPv6:
+    - a destination in `64:ff9b::/96` tail-calls `tc_guest_nat64`;
+    - a Neighbor Solicitation for the gateway is answered in place;
+    - a Router Solicitation is answered with a Router Advertisement carrying the MTU. The reply is
+      larger than the request, so the program grows the skb with `bpf_skb_change_tail` first;
+    - DHCPv6 (UDP 547) tail-calls `tc_guest_dhcp`;
+    - anything else tail-calls `tc_guest_egress_v6`.
+3. DHCPv4 (UDP 67) tail-calls `tc_guest_dhcp`.
+4. IPv4 runs the egress pipeline (`forward_decision_v4` in `egress.rs`): conntrack and the
+   egress firewall, the DSR reply rewrite, floating-IP rewrites, the route lookup, NAT on an external
+   route, conntrack tracking and public-lane metering, then the deliver decision.
 
-`tc_guest_tx` (tcx ingress on the guest's tap/netkit/veth, which is the guest's egress direction)
-processes everything a guest emits:
+The deliver decision has three outcomes:
 
-1. ARP and IPv6 ND for the overlay gateway are answered in place and redirected back to the guest.
-2. DHCPv4/DHCPv6 requests tail-call `tc_guest_dhcp`; overlay-egress traffic to the NAT64 prefix
-   (`64:ff9b::/96`) tail-calls `tc_guest_nat64`; other inner-IPv6 traffic tail-calls
-   `tc_guest_egress_v6`. Every tail call runs through the `GUEST_PROGS_TC` program array and gets a
-   fresh verifier stack budget.
-3. Firewall (deny-by-default, egress direction) and conntrack creation.
-4. LB address / SNAT rewrites and, if configured, rate metering.
-5. Route and deliver decision: an exact-match lookup in `ROUTES`/`ROUTES6` for the guest's VNI
-   yields either a local redirect straight to the destination tap (same-host fast path), an overlay
-   encap (stamp the resolved `{vni, remote}` tunnel key via `bpf_skb_set_tunnel_key` and redirect to
-   the geneve device), or a pass to the kernel when no route matches.
+- Local (the destination is in `INTERFACES` on this node): run the destination's ingress firewall
+  on a new flow, rewrite the inner Ethernet header and `bpf_redirect` to the destination device.
+- Encapsulate: stamp a departure time for EDT pacing if the interface has an egress rate, stamp the
+  tunnel key from the route, and `bpf_redirect` to `fp-geneve0`. The fabric uplink carries an `fq`
+  qdisc, which honours the departure time.
+- Pass: no route; the packet goes to the host stack.
 
-The heavy per-protocol logic (DHCP, NAT64, route lookup, encap decision) lives in `flowplane-core`;
-`tc_guest_tx` and its tail-call targets are the tc-context glue. `tc_guest_egress_v6` and
-`tc_guest_nat64` are split out as separate tail-called programs because the firewall + conntrack +
-route + encap chain overflows `tc_guest_tx`'s own combined stack frame.
+[The overlay](../overlay.md#the-egress-walk) walks through the same steps with the reasons.
 
-## `wan_rx` — the WAN-edge return path
+## tc_guest_dhcp, tc_guest_nat64, tc_guest_egress_v6
 
-On an edge node (`serve --role edge`, sharing VyOS's netns), `wan_rx` (`ingress::try_wan_rx`)
-attaches to the WAN-facing uplink's tcx ingress. It catches internet return traffic destined to a
-registered `nat_ip` and encapsulates it back toward the owning hypervisor over the fabric by stamping
-the tunnel key and redirecting to the geneve device. The reverse direction, overlay egress to the
-internet, is delivered on the far host by the `uplink_rx` edge local-deliver branch above. Both
-directions reuse the same tunnel-key core. See [North-South WAN edge](../../features/ns-edge.md).
+- `tc_guest_dhcp` answers DHCPv4 with a fixed-layout reply built by `flowplane_core::dhcp` (address,
+  gateway, MTU, DNS, host name), growing the skb to the reply length first. It answers DHCPv6 with
+  code in the eBPF crate, because the DHCPv6 reply's option block has a length only known at run time.
+  On a DHCPv4 request it also learns the guest's MAC and writes it into `PORT_META`, `INTERFACES` and `INTERFACES6`.
+- `tc_guest_nat64` translates IPv6 to IPv4 (`process_guest_tx_nat64`), shrinking the packet by 20
+  bytes with `bpf_skb_adjust_room`, then routes the IPv4 packet and encapsulates it like any other.
+- `tc_guest_egress_v6` is the IPv6 counterpart of the IPv4 pipeline (`process_guest_tx_v6`):
+  firewall and conntrack, the DSR reply rewrite, NAT66 on an external route, route and deliver.
 
-## DHCP / ARP / ND responders
+## uplink_dsr_note and uplink_rx: overlay ingress
 
-The datapath answers L2/L3 control-plane requests locally, so a guest never needs an external DHCP
-or discovery service:
+Both attach to `fp-geneve0`, not to a physical NIC. The kernel decapsulates on that device's receive
+path, so one attachment covers every fabric uplink a dual-homed node has. When the programs run, the
+packet is already the inner frame, and the VNI comes from `bpf_skb_get_tunnel_key`.
 
-- DHCPv4 / DHCPv6: `tc_guest_dhcp` (tail-call target, slot `GUEST_PROG_DHCP`) parses the request and
-  writes a fixed-layout reply offering the guest's overlay address, gateway, MTU, and DNS servers
-  (from `DHCP_CONFIG` + per-interface `DHCP_META`), then redirects it back out the tap. It also
-  learns the guest MAC.
-- ARP (IPv4) and IPv6 ND: answered inline in `tc_guest_tx` for the configured overlay gateway,
-  presenting the gateway at the shared virtual-router MAC (`GW_MAC`).
+### uplink_dsr_note
 
-See [DHCP / ARP / IPv6 ND responders](../../features/dhcp-arp-nd.md).
+`uplink_dsr_note` runs first because the loader attaches it with `LinkOrder::first()`. If the frame
+carries the DSR option, it records the load-balancer address in the `DSR` map, keyed by the reply's
+5-tuple, so `tc_guest_tx` can rewrite the reply's source later.
 
-## Debug / support programs
+It always returns `TC_ACT_UNSPEC`, which tcx treats as `TCX_NEXT`: run the next program. Returning
+`TC_ACT_OK` would be a final verdict and skip `uplink_rx` for every packet. It is a separate program
+for stack reasons: inlined into `uplink_rx` it pushes the combined stack over 512 bytes, and moved
+into an out-of-line helper the verifier rejects it, because a helper that takes the packet and calls
+map functions cannot keep its packet bounds across the call.
 
-- `xdp_inspect`: the only real XDP program. `flowplane inspect` attaches it to an interface and dumps
-  the first packet bytes into the `INSPECT` map on a timer. It is a debugging aid, not part of the
-  datapath.
+### uplink_rx
 
-There is no `xdp_pass` program and no devmap: the overlay pipeline is entirely tcx, and delivery
-uses `bpf_redirect`/`bpf_redirect_peer` on the skb, so the native-XDP-redirect-into-veth peer
-requirement that once needed an `xdp_pass` shim no longer applies.
+`uplink_rx` dispatches on the inner ethertype: IPv6 tail-calls `xdp_uplink_v6`, IPv4 runs
+`process_uplink_rx`. The core decides the target in this order:
+
+1. Load balancer: Maglev selects a backend for a load-balancer address. A local backend is
+   delivered to; a remote one gets a new tunnel key toward its VTEP and goes straight back out through
+   `fp-geneve0`. Only the WAN edges program load balancers today (see
+   [load balancing](../../features/loadbalancer.md)), so on compute nodes this arm runs in the
+   simulator only.
+2. NAT return: a reply to a registered NAT address has a reverse conntrack entry that restores the
+   guest's address (and for NAT64, expands the IPv4 reply back to IPv6). No ingress firewall runs: it
+   is the reply to a flow the guest started.
+3. Floating IP: a destination in `FLOATING_IPS` is rewritten (DNAT) to the guest behind it, which
+   then goes through step 5.
+4. Neighbour NAT relay: a destination address and port inside a NAT block another node owns
+   (`NAT_OWNERS`, same VNI) gets a tunnel key toward the owner's VTEP and goes back out through
+   `fp-geneve0`.
+5. Local interface: `INTERFACES[(VNI, destination)]` names a local device. A new flow meets the
+   interface's ingress firewall, the inner Ethernet header is rewritten, and the packet is delivered.
+6. Edge local deliver: on a WAN edge, a miss on `INTERFACES` finds the edge sentinel in `UNDERLAY`
+   and hands the packet to the local kernel.
+7. Drop: any other miss. A decapsulated overlay packet with no local owner never reaches the
+   node's own stack.
+
+The glue then executes the result: a tunnel key and redirect to `fp-geneve0`, a `bpf_redirect`, a
+`bpf_redirect_peer`, a hand-off to the stack, or a drop.
+
+### Delivery and the destination MAC
+
+The kernel's `eth_type_trans` marks a frame whose destination MAC is not the receiving device's own
+(and not broadcast or multicast) as `PACKET_OTHERHOST`, and `ip_rcv` drops it before routing. Every
+delivery path has to account for this:
+
+- L2 guests (veth, tap, the VM's netkit L2 pair, a VF) get destination = the guest's MAC.
+- L3 netkit pods get the all-zero MAC. An L3 netkit device has no ARP and filters on destination
+  MAC, accepting only its own all-zero address or broadcast and multicast.
+- The WAN edge's local delivery (`edge_local_deliver`) rewrites the destination to the primary
+  uplink's MAC (`LOCAL.uplink_mac`). That alone is not enough, because the kernel marked the packet
+  type when the inner frame surfaced on `fp-geneve0`, before tc ran. So the glue then reclassifies the
+  skb as `PACKET_HOST` with `bpf_skb_change_type`. On an edge, `fp-geneve0` is also created with
+  `--gateway-mac` set to the virtual-router MAC guests address (`02:00:00:00:00:01` in the lab), so
+  inner frames from guests already match the device.
+
+`bpf_redirect_peer` is used only when `uplink_rx` delivers to a container (veth or netkit L3), whose
+peer is the pod's interface. See [the overlay](../overlay.md#delivering-with-bpf_redirect_peer) for why VMs, VFs and
+the same-host path use a plain redirect.
+
+## wan_rx: the edge's WAN side
+
+On an edge (`serve --role edge`), `wan_rx` attaches to the WAN uplink's tcx ingress and runs
+`process_wan_rx` on traffic arriving from the internet:
+
+- Load-balancer address: Maglev selects a backend. The program rewrites the inner destination to
+  the backend's own overlay address, keeps the client as the source, stamps a tunnel key toward the
+  backend's VTEP, then attaches the DSR option with `bpf_skb_set_tunnel_opt` (which must come after the
+  key) and redirects to `fp-geneve0`.
+- NAT return: a packet to a NAT address and port is looked up in `NAT_OWNERS` (an LPM trie over
+  address and port prefixes), and relayed with a tunnel key toward the owning node's VTEP, carrying the
+  owner's VNI so the owner's reverse conntrack entry matches.
+- Anything else is passed to the edge router's stack.
+
+See [the WAN edge](../../features/ns-edge.md).
+
+## xdp_inspect
+
+`xdp_inspect` is the only XDP program. `flowplane inspect --iface <dev>` attaches it in native mode,
+falling back to generic mode, and prints the first bytes of the latest packet every 500 ms from the
+`INSPECT` map. It is a debugging aid and has no role in forwarding.
+
+## Attaching and re-attaching
+
+- `uplink_dsr_note` and `uplink_rx` are tcx links on `fp-geneve0`, `wan_rx` a tcx link on the WAN
+  uplink, and `tc_guest_tx` a tcx link or a netkit link on each guest device.
+- With `--pin-links` (the default) every link is pinned in bpffs. On restart the loader re-points a
+  surviving link at the newly loaded program with `BPF_LINK_UPDATE`, so the hook is never empty. A
+  netkit link must be re-pointed through the netkit path; the tcx re-adopt path would unpin the live
+  link.
+- If `fp-geneve0` had to be recreated, its ifindex changed and the old pinned links point at a device
+  that no longer exists, so the loader attaches fresh instead of re-pointing.
+
+[HA and restarts](../ha-and-restarts.md) covers adoption as a whole.
+
+## Notes for debugging
+
+- Maps and programs are kernel-global. Pinning is per bpffs mount, not per network namespace. Two
+  flowplane instances that mount the same bpffs and use the same pin directory share one set of maps,
+  whatever namespaces they run in; isolate them with separate pin directories.
+- Use drop reasons. The `skb:kfree_skb` tracepoint carries the drop reason. Aggregating reason and
+  location over a failing flow tells a `PACKET_OTHERHOST` drop from a netfilter drop or a header error,
+  which all look the same to `tcpdump`.
+- Run the verifier. `make verifier` (root) loads every forwarding program through the kernel verifier. A
+  stack-budget regression only shows up there.
 
 ## Where to go next
 
-- [The overlay](../../concepts/overlay.md) — the concept these programs implement: Geneve over an IPv6 underlay.
-- [The pure-core seam](pure-core.md) — how these programs share code with the simulator.
-- [BPF maps & state model](maps.md) — the maps every program reads and writes.
-- [The flowplane CLI](cli.md) — how the programs get attached.
+- [Maps and state](maps.md): what each program reads and writes.
+- [The pure core](pure-core.md): the shared logic behind every program here.
+- [The overlay network](../overlay.md): the end-to-end packet walk.
+- [The flowplane CLI](cli.md): the commands that load and attach these programs.

@@ -12,12 +12,9 @@ served by the aggregated apiserver and consumed as CRDs by the mesh control plan
 
 ### Resource Types
 - [CompiledContainer](#compiledcontainer)
-- [CompiledContainerList](#compiledcontainerlist)
 - [CompiledNIC](#compilednic)
 - [CompiledVM](#compiledvm)
-- [CompiledVMList](#compiledvmlist)
 - [CompiledVolumeAttachment](#compiledvolumeattachment)
-- [CompiledVolumeAttachmentList](#compiledvolumeattachmentlist)
 
 
 
@@ -45,9 +42,6 @@ _Appears in:_
 CompiledContainer is the lowered pod intent for a Container.
 
 
-
-_Appears in:_
-- [CompiledContainerList](#compiledcontainerlist)
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
@@ -109,7 +103,7 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `clusterName` _string_ | ClusterName is the cluster this compiled container is bound to. The broker selects on this field. |  | Optional: \{\} <br /> |
+| `clusterName` _string_ | ClusterName is the cluster this compiled container is bound to. The twin lives in the pool's<br />pool-<clusterName> namespace on the dispatch, which is the namespace the pool's broker syncs. |  | Optional: \{\} <br /> |
 | `nodeName` _string_ | NodeName is the pod nodeSelector (kubernetes.io/hostname). |  | Optional: \{\} <br /> |
 | `image` _string_ | Image is the container image. |  | Optional: \{\} <br /> |
 | `command` _string array_ | Command overrides the image entrypoint. |  | Optional: \{\} <br /> |
@@ -240,9 +234,6 @@ It is produced by the Compile() function from a NetworkInterface + matching Netw
 
 
 
-_Appears in:_
-- [CompiledNICList](#compiledniclist)
-
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `apiVersion` _string_ | `compiled.ectobase.dev/v1alpha1` | | |
@@ -270,7 +261,7 @@ on the dispatch and Kubernetes forbids a cross-namespace owner, so teardown runs
 on the NetworkInterface instead. It also deliberately does NOT carry
 the NIC's underlay address: every interface on a node shares that node's one VTEP, which the
 dataplane resolves at startup, and the agent obtains it from the local DataplaneNode
-(ListInterfaces) to announce overlay routes with the correct node nexthop. Keeping node-local state out of this central object avoids a
+(ListInterfaces) to announce overlay routes with the correct node nexthop. Keeping node-local state out of this dispatch-side object avoids a
 compile->sync round-trip that would lag (and flap) the announced nexthop.
 
 
@@ -280,8 +271,8 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `clusterName` _string_ | ClusterName is the cluster this compiled NIC is bound to (the pod->node<br />binding). Set by the compiler from the owning VirtualMachine's placement,<br />or the compiler's --cluster-name default for NICs with no owning VM.<br />The per-cluster broker selects on this field. |  | Optional: \{\} <br /> |
-| `vni` _integer_ | VNI is the effective VXLAN network identifier for this NIC (resolved from the NIC's<br />status.vni, falling back to its VPC's status.vni). |  |  |
+| `clusterName` _string_ | ClusterName is the cluster this compiled NIC is bound to (the pod->node<br />binding). The compiler resolves it in order: the owning Container, the owning<br />VirtualMachine, the NIC's own spec.clusterName, then the compiler's --cluster-name<br />default. The twin is written into that pool's pool-<clusterName> namespace on the<br />dispatch, which is the namespace the pool's broker syncs. |  | Optional: \{\} <br /> |
+| `vni` _integer_ | VNI is the effective Geneve virtual network identifier for this NIC (resolved from the NIC's<br />status.vni, falling back to its VPC's status.vni). |  |  |
 | `port` _[PortStatus](#portstatus)_ | Port describes the dataplane port allocated for this interface. |  |  |
 | `overlayIPs` _string array_ | OverlayIPs are the guest overlay IP addresses. |  | Optional: \{\} <br /> |
 | `firewall` _[CompiledFirewall](#compiledfirewall)_ | Firewall holds the compiled ingress and egress firewall rules. |  |  |
@@ -353,9 +344,6 @@ CompiledVM is the lowered boot intent for a scheduled VirtualMachine.
 
 
 
-_Appears in:_
-- [CompiledVMList](#compiledvmlist)
-
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `apiVersion` _string_ | `compiled.ectobase.dev/v1alpha1` | | |
@@ -417,7 +405,7 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `clusterName` _string_ | ClusterName is the cluster this compiled VM is bound to (the pod->node binding).<br />The per-cluster broker selects on this field. |  | Optional: \{\} <br /> |
+| `clusterName` _string_ | ClusterName is the cluster this compiled VM is bound to (the pod->node binding).<br />The twin lives in the pool's pool-<clusterName> namespace on the dispatch, which is the<br />namespace the pool's broker syncs. |  | Optional: \{\} <br /> |
 | `image` _string_ | Image is the containerDisk image to boot from. |  | Optional: \{\} <br /> |
 | `resources` _[ResourceRequirements](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30/#resourcerequirements-v1-core)_ | Resources is the compute request/limit; maps to the KubeVirt domain resources. |  | Optional: \{\} <br /> |
 | `runStrategy` _string_ | RunStrategy is the KubeVirt run strategy (defaulted upstream by the compiler). |  | Optional: \{\} <br /> |
@@ -454,9 +442,6 @@ _Appears in:_
 CompiledVolumeAttachment binds one Volume to one VM on a cluster.
 
 
-
-_Appears in:_
-- [CompiledVolumeAttachmentList](#compiledvolumeattachmentlist)
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
@@ -500,7 +485,7 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `clusterName` _string_ | ClusterName is the cluster this attachment is bound to (the pod->node binding);<br />the per-cluster broker selects on this field. |  | Optional: \{\} <br /> |
+| `clusterName` _string_ | ClusterName is the cluster this attachment is bound to (the pod->node binding). The twin<br />lives in the pool's pool-<clusterName> namespace on the dispatch, which is the namespace<br />the pool's broker syncs. |  | Optional: \{\} <br /> |
 | `size` _[Quantity](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30/#quantity-resource-api)_ | Size is the RBD disk size. |  | Required: \{\} <br /> |
 | `storageClass` _string_ | StorageClass is the ceph-csi RBD StorageClass (empty = cluster default). |  | Optional: \{\} <br /> |
 | `bootImage` _string_ | BootImage, if set, is imported into the disk (bootable); empty = blank disk. |  | Optional: \{\} <br /> |
@@ -573,7 +558,7 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `type` _[PortType](#porttype)_ | Type is the port type (e.g. tap or vf). |  | Enum: [tap vf] <br /> |
+| `type` _[PortType](#porttype)_ | Type is the port type (e.g. tap or vf). |  | Enum: \[tap vf] <br /> |
 | `name` _string_ | Name is the host-side interface name (e.g. dtapvf_0) for tap ports. |  | Optional: \{\} <br /> |
 | `pciAddress` _string_ | PCIAddress is the PCI address for vf ports. |  | Optional: \{\} <br /> |
 
@@ -585,7 +570,7 @@ _Underlying type:_ _string_
 PortType is the kind of dataplane port backing a NetworkInterface.
 
 _Validation:_
-- Enum: [tap vf]
+- Enum: \[tap vf]
 
 _Appears in:_
 - [PortStatus](#portstatus)

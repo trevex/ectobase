@@ -22,8 +22,8 @@ const (
 
 // VPCSpec is the desired state of a VPC (an isolation domain / overlay network).
 type VPCSpec struct {
-	// VNI optionally pins the VXLAN network identifier. When nil or 0, the VNI is
-	// allocated by the central cluster from the global VNI space.
+	// VNI optionally pins the Geneve virtual network identifier. When nil or 0, the VNI is
+	// allocated by the dispatch from the global VNI space.
 	// +optional
 	VNI *int32 `json:"vni,omitempty" protobuf:"varint,1,opt,name=vni"`
 	// DefaultPolicy sets what happens to traffic no firewall rule matches. Allow: it passes (rules
@@ -38,7 +38,7 @@ type VPCSpec struct {
 
 // VPCStatus is the observed state of a VPC.
 type VPCStatus struct {
-	// VNI is the effective, allocated VXLAN network identifier.
+	// VNI is the effective, allocated Geneve virtual network identifier.
 	// +optional
 	VNI int32 `json:"vni,omitempty" protobuf:"varint,1,opt,name=vni"`
 	// State is the current lifecycle state (e.g. Pending, Ready).

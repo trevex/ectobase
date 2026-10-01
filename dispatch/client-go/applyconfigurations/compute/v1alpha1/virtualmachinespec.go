@@ -36,8 +36,9 @@ type VirtualMachineSpecApplyConfiguration struct {
 	RunStrategy *string `json:"runStrategy,omitempty"`
 	// PoolSelector, if set, restricts scheduling to ClusterPools whose labels match.
 	PoolSelector *metav1.LabelSelectorApplyConfiguration `json:"poolSelector,omitempty"`
-	// AntiAffinity, if set, spreads VMs sharing a Group across ClusterPools during
-	// scheduling and failover (best-effort: availability wins if no non-violating pool).
+	// AntiAffinity, if set, spreads VMs sharing a Group across ClusterPools when failover
+	// re-places them (best-effort: availability wins if no non-violating pool). The initial
+	// scheduler does not consult it yet.
 	AntiAffinity *VMAntiAffinityApplyConfiguration `json:"antiAffinity,omitempty"`
 	// CloudInit, if set, provides guest bootstrap (users, SSH keys, packages) delivered to
 	// the VM as a cloud-init NoCloud datasource. Required to log in to a stock cloud image.

@@ -48,8 +48,9 @@ spec:
                   type: string
                 type: array
               clusterName:
-                description: ClusterName is the cluster this compiled container is
-                  bound to. The broker selects on this field.
+                description: |-
+                  ClusterName is the cluster this compiled container is bound to. The twin lives in the pool's
+                  pool-<clusterName> namespace on the dispatch, which is the namespace the pool's broker syncs.
                 type: string
               command:
                 description: Command overrides the image entrypoint.

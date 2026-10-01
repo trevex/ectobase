@@ -55,7 +55,8 @@ spec:
               clusterName:
                 description: |-
                   ClusterName is the cluster this compiled VM is bound to (the pod->node binding).
-                  The per-cluster broker selects on this field.
+                  The twin lives in the pool's pool-<clusterName> namespace on the dispatch, which is the
+                  namespace the pool's broker syncs.
                 type: string
               image:
                 description: Image is the containerDisk image to boot from.

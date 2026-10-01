@@ -7,8 +7,8 @@ package v1alpha1
 //
 // VPCSpec is the desired state of a VPC (an isolation domain / overlay network).
 type VPCSpecApplyConfiguration struct {
-	// VNI optionally pins the VXLAN network identifier. When nil or 0, the VNI is
-	// allocated by the central cluster from the global VNI space.
+	// VNI optionally pins the Geneve virtual network identifier. When nil or 0, the VNI is
+	// allocated by the dispatch from the global VNI space.
 	VNI *int32 `json:"vni,omitempty"`
 	// DefaultPolicy sets what happens to traffic no firewall rule matches. Allow: it passes (rules
 	// carve out denies). Deny: it drops, in every direction (rules carve out allows). Unset keeps

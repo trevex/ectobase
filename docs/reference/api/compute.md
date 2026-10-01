@@ -12,9 +12,7 @@ and consumed as CRDs by the mesh control plane.
 
 ### Resource Types
 - [Container](#container)
-- [ContainerList](#containerlist)
 - [VirtualMachine](#virtualmachine)
-- [VirtualMachineList](#virtualmachinelist)
 
 
 
@@ -43,9 +41,6 @@ _Appears in:_
 Container is a schedulable container workload on the ectobase overlay.
 
 
-
-_Appears in:_
-- [ContainerList](#containerlist)
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
@@ -178,9 +173,6 @@ VirtualMachine is the placement anchor for a workload.
 
 
 
-_Appears in:_
-- [VirtualMachineList](#virtualmachinelist)
-
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `apiVersion` _string_ | `compute.ectobase.dev/v1alpha1` | | |
@@ -233,7 +225,7 @@ _Appears in:_
 | `image` _string_ | Image is the containerDisk image the VM boots from (e.g. quay.io/containerdisks/fedora:41). |  | Optional: \{\} <br /> |
 | `runStrategy` _string_ | RunStrategy is the KubeVirt run strategy (Always, RerunOnFailure, Manual, Halted).<br />Empty defaults to RerunOnFailure (Tier-1 local restart on node death). |  | Optional: \{\} <br /> |
 | `poolSelector` _[LabelSelector](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30/#labelselector-v1-meta)_ | PoolSelector, if set, restricts scheduling to ClusterPools whose labels match. |  | Optional: \{\} <br /> |
-| `antiAffinity` _[VMAntiAffinity](#vmantiaffinity)_ | AntiAffinity, if set, spreads VMs sharing a Group across ClusterPools during<br />scheduling and failover (best-effort: availability wins if no non-violating pool). |  | Optional: \{\} <br /> |
+| `antiAffinity` _[VMAntiAffinity](#vmantiaffinity)_ | AntiAffinity, if set, spreads VMs sharing a Group across ClusterPools when failover<br />re-places them (best-effort: availability wins if no non-violating pool). The initial<br />scheduler does not consult it yet. |  | Optional: \{\} <br /> |
 | `cloudInit` _[CloudInit](#cloudinit)_ | CloudInit, if set, provides guest bootstrap (users, SSH keys, packages) delivered to<br />the VM as a cloud-init NoCloud datasource. Required to log in to a stock cloud image. |  | Optional: \{\} <br /> |
 
 
@@ -252,6 +244,6 @@ _Appears in:_
 | --- | --- | --- | --- |
 | `phase` _string_ | Phase is the current lifecycle phase of the VirtualMachine. |  |  |
 | `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30/#condition-v1-meta) array_ | Conditions capture scheduling/failover observations (Scheduled, Unschedulable, FailoverBlocked). |  | Optional: \{\} <br /> |
-| `placement` _[VMPlacement](#vmplacement)_ | Placement is the VM's actual running location. The pool's broker reports it onto the<br />matching CompiledVM's status — its RBAC is scoped to its own pool namespace — and a mesh<br />controller mirrors it here. Central uses NodePrefix as the fence coordinate and to gate<br />recovery drain. |  | Optional: \{\} <br /> |
+| `placement` _[VMPlacement](#vmplacement)_ | Placement is the VM's actual running location. The pool's broker reports it onto the<br />matching CompiledVM's status — its RBAC is scoped to its own pool namespace — and a mesh<br />controller mirrors it here. The dispatch uses NodePrefix as the fence coordinate and to gate<br />recovery drain. |  | Optional: \{\} <br /> |
 
 

@@ -1,162 +1,120 @@
 # VPC peering
 
-VPC peering lets guests in two different VPCs — two overlay networks, each identified by a VNI —
-reach each other. It is a pure control-plane feature: no eBPF / `flowplane-core`
-datapath change and no route-bus protocol change. Peering generalizes the same
-route-import primitive the [North-South WAN edge](./ns-edge.md) already uses for public egress —
-"subscribe to VNI X, install its allow-listed prefixes into my table with X's nexthop" — from
-the single well-known public VNI (0) to arbitrary peer VNIs.
+VPC peering lets workloads in two VPCs reach each other. Each side states which of its own address
+ranges it exposes, both sides must consent, and the result is reachability only: the destination's
+[firewall](firewall.md) still has to admit the traffic. Peering is control-plane bookkeeping; the
+datapath forwards an imported route exactly like a native one.
 
-Two properties define the feature:
+## The API: a pair of VPCPeering objects
 
-- Reachability is imported, not tunnelled differently. The local agent installs the peer VPC's
-  overlay routes into the local VPC's route table, keyed by the local VNI. The route itself carries
-  the delivery VNI — the *sender* stamps it into the Geneve tunnel header from the matched route's
-  `nexthop_vni`, so an imported route that names the peer's VNI and the peer's node VTEP is
-  delivered exactly like native peer-VPC traffic.
-- Security is orthogonal. Peering grants reachability only. The deny-by-default ingress
-  [firewall](./firewall.md) still drops cross-VPC traffic until a `FirewallPolicy` explicitly
-  allows the peer's CIDRs. Reachability without policy means no connectivity — a deliberate
-  two-step, mirroring how LB membership never generates firewall rules.
+A `VPCPeering` is one direction of a peering. A reciprocal pair, `A→B` in A's namespace and `B→A` in
+B's, forms an active peering.
 
-## Why no datapath change
+| Field | Meaning |
+|---|---|
+| `spec.vpcRef` | This side's VPC, in the same namespace as the object. |
+| `spec.peerVpcRef` | The other VPC, by `namespace` and `name`. It may be in another namespace. |
+| `spec.exposedPrefixes` | CIDRs this side offers to the peer. Only local routes inside them become reachable. Empty exposes nothing. |
+| `status.state` | `Pending` (no reciprocal yet), `Ready` (reciprocal present) or `Invalid`. |
 
-Routes in a VNI table are looked up keyed by `(vni, dst)` (`flowplane-core/src/egress.rs`
-`route4`/`route6`). A route under VNI-B is invisible to a lookup under VNI-A — that is the
-tenant-isolation invariant. The delivery VNI rides the Geneve tunnel header, and the sender stamps
-it from the matched route's `nexthop_vni` (`flowplane-core/src/encap.rs`, `tunnel_encap`) — which
-for an import is set to the peer's origin VNI (`mesh/agent/bus.go`, `applyPeer`). So importing
-VNI-B's routes into VNI-A's table with VNI-B's node VTEP as the nexthop *and VNI-B as the delivery
-VNI* makes them resolvable and deliverable with no kernel change: the receiving node demuxes
-`INTERFACES[(VNI-B, dst)]` exactly as it does for native VNI-B traffic. Peering is entirely a
-question of which routes land in which VNI table, which is control-plane bookkeeping.
-
-## Mutual consent
-
-Peering is expressed as one-directional `VPCPeering` objects; a pair (`A→B` plus `B→A`)
-forms a peering. Each object declares its own side:
-
-```go
-type VPCPeeringSpec struct {
-    // VPCRef is this side's VPC (same namespace).
-    VPCRef LocalObjectReference `json:"vpcRef"`
-    // PeerVPCRef references the other VPC (may be another tenant namespace — peering is
-    // dispatch-authored).
-    PeerVPCRef VPCReference `json:"peerVpcRef"`
-    // ExposedPrefixes is the CIDR allow-list THIS side offers to the peer. Only local routes
-    // within these CIDRs become reachable to the peer VPC. Empty = expose nothing (fail-closed).
-    // Reachability scope only — never a firewall grant.
-    ExposedPrefixes []string `json:"exposedPrefixes,omitempty"`
-}
+```yaml
+apiVersion: net.ectobase.dev/v1alpha1
+kind: VPCPeering
+metadata: {name: blue-to-green, namespace: tenant-a}
+spec:
+  vpcRef: {name: blue}
+  peerVpcRef: {namespace: tenant-b, name: green}
+  exposedPrefixes: [10.0.10.0/24]
+---
+apiVersion: net.ectobase.dev/v1alpha1
+kind: VPCPeering
+metadata: {name: green-to-blue, namespace: tenant-b}
+spec:
+  vpcRef: {name: green}
+  peerVpcRef: {namespace: tenant-a, name: blue}
+  exposedPrefixes: [10.0.20.0/24]
 ```
 
-- Mutual consent: `A→B` becomes `Ready` only when the reciprocal `B→A` also exists (and is
-  itself consistent). Either side deleting its object tears the peering down and withdraws the
-  imported routes.
-- `exposedPrefixes` is per-side and fail-closed: an empty list exposes nothing. It scopes
-  reachability, route-table size, and topology visibility — it is never a firewall grant.
-- Cross-namespace `peerVpcRef` is allowed: the dispatch is authoritative and sees all
-  tenants.
+A peering is `Invalid` when it names its own VPC or an `exposedPrefixes` entry is not a CIDR. The
+schema is in the API reference: [`VPCPeering`](../reference/api/net.md#vpcpeering).
 
-## The pipeline
+## How a peering becomes routes
+
+The peering controller decides consent, the compiler turns consent into import directives on each
+interface, and the agents act on those directives over the route bus.
 
 ```mermaid
 flowchart TD
-    A[VPCPeering A→B<br/>exposedPrefixes] --> C
-    B[VPCPeering B→A<br/>exposedPrefixes] --> C
-    C{both Ready?<br/>mutual consent} -->|yes| D[VPCPeering controller:<br/>resolvePeerImports]
-    D --> E[stamp PeerImports into<br/>every CompiledNIC of each VPC]
-    E --> F[node agent:<br/>subscribe peerVNI on route bus]
-    F --> G[import peer routes into<br/>local VNI table, filtered by<br/>importPrefixes, local precedence]
-    G --> H[datapath UNCHANGED:<br/>route4/route6 now hits the import]
+    ab["VPCPeering A→B<br/>exposedPrefixes"] --> rec["VPCPeeringReconciler:<br/>reciprocal exists? → Ready"]
+    ba["VPCPeering B→A<br/>exposedPrefixes"] --> rec
+    rec --> comp["compiler: for each Ready peering,<br/>CompiledNIC.spec.peerImports =<br/>{peerVni, importPrefixes = peer's exposedPrefixes}"]
+    comp -->|broker| agent["agent on each node hosting<br/>a NIC of A (or B)"]
+    agent -->|"subscribe to the peer VNI"| bus["route bus"]
+    bus -->|"peer host routes"| filter["keep routes inside importPrefixes;<br/>a local route for the same prefix wins"]
+    filter -->|"AddRoute(local VNI, prefix,<br/>peer VTEP, delivery VNI = peer VNI)"| dp["ROUTES / ROUTES6"]
 ```
 
-### Dispatch: `VPCPeering` → `CompiledNIC.PeerImports`
+1. Consent. `VPCPeeringReconciler` marks a peering `Ready` when the reciprocal object exists (same
+   VPC pair, reversed), else `Pending`. It re-evaluates the counterpart whenever either side
+   changes, so the pair converges together.
+2. Compile. For every `Ready` peering, the compiler adds a `CompiledPeerImport` to each
+   `CompiledNIC` of the local VPC: the peer's VNI and, as `importPrefixes`, the reciprocal object's
+   `exposedPrefixes`. In other words, what B exposes is enforced on A's side, when A imports.
+3. Import. The agent unions the imports of its local interfaces per local VNI and subscribes to each
+   peer VNI. For every route it learns on a peer VNI that falls inside `importPrefixes`, it programs
+   the route into the local VNI's table with the peer node's VTEP as nexthop and the peer's VNI as
+   the delivery VNI.
 
-The `CompiledNICReconciler` (`mesh/controllers/compilednic.go`) resolves peerings and stamps a
-directive onto every `CompiledNIC` of each side's VPC — mirroring how `CompiledLB` rides on
-`CompiledNIC`. `resolvePeerImports` walks all `VPCPeering`s and, for each `Ready` one, resolves the
-peer VNI and the reciprocal side's `exposedPrefixes` (what the peer exposes to us):
+The overlap rule is local precedence. A route learned on the local VNI always wins over an import
+for the same prefix, and the longest-prefix match decides between different prefix lengths.
+Overlapping address ranges between peers are allowed.
 
-```go
-// A Ready peering P (VPCRef=local, PeerVPCRef=peer) contributes an import of the PEER's VNI,
-// filtered by what the PEER exposes to us — the reciprocal peering (peer→local) ExposedPrefixes.
-recip := exposed[k{p.Spec.PeerVPCRef.Namespace, p.Spec.PeerVPCRef.Name, p.Spec.VPCRef.Name}]
-out = append(out, PeerImportSpec{
-    VPCName:        p.Spec.VPCRef.Name,
-    PeerVNI:        peerVNI,
-    ImportPrefixes: recip,
-})
-```
+## Why the datapath needs no change
 
-`Compile()` then emits the matching entries onto each NIC:
+A route lookup is keyed by `(VNI, destination)`, so a route under VNI B is invisible to a lookup
+under VNI A. Peering places B's route in A's table and records B's VNI in the route's `nexthop_vni`.
+The sender stamps that VNI into the Geneve tunnel key, and the receiving node demultiplexes
+`INTERFACES[(VNI B, dst)]` exactly as it does for native B traffic. The only datapath feature
+peering relies on is the `delivery_vni` field of `AddRoute`, which every route already has.
 
-```go
-type CompiledPeerImport struct {
-    // PeerVNI is the peer VPC's VNI to subscribe to on the route bus.
-    PeerVNI int32 `json:"peerVni"`
-    // ImportPrefixes is the PEER's exposedPrefixes: only peer routes within these CIDRs are
-    // imported (filter applied importer-side).
-    ImportPrefixes []string `json:"importPrefixes"`
-}
-```
+## Revocation
 
-The reconciler watches `VPCPeering` and re-enqueues both sides' NICs when a peering (or its
-reciprocal) changes (`nicsForPeering`), so a consent race converges when the second object appears.
+Deleting either `VPCPeering` revokes the peering for both sides:
 
-`exposedPrefixes` is enforced importer-side. Each side's exposed list is carried by the dispatch
-into the peer's `CompiledNIC`, and the peer's agent drops any imported route outside that list.
-This needs zero route-bus protocol change; the dispatch is the trust anchor regardless.
-Overlap between peer ranges is permitted — there is no overlap rejection; overlaps are resolved
-at the agent by local precedence.
+1. The surviving object's reciprocal is gone, so the reconciler moves it back to `Pending`.
+2. The compiler only emits imports for `Ready` peerings, so it drops the `peerImports` entry from
+   every affected `CompiledNIC`.
+3. On its next reconcile, each agent withdraws every route it imported from the peer VNI and drops
+   the subscription. It forgets the routes it had learned on that VNI once the VNI has been missing
+   from its subscriptions for three reconciles in a row, so a single transient read does not churn
+   them.
 
-### Node agent: subscribe, import, precedence
+The datapath looks up a route for every packet, so cross-VPC traffic stops once the import is
+withdrawn, including on established connections. Changing `exposedPrefixes` narrows or widens the
+imports the same way.
 
-The agent (`mesh/agent/importreconcile.go`, `desiredPeeringImports`) scans the `CompiledNIC`s
-scheduled to its node, unions their `PeerImports` per local VNI (deduped by peer VNI, prefixes
-unioned deterministically), and:
+## Limits
 
-1. Subscribes to each peer VNI on the route bus (alongside local VNIs and the public VNI).
-2. Imports each learned peer route `(prefix, nexthop)` into the local VNI's route table —
-   `AddRoute(localVNI, prefix, nexthop)` — iff the prefix is within `importPrefixes`.
-3. Honours local precedence (the overlap rule): every route is tagged by origin —
-   own (a locally-hosted guest, or a route learned on the local VNI) vs imported (learned on a
-   peer VNI). An imported route never overwrites an own route for the same prefix; when an own
-   route appears for a prefix currently held by an import, the own route evicts the import; LPM
-   longest-prefix specificity handles different-length prefixes naturally, so only exact-key
-   collisions need the origin tie-break.
-4. Withdraws / prunes on peer-route withdraw or when a `PeerImport` is removed (unsubscribe +
-   withdraw its imported routes).
+- No transitive peering. `A↔B` and `B↔C` do not make `A↔C` reachable; imported routes are never
+  re-exported.
+- No firewall coupling. Under `defaultPolicy: Deny`, or in a direction a policy governs, cross-VPC
+  traffic also needs a `FirewallPolicy` on the destination that allows the peer's CIDR. A peering
+  without that policy shows `Ready` and carries no traffic.
+- Routed only. MACs are unique per VPC, not fleet-wide, and delivery resolves on `(VNI, overlay
+  IP)`, so there is no shared L2 across a peering.
+- `Ready` means the reciprocal object exists; it does not check that the reciprocal is itself valid.
+- Known issue: two peered workloads on the same node cannot reach each other. The agent builds
+  imports only from routes it learned from the bus, and the reflector never sends a node its own
+  announcements back, so a peer address hosted on the same node is never imported. Peered
+  workloads on different nodes are unaffected.
+- The live test (`TestVPCPeering`) proves that reachability and permission are separate steps (a
+  cross-VPC ping fails while a deny-all policy governs the destination's ingress and succeeds once a
+  policy allows the peer's CIDR) and local precedence. Revocation is covered by unit tests of the
+  controller and the agent, not by a live test.
 
-## End-to-end flow
+## Where to go next
 
-1. An operator (or the dispatch) creates `VPCPeering A→B` and `B→A`, each with its
-   `exposedPrefixes`.
-2. The dispatch controller marks both `Ready` and stamps `PeerImports` into every `CompiledNIC`
-   of A and B; the sync pipeline pushes the updated CompiledNICs to nodes.
-3. VPC-B's agent subscribes to VNI-A and imports A's exposed prefixes into VNI-B's route table
-   (local precedence honoured).
-4. Datapath (unchanged): a VPC-B guest sends to an exposed A-address → `route4(vni_B, dst)`
-   now hits the imported route → Geneve tunnel key `{vni = VNI-A, remote = A's node VTEP}` →
-   A's node demuxes `INTERFACES[(VNI-A, dst)]` → delivers to the A guest.
-5. Return is symmetric (A imports B's exposed prefixes) — but the destination NIC's
-   deny-by-default ingress firewall drops it until a `FirewallPolicy` allows the peer's CIDR.
-
-## Scope
-
-- No eBPF change and no route-bus protocol change. Peering is control-plane bookkeeping plus the
-  `AddRoute` RPC's existing `delivery_vni` field (landing in `RouteValue.nexthop_vni`); no
-  forwarding logic was added.
-- No firewall coupling. Peering never grants firewall permission; `FirewallPolicy` is the sole
-  security gate.
-- No overlap rejection. Overlapping guest ranges are allowed; own-VNI routes win.
-- No transitive peering. `A↔B` and `B↔C` do not make `A↔C` reachable; each peering is an
-  explicit mutual pair, and peer-of-peer routes are not re-exported.
-- No aggregate-CIDR advertising change. The route bus keeps advertising per-guest host routes;
-  `exposedPrefixes` filters them importer-side.
-- No L2 across the peering. MACs are allocated unique per VPC, not fleet-wide; peering is routed
-  (delivery resolves on `(VNI, overlay IP)` and the receiving node rewrites the inner Ethernet), so
-  a duplicate MAC in a peer VPC is never observable.
-
-The forgotten-`FirewallPolicy` footgun (reachability without policy = silent no-connectivity) is
-deliberate; `VPCPeering` status surfaces that policy is still required.
+- [Firewall and peering](../guides/firewall-and-peering.md)
+- [Routing and VNIs](routing-vni.md)
+- [Firewall](firewall.md)
+- [The route bus](../architecture/route-bus.md)

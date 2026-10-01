@@ -241,8 +241,8 @@ spec:
                   single VTEP, shared by every interface on that node.
                 type: string
               vni:
-                description: VNI is the effective VXLAN network identifier resolved
-                  from the VPC.
+                description: VNI is the effective Geneve virtual network identifier
+                  resolved from the VPC.
                 format: int32
                 type: integer
             type: object

@@ -1,102 +1,63 @@
 # Contributing
 
-This page is the map: where things live, how the toolchain works, and how a change
-flows from a type edit through generated artifacts, charts, docs, and tests. For the
-detailed command-by-command workflow see [Dev environment & workflows](development.md);
-for the docs conventions see [Writing docs](documentation.md).
+This section is for people changing ectobase itself. This page gives the map: how the repository
+is organised, the toolchain, and the path a change takes from an edit through generated
+artifacts, charts, docs and tests. The pages after it go into each step.
 
-## Where things live
+## The repository
 
-ectobase is a single repository holding the Rust dataplane, the Go control planes, the
-CNI plugin, the CRD API, the Helm charts, and the lab/test harnesses.
+ectobase is one repository: the Rust dataplane (`flowplane/`), the Go control planes (`mesh/`
+and `dispatch/`), the CNI plugin (`cni/`), the API types (`api/`), the Helm charts (`charts/`),
+the test harnesses (`test/`) and this site (`docs/`).
+[Repository layout](repository-layout.md) goes through it crate by crate and module by module.
 
-| Path | What |
-|---|---|
-| `api/` | The Kubernetes CRD types, split into five API groups — `net`, `compute`, `storage`, `compiled`, `platform` (each under `api/<group>/v1alpha1/`) — plus the gRPC/protobuf contracts (`api/proto/dataplane/v1/`, `api/proto/routebus/v1/`) and the generated conversions. |
-| `mesh/` | The per-pool Go control plane: `cmd/agent`, `cmd/reflector`, `cmd/controller`, the pod/VM materializers, the `routebus` client/server, and the reconcile/desired-state logic. |
-| `cni/` | The CNI plugin (`cni/plugin/main.go`) that attaches pods via the `DataplaneNode` gRPC. |
-| `dispatch/` | The fleet control plane: the extension `apiserver`, the `controller` (compiler), and the `broker` (per-pool kubelet-analog) under `cmd/`, plus the generated client. |
-| `flowplane/` | The Rust workspace: the eBPF dataplane, its userspace loader/agent/CLI, the pure-core datapath library, the shared map types, and the in-process simulator. |
-| `charts/` | The Helm charts — `ectobase-dispatch` and `ectobase-pool` — with generated CRDs and RBAC. |
-| `test/` | Test harnesses: the Go e2e suite (`test/e2e/`), the CRD bases for envtest (`test/crds/`), test container images (`test/images/`), and the `test/lab/` Talos + containerlab live lab. `test/e2e/` and `test/lab/` are each a separate Go module, outside the default `go test ./...` matrix. |
-| `docs/` | This mkdocs-material site (plus the design-spec/plan archive under `docs/superpowers/`). |
+## The toolchain
 
-See [Repository layout & crates](../architecture/layout.md) for the crate-level breakdown
-of `flowplane/` and the `mesh`/`dispatch` module split.
-
-## The toolchain: Nix devShell + `make`
-
-Everything a contributor needs is pinned by the Nix flake. Enter it once, then drive
-everything through `make`:
+Everything is pinned by the Nix flake and driven by `make`:
 
 ```sh
-nix develop     # enter the dev shell (all targets assume you are inside it)
-make            # list every annotated make target
+nix develop     # enter the devShell
+make            # list every target
 ```
 
-The dev shell provides the pinned Rust toolchain, Go, `bpf-linker`, `protobuf`, `bpftool`,
-`qemu`, `talosctl`/`containerlab`/`helm`, `controller-gen` + `crd-ref-docs`, and
-`mkdocs`+`mkdocs-material`. It exports `KUBEBUILDER_ASSETS` so controller-runtime
-envtest integration tests can spin a real in-process apiserver under `go test`.
-
-Key targets (the full annotated list prints from a bare `make`):
-
-| Command | Runs |
-|---|---|
-| `make build` | Build `flowplane` (host crates + the eBPF object via aya-build). |
-| `make generate` | Regenerate deepcopy/conversion + CRD manifests + RBAC + the CRD API reference. |
-| `make test` / `make sim` | Host unit + POD-layout tests / the in-process datapath sim. |
-| `make lint` / `make fmt` / `make check` | Clippy / format / the pre-commit gate. |
-| `make sim-anchor` / `make verifier` / `make e2e` / `make ha` | The privileged (sudo) datapath tests. |
-| `make lab-up` / `make lab-test` / `make lab-down` | Bring up / test / tear down the live Talos + containerlab fabric. |
-| `make docs` / `make docs-serve` | Build (`mkdocs build --strict`) / live-serve this site. |
-
-## The test tiers
-
-Each concern is asserted at the cheapest level that can observe it (see
-[Testing strategy](../testing/strategy.md) for the full rationale):
-
-- Unit (`make test`) — `flowplane-core` logic and `#[repr(C)]` POD layouts. No root.
-- Sim (`make sim`) — byte-level datapath behaviour over the native simulator, plus
-  whole flows across a `Fabric`. No root, no clab.
-- envtest (`go test` in the devShell) — controllers/compilers against a real
-  in-process apiserver via `KUBEBUILDER_ASSETS`.
-- Live lab (`make lab-test`) — the Go live suite (`test/lab/livetest/`, a separate
-  module) against the Talos + containerlab fabric, for behaviours that only appear under
-  sustained kernel forwarding on a real multi-node substrate: zero-drop restart, the kernel
-  Geneve `collect_md` round trip no `BPF_PROG_TEST_RUN` anchor can drive, the real netkit /
-  veth / VM-tap attach paths, and the multi-cluster control plane end to end. Sudo.
+The devShell brings the pinned Rust nightly, Go, `bpf-linker`, the code generators, containerlab
+and Talos tooling, and `zensical` for the docs. [Development](development.md) covers the shell,
+every target and which ones need root.
 
 ## How a change flows
 
-A change that touches the API or behaviour moves through the same pipeline every time:
+A change to the API or to behaviour goes through the same steps every time:
 
 ```mermaid
 flowchart LR
-    edit["edit types<br/>(api/&lt;group&gt;/v1alpha1)<br/>or reconciler / datapath"]
-    gen["make generate<br/>(deepcopy + conversions +<br/>CRDs + RBAC + CRD API ref)"]
-    charts["update charts/<br/>+ helm-unittest"]
-    docs["update docs/<br/>(behaviour / architecture / API)"]
-    test["make sim / go test /<br/>make lab-test"]
-    edit --> gen --> charts --> docs --> test
+    edit["edit types, reconcilers<br/>or datapath"]
+    gen["make generate"]
+    charts["charts and<br/>make chart-test"]
+    docs["docs"]
+    test["tests at the right tier"]
+    done["make ci, plus<br/>make verifier for eBPF"]
+    edit --> gen --> charts --> docs --> test --> done
 ```
 
-1. Edit the types under `api/<group>/v1alpha1/` (or the reconciler / datapath code).
-2. Run `make generate`. This regenerates deepcopy + conversion functions, the CRD
-   manifests (into the pool chart's `crd-bases` and `test/crds`), the per-component RBAC
-   roles (into each chart's `files/`), and the per-group CRD API reference under
-   `docs/reference/api/`. Never hand-edit those generated artifacts.
-3. Update the charts (`charts/ectobase-dispatch`, `charts/ectobase-pool`) if the change adds
-   a component, permission, or value; keep the `helm-unittest` suites and snapshots current.
-4. Update the docs — the published pages are the living source of truth. Any change to
-   behaviour, architecture, or the API updates the relevant page in the same commit
-   (see [Writing docs](documentation.md)).
-5. Test at the right tier — sim for datapath byte behaviour, envtest for controllers,
-   the live lab for end-to-end forwarding.
+1. Edit the types under `api/<group>/v1alpha1/`, a reconciler, or the datapath.
+2. Run `make generate`. It regenerates deepcopy and conversion code, the typed client, the CRDs,
+   each component's RBAC and the API reference. Never edit those outputs by hand
+   ([Generated artifacts](../reference/generated-artifacts.md)).
+3. If the change adds a component, a permission or a value, update the charts and their
+   `helm-unittest` suites.
+4. Update the docs in the same change. A behaviour, architecture or API change updates the page
+   that describes it, and its status badge if the maturity moved
+   ([Writing docs](documentation.md)).
+5. Test at the cheapest tier that can see the property: the sim for datapath bytes, envtest for
+   controllers, the lab for end-to-end forwarding ([Testing strategy](testing/strategy.md)).
+6. Run `make ci` before you push. A change to the eBPF datapath is not done until
+   `make verifier` passes too, because nothing else loads the programs into a real kernel. A
+   change to the dataplane's gRPC API also needs the live tests compiled with
+   `go vet -tags live ./livetest/` in `test/lab`, since no gate builds them.
 
-## See also
+## Where to go next
 
-- [Dev environment & workflows](development.md) — the detailed command reference and pre-commit hooks.
-- [Writing docs](documentation.md) — the mkdocs/mermaid/status-badge conventions.
-- [Repository layout & crates](../architecture/layout.md) — the module and crate breakdown.
-- [The CRD API](../reference/crd-interactions.md) — how the five API groups relate.
+- [Development](development.md): the devShell, the `make` targets and the lab loop.
+- [Repository layout](repository-layout.md): where each part of the code lives.
+- [Testing strategy](testing/strategy.md): the test tiers and what each proves.
+- [Writing docs](documentation.md): how this site is built and written.
