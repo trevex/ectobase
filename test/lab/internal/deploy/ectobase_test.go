@@ -221,3 +221,22 @@ func TestMigrateRecreateDeployments(t *testing.T) {
 		t.Errorf("fresh install was patched:\n%v", fresh.calls)
 	}
 }
+
+// The pool chart no longer mints broker-dispatch-tls from the pool intermediate; the broker writes
+// it from the dispatch signer's answer. On an existing lab the old Certificate must be gone before
+// the broker enrolls, or cert-manager re-mints the Secret over what the broker wrote.
+func TestRetireBrokerCertificate(t *testing.T) {
+	r := &fakeRunner{}
+	if err := retireBrokerCertificate(context.Background(), r, "/kc"); err != nil {
+		t.Fatalf("retireBrokerCertificate: %v", err)
+	}
+	call := r.findCall("kubectl", "delete", "certificates.cert-manager.io", "broker-dispatch-tls")
+	if call == nil {
+		t.Fatalf("the old Certificate was not deleted:\n%v", r.calls)
+	}
+	for _, want := range [][]string{{"--kubeconfig", "/kc"}, {"-n", "ectobase-system"}, {"--ignore-not-found"}} {
+		if !containsSubseq(call, want) {
+			t.Errorf("delete argv missing %v:\n%v", want, call)
+		}
+	}
+}

@@ -198,10 +198,15 @@ func installPool(ctx context.Context, s EctobaseSpec, c ComputeCluster) error {
 	// The fresh-pool enrollment Secrets must exist before the chart's broker
 	// pod starts too: the pre-provisioned dispatch root CA (so the broker can verify the
 	// dispatch server) and a short-lived bootstrap-token kubeconfig (a narrow,
-	// routebusidentities-only credential the broker uses for its first-boot RouteBusIdentity
-	// CSR — cert-manager mints the steady-state mTLS leaf after that). Both are sourced from
-	// the dispatch chart's `system` namespace: the ectobase-ca Secret (root cert) and the
-	// dispatch-broker-bootstrap ServiceAccount (token source).
+	// routebusidentities-only credential the broker enrolls with: it files a client CSR on its
+	// RouteBusIdentity and the dispatch signer answers from the dispatch client CA). Both are
+	// sourced from the dispatch chart's `system` namespace: the ectobase-ca Secret (root cert)
+	// and the dispatch-broker-bootstrap ServiceAccount (token source).
+	//
+	// Both are rewritten on every deploy, the token freshly minted. That is what re-enrolls an
+	// existing pool: a broker whose certificate the dispatch no longer accepts (the cutover to the
+	// dispatch client CA, or a reinstalled dispatch with a new one) enrolls again with this token,
+	// at its next start or within a minute while it runs.
 	if s.RouteBusMTLS {
 		rootCAB64, rootCAPEM, err := dispatchRootCA(ctx, s.DispatchKubeconfig)
 		if err != nil {
@@ -234,6 +239,9 @@ func installPool(ctx context.Context, s EctobaseSpec, c ComputeCluster) error {
 	if s.RouteBusMTLS {
 		if err := CertManager(ctx, nil, c.Kubeconfig, ""); err != nil {
 			return fmt.Errorf("cluster %s: cert-manager: %w", c.Name, err)
+		}
+		if err := retireBrokerCertificate(ctx, nil, c.Kubeconfig); err != nil {
+			return fmt.Errorf("cluster %s: %w", c.Name, err)
 		}
 	}
 	if err := helmInstallPool(ctx, c.Kubeconfig, c.Name, s.PoolChartPath, s.DispatchIdentity, s.UnderlayWithin, s.RouteBusMTLS, c.UnderlayCIDRs, s.ImageRegistry); err != nil {
@@ -543,13 +551,27 @@ func helmInstallPool(ctx context.Context, kubeconfig, clusterName, chartPath, di
 			"--set", "pki.underlayCIDRs="+underlayCIDRs,
 			"--set", "dispatchServer=https://["+dispatchIdentity+"]:6444",
 		)
-		// mTLS adds a serial startup chain to agent readiness (broker CSR -> dispatch signer ->
-		// intermediate Secret -> pool Issuer ready -> cert-manager mints the node leaf -> agent
-		// connects), so --wait needs more headroom than the plaintext path.
+		// mTLS adds a serial startup chain to agent readiness (broker enrolls with the token ->
+		// broker intermediate CSR -> dispatch signer -> intermediate Secret -> pool Issuer ready ->
+		// cert-manager mints the node leaf -> agent connects), so --wait needs more headroom than
+		// the plaintext path.
 		timeout = "12m"
 	}
 	args = append(args, "--wait", "--timeout", timeout)
 	return exec.Run(ctx, "helm", args...)
+}
+
+// retireBrokerCertificate deletes the cert-manager Certificate the pool chart used to mint the
+// broker's dispatch client certificate from (broker-dispatch-tls, issued by the pool intermediate).
+// The chart no longer renders it, but helm removes it only after the new broker may already have
+// written its dispatch-issued certificate into the same Secret, and cert-manager would re-mint over
+// that. A no-op once it is gone.
+func retireBrokerCertificate(ctx context.Context, r Runner, kubeconfig string) error {
+	if err := runnerOf(r).Run(ctx, "kubectl", "--kubeconfig", kubeconfig, "-n", "ectobase-system",
+		"delete", "certificates.cert-manager.io", "broker-dispatch-tls", "--ignore-not-found"); err != nil {
+		return fmt.Errorf("delete the old broker-dispatch-tls Certificate: %w", err)
+	}
+	return nil
 }
 
 // waitPoolsReady blocks until every compute pool reports status.phase == Ready
@@ -712,8 +734,10 @@ kind: ClusterRole
 metadata:
   name: dispatch-broker-pool-%[1]s
 rules:
-  # The broker files its CSR into spec.request. Its status is the signer's alone: the broker only
-  # reads it (a plain get returns it) and accepts a certificate there only if it matches its key.
+  # The broker files its CSRs into spec.request (its route-bus intermediate) and spec.clientRequest
+  # (its dispatch client certificate), first with the bootstrap token, then with that certificate.
+  # Its status is the signer's alone: the broker only reads it (a plain get returns it) and accepts
+  # a certificate there only if it matches its key.
   - apiGroups: ["platform.ectobase.dev"]
     resources: ["routebusidentities"]
     resourceNames: ["%[1]s"]
