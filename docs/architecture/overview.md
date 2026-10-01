@@ -293,10 +293,11 @@ A few links are not authenticated the same way. Know them before you run this ou
 - The agent's kubeconfig for its own pool apiserver sets `insecure-skip-tls-verify`, because the
   apiserver's serving cert has no SAN for the fabric address it is dialled on. The agent still
   authenticates with its ServiceAccount token.
-- Nothing revokes a route-bus intermediate. The reflector trusts the root, so an intermediate
-  stays valid until it expires (90 days), including one signed before its pool's constraint was
-  narrowed. The signer re-signs and the broker adopts the new one, but a compromised pool keeps
-  the old one. Rotating the root is the only way to cut it off sooner.
+- Nothing revokes a route-bus intermediate. The reflector refuses one with no IP constraint at
+  all, but an intermediate signed with a wider constraint than its pool's current
+  `spec.underlayPrefix` stays valid until it expires (90 days). The signer re-signs and the broker
+  adopts the new one, but a compromised pool keeps the old one. Rotating the root is the only way
+  to cut it off sooner.
 - flowplane's gRPC socket has no authentication. It is a `0600` unix socket on the node, so only
   root on that node can reach it, and the CNI and the agent both run as root.
 

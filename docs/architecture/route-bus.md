@@ -205,8 +205,27 @@ operator, never from the pool:
 
 The signer re-signs whenever the constraint on the current certificate differs from the one it
 would issue now, and the broker copies a re-signed intermediate for its current key into the pool's
-Secret at its next check (when it starts, then every 12 hours). An intermediate that was already issued stays valid until
-it expires (90 days), because the reflector trusts the root and nothing revokes an intermediate.
+Secret at its next check (when it starts, then every 12 hours).
+
+The reflector also refuses any client chain that passes through an intermediate with no IP name
+constraint (`mesh/routebus/tls.go`). The signer no longer issues one, but an intermediate signed
+before this rule had none when the pool chart left `pki.underlayCIDRs` empty, and it would
+otherwise stay valid for up to 90 days. A leaf the root issues directly, the dispatch-controller's,
+has no intermediate and is unaffected. An intermediate signed earlier with a *wider* constraint than
+the pool's `spec.underlayPrefix` still verifies until the pool adopts the re-signed one or it
+expires, because nothing revokes an intermediate.
+
+!!! warning "Upgrading a pool whose intermediate has no IP constraint"
+    Once the reflector runs this rule, a pool whose intermediate predates it and carries no IP
+    constraint loses its route-bus sessions: its agents' leaves chain through that intermediate.
+    They come back only once the agents present a re-signed intermediate:
+
+    1. The pool's `ClusterPool` declares `spec.underlayPrefix`, so the signer re-signs.
+    2. The broker adopts the re-signed intermediate into the pool CA Secret. It checks when it
+       starts and then every 12 hours; restart it to adopt at once.
+    3. Each agent's leaf Secret (`agent-<node>-routebus-tls`) still carries the old intermediate,
+       copied in when cert-manager issued the leaf, and the agent reads it only at start-up.
+       Reissue the leaves (`cmctl renew`, or delete those Secrets) and then restart the agents.
 
 ## Fences
 
