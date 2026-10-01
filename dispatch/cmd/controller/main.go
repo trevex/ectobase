@@ -111,7 +111,9 @@ func main() {
 		log.Fatalf("new manager: %v", err)
 	}
 
-	if err := (&clusterpool.Reconciler{Client: mgr.GetClient(), HealthStale: 30 * time.Second}).SetupWithManager(mgr); err != nil {
+	// One lease-staleness threshold for pool health and for failover's "is the pool back" check.
+	const healthStale = 30 * time.Second
+	if err := (&clusterpool.Reconciler{Client: mgr.GetClient(), HealthStale: healthStale}).SetupWithManager(mgr); err != nil {
 		log.Fatalf("setup clusterpool controller: %v", err)
 	}
 
@@ -158,7 +160,7 @@ func main() {
 		networkF, routes = nf, nf
 	}
 
-	if err := (&failover.Reconciler{Client: mgr.GetClient(), StorageFencer: storageF, NetworkFencer: networkF, Routes: routes, FailoverThreshold: 2 * time.Minute}).SetupWithManager(mgr); err != nil {
+	if err := (&failover.Reconciler{Client: mgr.GetClient(), StorageFencer: storageF, NetworkFencer: networkF, Routes: routes, FailoverThreshold: 2 * time.Minute, HealthStale: healthStale}).SetupWithManager(mgr); err != nil {
 		log.Fatalf("setup failover controller: %v", err)
 	}
 

@@ -24,7 +24,7 @@ var _ failover.PrefixFencer = (*StorageFencer)(nil)
 
 // StorageFencer is the storage half of Tier-2 fencing: it blocklists a node /64 at
 // Ceph via a csi-addons NetworkFence CR (fenceState=Fenced), confirming active via
-// status.result==Succeeded. It writes to an injected client (the Ceph-management
+// status.result==Succeeded for the fence op (see Fence). It writes to an injected client (the Ceph-management
 // cluster; the same cluster in the single-cluster lab).
 type StorageFencer struct {
 	c         client.Client
@@ -40,6 +40,11 @@ type StorageFencer struct {
 func NewStorageFencer(c client.Client, driver, clusterID string, secret client.ObjectKey) *StorageFencer {
 	return &StorageFencer{c: c, driver: driver, clusterID: clusterID, secret: secret}
 }
+
+// fenceSucceededMsg is the status.message csi-addons writes for a successful FENCE op
+// (csiaddonsv1alpha1.FenceOperationSuccessfulMessage); an unfence op writes
+// "unfencing operation successful" under the same result.
+const fenceSucceededMsg = "fencing operation successful"
 
 func fenceName(prefix string) string {
 	r := strings.NewReplacer(":", "-", "/", "--", ".", "-")
@@ -63,8 +68,17 @@ func (f *StorageFencer) obj(prefix, state string) *unstructured.Unstructured {
 	return u
 }
 
-// Fence ensures a Fenced NetworkFence exists for the /64 and returns nil ONLY when its
-// status.result == Succeeded (fail-safe: a Pending/absent-status fence returns an error).
+// Fence ensures a Fenced NetworkFence exists for the /64 and returns nil ONLY when csi-addons
+// reports the FENCE op Succeeded on it (fail-safe: a Pending/absent-status fence returns an error).
+//
+// csi-addons keeps one result per CR, overwritten by whichever op ran last, with no generation to
+// say which spec it answers; only status.message names the op. So a CR that is not Fenced — a
+// release in flight left it Unfenced, its result the unfence op's — is never flipped back in
+// place, where its old result would stand until csi-addons got round to it: Fence deletes it and
+// creates a fresh Fenced one, whose only possible Succeeded is a fence op's. csi-addons reconciles
+// one CR name at a time, so an unfence still running for the old CR finishes before the new CR's
+// fence runs, and its status write, aimed at the old object, cannot land on the new one. A CR being
+// deleted is waited out.
 func (f *StorageFencer) Fence(ctx context.Context, prefix string) error {
 	want := f.obj(prefix, "Fenced")
 	cur := &unstructured.Unstructured{}
@@ -79,9 +93,19 @@ func (f *StorageFencer) Fence(ctx context.Context, prefix string) error {
 	if err != nil {
 		return fmt.Errorf("get NetworkFence %s: %w", want.GetName(), err)
 	}
+	if !cur.GetDeletionTimestamp().IsZero() {
+		return fmt.Errorf("NetworkFence %s is being deleted; awaiting it to re-fence", want.GetName())
+	}
+	if state, _, _ := unstructured.NestedString(cur.Object, "spec", "fenceState"); state != "Fenced" {
+		if derr := f.c.Delete(ctx, cur); derr != nil && !apierrors.IsNotFound(derr) {
+			return fmt.Errorf("delete %s NetworkFence %s to re-fence: %w", state, want.GetName(), derr)
+		}
+		return fmt.Errorf("NetworkFence %s was %s; replacing it with a fresh Fenced one", want.GetName(), state)
+	}
 	result, _, _ := unstructured.NestedString(cur.Object, "status", "result")
-	if result != "Succeeded" {
-		return fmt.Errorf("NetworkFence %s not active (result=%q)", want.GetName(), result)
+	msg, _, _ := unstructured.NestedString(cur.Object, "status", "message")
+	if result != "Succeeded" || msg != fenceSucceededMsg {
+		return fmt.Errorf("NetworkFence %s not active (result=%q, message=%q)", want.GetName(), result, msg)
 	}
 	return nil
 }

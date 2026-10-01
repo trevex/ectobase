@@ -145,9 +145,12 @@ reconciler applies two fences and requires both to confirm active:
 - Storage fence (`fence.StorageFencer`). Blocklists the `/64` at Ceph via a
   [csi-addons](https://github.com/csi-addons/kubernetes-csi-addons)
   `NetworkFence` custom resource (`fenceState: Fenced`, the node's CIDR in
-  `spec.cidrs`). It returns success only when the CR reports
-  `status.result == Succeeded`; a freshly-created or still-`Pending` fence
-  returns an error, so an unconfirmed blocklist never lets a reschedule proceed.
+  `spec.cidrs`). It returns success only when the CR is `Fenced` and reports
+  `status.result == Succeeded` for the fence op; a freshly-created or
+  still-`Pending` fence returns an error, so an unconfirmed blocklist never lets a
+  reschedule proceed. A CR left `Unfenced` by a release in flight is replaced with
+  a fresh `Fenced` one rather than flipped back, since its `Succeeded` reports the
+  unfence.
   Under the hood csi-addons runs `ceph osd blocklist add` for the CIDR.
 - Network fence (`fence.NetworkFencer`). Withdraws the `/64`'s overlay routes
   from every subscriber by calling the reflector's `RouteBusAdmin.SetFence`, so
@@ -255,7 +258,8 @@ and left where it is.
 
 Fences are not permanent — leaving a Ceph blocklist entry in place would strand
 the pool's storage for its multi-year default expiry. When a fenced pool comes
-back, its broker reports, per fenced `/64`, whether that prefix's stale VMIs are
+back — `Ready`, on a lease its broker renewed within the health threshold — its
+broker reports, per fenced `/64`, whether that prefix's stale VMIs are
 gone (`Status.NodeDrain[].Drained`). The reconciler's `releaseDrained` step
 un-fences only `/64`s the broker has confirmed drained and that no longer
 announce an address placed on another pool (see below):
@@ -324,10 +328,39 @@ the pool announces. To release it:
 3. The next recheck finds nothing held and releases the fence. The condition
    turns False.
 
+If the node's kubelet is alive and the entry names a NIC whose workload moved,
+the CNI DEL that should have detached the interface was lost and flowplane still
+holds it. Stopping `mesh-agent` will not help there: the DaemonSet restarts it,
+and it announces the interface again. Detach the interface from flowplane
+instead, on that node, through the dataplane API on `127.0.0.1:1337`: find the
+interface id that `ListInterfaces` reports for the overlay IP, then detach it.
+
+```bash
+grpcurl -plaintext -import-path api/proto/dataplane/v1 -proto dataplane.proto \
+  127.0.0.1:1337 dataplane.v1.DataplaneNode/ListInterfaces
+grpcurl -plaintext -import-path api/proto/dataplane/v1 -proto dataplane.proto \
+  -d '{"interface_id": "<id>"}' 127.0.0.1:1337 dataplane.v1.DataplaneNode/DetachInterface
+```
+
+The agent's next tick withdraws the route.
+
+An entry that names a NIC on a pool whose nodes really are inside this `/64`
+(`nic … on pool <other>` where `<other>` should never share it) means two pools'
+underlay prefixes overlap. That is a misconfiguration: each pool's
+`spec.underlayPrefix` and node `/64`s must be its own. The gate cannot tell such
+a route from a stale one and holds the fence until the overlap is fixed.
+
 What the gate does not cover: a stale address placed on no other pool. That
 includes a VM deleted while its pool was lost, and a NIC whose compiled twin is
 gone or whose IPs changed after the move. Such a route is re-advertised on
 release, as before.
+
+Nothing is released while the pool is unreachable. `NodeDrain` is the broker's
+last report, and nothing clears it when the pool is lost again; a release held on
+routes can outlast that loss. A partition that also drops the pool's route-bus
+sessions empties the reflector, so the route gate would pass, and releasing then
+would reopen Ceph to nodes that are partitioned but alive while the same pass
+rebinds their VMs elsewhere.
 
 An un-drained `/64` stays fenced. This is the recovery-side fail-safe: storage
 is only reopened to a returned node once that node has proven it holds no stale

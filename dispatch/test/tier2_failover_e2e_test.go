@@ -108,8 +108,11 @@ func TestTier2_Failover_FenceRebindRelease(t *testing.T) {
 	t.Logf("fence+rebind: PASS (vm1 poolA->poolB, FencedPrefixes=%v)", fencedA.Status.FencedPrefixes)
 
 	// --- Recovery: pool returns (Ready) and its broker confirms the /64 drained. ---
+	// Back means Ready on a lease its broker just renewed: release never runs on a stale lease.
 	recovered := fencedA
 	recovered.Status.Phase = clusterpool.PhaseReady
+	renewed := metav1.NewMicroTime(time.Now())
+	recovered.Status.Lease = &platformv1.ClusterPoolLease{HolderIdentity: "brokerA", RenewTime: &renewed}
 	recovered.Status.NodeDrain = []platformv1.NodeDrainStatus{{Prefix: prefix, Drained: true}}
 	if err := c.Status().Update(ctx, recovered); err != nil {
 		t.Fatalf("status update poolA (recovery): %v", err)

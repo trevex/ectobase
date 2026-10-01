@@ -148,8 +148,12 @@ The storage half is the csi-addons `NetworkFence` mechanism. The dispatch's
 `/64`, targeting the ceph-csi RBD driver. csi-addons drives the driver's
 `NetworkFence` RPC, which runs `ceph osd blocklist range add` — after which the
 fenced node can no longer touch its RBD images. The fencer is fail-safe: it
-returns success only once the CR reports `status.result == Succeeded`; a pending
-or absent status is an error that holds the barrier.
+returns success only once the CR is `Fenced` and reports `status.result ==
+Succeeded` with the fence op's message (`fencing operation successful`); a
+pending or absent status is an error that holds the barrier. csi-addons keeps one
+result per CR, overwritten by whichever op ran last, so a CR left `Unfenced` by a
+release in flight is never flipped back in place: its `Succeeded` belongs to the
+unfence. The fencer deletes it and creates a fresh `Fenced` one instead.
 
 Release is the inverse and equally careful. Ceph removes a blocklist entry only on
 the `Fenced → Unfenced` state transition — a bare delete of a `Fenced` CR would

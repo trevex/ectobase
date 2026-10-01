@@ -21,6 +21,7 @@ import (
 	computev1 "github.com/trevex/ectobase/api/compute/v1alpha1"
 	platformv1 "github.com/trevex/ectobase/api/platform/v1alpha1"
 	"github.com/trevex/ectobase/api/validate"
+	"github.com/trevex/ectobase/dispatch/pkg/clusterpool"
 )
 
 // A fenced /64 is released once its broker reports it drained — no VMI left there. That is not the
@@ -314,15 +315,12 @@ func TestReleaseDrained_BatchesTheQuestion(t *testing.T) {
 	}
 }
 
-// Not being able to work out what to ask holds the release, like not being able to ask — but it
-// must not stop the rest of the pass: a pool lost again still has to be fenced and its VMs moved.
-func TestReleaseDrained_LookupFailureHoldsButReconcileContinues(t *testing.T) {
-	pool := lostPoolObj("A", sourceNet)
-	pool.Status.FencedPrefixes = []string{sourceNet}
-	pool.Status.NodeDrain = []platformv1.NodeDrainStatus{{Prefix: sourceNet, Drained: true}}
-	vm := vmOn("vm1", "A")
-	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(pool, readyPoolObj("B"), vm).
-		WithStatusSubresource(pool, vm).
+// Not being able to work out what to ask holds the release, like not being able to ask — as a
+// held check (rechecked soon), not a failed pass.
+func TestReleaseDrained_LookupFailureHoldsWithoutFailingThePass(t *testing.T) {
+	pool := recoveredPool()
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(pool, readyPoolObj("B")).
+		WithStatusSubresource(pool).
 		WithInterceptorFuncs(interceptor.Funcs{List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
 			if _, ok := list.(*compiledv1.CompiledNICList); ok {
 				return errors.New("compilednics unavailable")
@@ -331,7 +329,8 @@ func TestReleaseDrained_LookupFailureHoldsButReconcileContinues(t *testing.T) {
 		}}).Build()
 	nf := &releaseCountingFencer{}
 	r := &Reconciler{Client: c, StorageFencer: okFencer{}, NetworkFencer: nf, Routes: &fakeRoutes{}, FailoverThreshold: time.Minute}
-	if _, err := r.Reconcile(context.Background(), req("A")); err != nil {
+	res, err := r.Reconcile(context.Background(), req("A"))
+	if err != nil {
 		t.Fatalf("a failed lookup must hold the release, not fail the pass: %v", err)
 	}
 	got := &platformv1.ClusterPool{}
@@ -342,10 +341,52 @@ func TestReleaseDrained_LookupFailureHoldsButReconcileContinues(t *testing.T) {
 	if cond := meta.FindStatusCondition(got.Status.Conditions, ConditionFenceReleaseBlocked); cond == nil || cond.Reason != "RouteCheckFailed" {
 		t.Fatalf("want FenceReleaseBlocked/RouteCheckFailed, got %+v", cond)
 	}
-	gotVM := &computev1.VirtualMachine{}
-	_ = c.Get(context.Background(), key("vm1"), gotVM)
-	if gotVM.Spec.ClusterName != "B" {
-		t.Fatalf("the lost-pool pass must still run and rebind vm1, got %q", gotVM.Spec.ClusterName)
+	if res.RequeueAfter <= 0 || res.RequeueAfter > routeRecheck {
+		t.Fatalf("a held release must be rechecked soon, got %v", res.RequeueAfter)
+	}
+}
+
+// NodeDrain is the broker's LAST report and nothing clears it when the pool is lost. With release
+// able to wait indefinitely on routes, "fenced + Drained=true" can outlive the next loss: a
+// partition that also drops the pool's route-bus sessions empties the reflector, so the route gate
+// passes, and a release would reopen Ceph to nodes that are partitioned but alive while the same
+// pass rebinds their VMs elsewhere. Release is for a pool that is back, so nothing is released
+// unless the pool is Ready on a lease its broker renewed within HealthStale.
+func TestReleaseDrained_UnreachablePoolReleasesNothing(t *testing.T) {
+	stale := metav1.NewMicroTime(time.Now().Add(-10 * time.Minute))
+	for name, mutate := range map[string]func(*platformv1.ClusterPool){
+		"lost again": func(p *platformv1.ClusterPool) {
+			p.Status.Phase = clusterpool.PhaseUnknown
+			p.Status.Lease = &platformv1.ClusterPoolLease{RenewTime: &stale}
+		},
+		// pool-health has not caught up yet: the phase still says Ready, the lease does not.
+		"ready on a stale lease": func(p *platformv1.ClusterPool) {
+			p.Status.Lease = &platformv1.ClusterPoolLease{RenewTime: &stale}
+		},
+		"never leased": func(p *platformv1.ClusterPool) {
+			p.Status.Phase, p.Status.Lease = clusterpool.PhasePending, nil
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			pool := recoveredPool()
+			pool.Status.NodePrefixes = []string{sourceNet}
+			mutate(pool)
+			sf, nf := &releaseCountingFencer{}, &releaseCountingFencer{}
+			c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(pool, readyPoolObj("B")).
+				WithStatusSubresource(pool).Build()
+			r := &Reconciler{Client: c, StorageFencer: sf, NetworkFencer: nf, Routes: &fakeRoutes{}, FailoverThreshold: time.Minute}
+			if _, err := r.Reconcile(context.Background(), req("A")); err != nil {
+				t.Fatalf("reconcile: %v", err)
+			}
+			if len(sf.released) != 0 || len(nf.released) != 0 {
+				t.Fatalf("an unreachable pool's stale Drained report must release nothing; storage=%v network=%v", sf.released, nf.released)
+			}
+			got := &platformv1.ClusterPool{}
+			_ = c.Get(context.Background(), key("A"), got)
+			if !stillFenced(got) {
+				t.Fatalf("the fence must stay tracked, got %v", got.Status.FencedPrefixes)
+			}
+		})
 	}
 }
 

@@ -95,7 +95,9 @@ func TestTier2_FenceReleaseWaitsForMovedVMRoute(t *testing.T) {
 
 	// --- pool-a recovers and reports drained, but still announces vm1's /32. ---
 	setPoolStatus(t, ctx, c, "pool-a", func(s *platformv1.ClusterPoolStatus) {
+		renewed := metav1.NewMicroTime(time.Now())
 		s.Phase = clusterpool.PhaseReady
+		s.Lease = &platformv1.ClusterPoolLease{HolderIdentity: "brokerA", RenewTime: &renewed}
 		s.NodeDrain = []platformv1.NodeDrainStatus{{Prefix: prefix, Drained: true}}
 	})
 	res, err := r.Reconcile(ctx, reqA)

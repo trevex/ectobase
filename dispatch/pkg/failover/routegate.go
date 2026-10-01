@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
 	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	"github.com/trevex/ectobase/api/validate"
 )
@@ -81,7 +83,8 @@ func (DenyFencer) AnnouncedFrom(context.Context, string, []RouteKey) ([]RouteHol
 // the overlay IPs the agents announce; LB addresses are not overlay IPs and are never asked about.
 func (r *Reconciler) placedElsewhere(ctx context.Context, lostPool string) ([]RouteKey, map[RouteKey]string, error) {
 	var twins compiledv1.CompiledNICList
-	if err := r.Client.List(ctx, &twins); err != nil {
+	// Read-only and possibly large: skip the cache's per-call deep copy.
+	if err := r.Client.List(ctx, &twins, client.UnsafeDisableDeepCopy); err != nil {
 		return nil, nil, fmt.Errorf("list compilednics: %w", err)
 	}
 	here := validate.PoolNamespace(lostPool)

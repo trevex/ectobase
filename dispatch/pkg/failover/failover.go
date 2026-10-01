@@ -62,15 +62,26 @@ type Reconciler struct {
 	// has an address to check, as an unreachable reflector does.
 	Routes            RouteHolder
 	FailoverThreshold time.Duration
+	// HealthStale is how fresh a pool's lease must be for its fences to be released (the
+	// pool-health controller's threshold); zero means defaultHealthStale.
+	HealthStale time.Duration
 }
+
+// defaultHealthStale matches the pool-health controller's lease-staleness threshold.
+const defaultHealthStale = 30 * time.Second
 
 func (r *Reconciler) Reconcile(ctx context.Context, rq ctrl.Request) (ctrl.Result, error) {
 	var pool platformv1.ClusterPool
 	if err := r.Client.Get(ctx, rq.NamespacedName, &pool); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
-	// Recovery path: release fences for /64s the broker has confirmed drained.
-	waiting, err := r.releaseDrained(ctx, &pool)
+	// Recovery path: release fences for /64s the broker has confirmed drained — only while the
+	// pool is demonstrably back (see releaseDrained).
+	healthStale := r.HealthStale
+	if healthStale == 0 {
+		healthStale = defaultHealthStale
+	}
+	waiting, err := r.releaseDrained(ctx, &pool, clusterpool.Reachable(&pool, time.Now(), healthStale))
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -243,10 +254,17 @@ func (r *Reconciler) setFencedPrefixes(ctx context.Context, pool *platformv1.Clu
 // waiting reports a prefix held on routes alone, which the caller rechecks soon; the
 // pool's FenceReleaseBlocked condition says which and why. A failed check is not an
 // error: it holds the release and lets the rest of the pass run.
-func (r *Reconciler) releaseDrained(ctx context.Context, pool *platformv1.ClusterPool) (waiting bool, err error) {
+//
+// Nothing is released unless the pool is reachable (Ready on a fresh lease). NodeDrain is
+// its broker's LAST report, and nothing clears it when the pool is lost again. With a
+// release that can wait on routes indefinitely, a stale Drained=true on a pool lost again
+// is reachable: a partition that also drops the pool's route-bus sessions empties the
+// reflector, the route gate passes, and the release would reopen Ceph to nodes that are
+// partitioned but alive — while the same pass fences and rebinds their VMs elsewhere.
+func (r *Reconciler) releaseDrained(ctx context.Context, pool *platformv1.ClusterPool, reachable bool) (waiting bool, err error) {
 	drained := map[string]bool{}
 	for _, d := range pool.Status.NodeDrain {
-		if d.Drained {
+		if d.Drained && reachable {
 			drained[d.Prefix] = true
 		}
 	}
