@@ -83,7 +83,9 @@ impl<W: MapWriter> ControlCore<W> {
     /// An LB is an address in a VNI. The counter reset could re-create one under a new table while
     /// some of its ports kept the old: its rows then point at two tables. It is adopted as one LB
     /// on the table most of its rows use (the lowest id on a tie, arbitrary but deterministic),
-    /// and its other rows move to that table, so a backend change reaches every port.
+    /// and its other rows move to that table, so a backend change reaches every port. The main
+    /// table is one with backends if any is; rows never move onto a table without backends or one
+    /// adopt failed to refill, and then stay on their tables, which the LB keeps.
     ///
     /// The counter resumes above every table id either map still holds, so no id is handed out
     /// twice. Repairs, as the other adopts do: a table no row points at (a delete cut between its
@@ -172,8 +174,12 @@ impl<W: MapWriter> ControlCore<W> {
         let mut owned = BTreeSet::new();
         let mut left = Vec::new();
         for ((vni, ip), on) in rows {
+            // The main table: one with backends first, then the most rows, then the lowest id.
             let mut its: Vec<(u32, Vec<(u16, u8)>)> = on.into_iter().collect();
-            its.sort_by_key(|(table_id, on_table)| (std::cmp::Reverse(on_table.len()), *table_id));
+            its.sort_by_key(|(table_id, on_table)| {
+                let empty = tables.get(table_id).is_none_or(BTreeMap::is_empty);
+                (empty, std::cmp::Reverse(on_table.len()), *table_id)
+            });
             let mut its = its.into_iter();
             let Some((mut table_id, mut ports)) = its.next() else {
                 continue;
@@ -196,13 +202,20 @@ impl<W: MapWriter> ControlCore<W> {
                         table_id = copy;
                     }
                 }
-                if !backends.is_empty() && slots.len() != crate::maglev::TABLE_SIZE as usize {
-                    let _ = self.write_table(table_id, &backends);
+                let mut whole_table = !backends.is_empty();
+                if whole_table && slots.len() != crate::maglev::TABLE_SIZE as usize {
+                    whole_table = self.write_table(table_id, &backends).is_ok();
                 }
+                // Rows move only onto a whole table with backends; otherwise they stay where they
+                // forward now, and the LB keeps their tables.
                 for (other, on_other) in its {
-                    self.point_rows(&ip, vni, &on_other, table_id);
+                    if whole_table {
+                        self.point_rows(&ip, vni, &on_other, table_id);
+                        left.push(other);
+                    } else {
+                        other_tables.push(other);
+                    }
                     ports.extend(on_other);
-                    left.push(other);
                 }
             } else {
                 for (other, on_other) in its {
@@ -260,9 +273,10 @@ impl<W: MapWriter> ControlCore<W> {
     }
 
     /// Copy a table's slots under a fresh id. A copy that fails part-way is removed again, and
-    /// `None` leaves the address on the shared table.
+    /// `None` (also when the ids are exhausted) leaves the address on the shared table.
     fn copy_table(&mut self, slots: &BTreeMap<u32, LbBackend>) -> Option<u32> {
         let table_id = self.next_table_id;
+        let next = table_id.checked_add(1)?;
         for (&slot, &b) in slots {
             if self
                 .w
@@ -275,7 +289,7 @@ impl<W: MapWriter> ControlCore<W> {
                 return None;
             }
         }
-        self.next_table_id += 1;
+        self.next_table_id = next;
         Some(table_id)
     }
 
@@ -349,6 +363,10 @@ impl<W: MapWriter> ControlCore<W> {
             anyhow::bail!("load balancer already exists");
         }
         let table_id = self.next_table_id;
+        // Never wrap onto a live table: the jump after a cut adopt can bring the counter here.
+        let next = table_id
+            .checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("Maglev table ids exhausted"))?;
 
         let lb_ip = match &ip {
             LbIpBytes::Ipv4(a) => LbIp::Ipv4(*a),
@@ -405,7 +423,7 @@ impl<W: MapWriter> ControlCore<W> {
             return Err(e);
         }
         // All datapath writes succeeded — commit table_id + bookkeeping.
-        self.next_table_id += 1;
+        self.next_table_id = next;
         self.lbs.insert(
             id.to_vec(),
             LbEntry {
@@ -1139,5 +1157,78 @@ mod tests {
         assert!(c.w.lb.is_empty());
         let t6 = c.w.lb6[&key6(A6, 443)].table_id;
         assert_eq!(tables(&c), BTreeSet::from([t6]), "both its tables go");
+    }
+    /// A4 on two tables: its own two rows on the table `two_lbs` made, and port 8080 on table 9,
+    /// which holds backend 8 in every slot.
+    fn a4_on_two_tables() -> ControlCore<MemMapWriter> {
+        let mut c = two_lbs();
+        for slot in 0..crate::maglev::TABLE_SIZE {
+            c.w.maglev_upsert(MaglevKey { table_id: 9, slot }, backend(4, 8))
+                .unwrap();
+        }
+        c.w.lb_upsert(
+            key4(A4, 8080),
+            LbValue {
+                table_id: 9,
+                size: crate::maglev::TABLE_SIZE,
+            },
+        )
+        .unwrap();
+        c
+    }
+
+    // Moving an address's rows onto its main table must never move them onto nothing. A table
+    // with no slots is never the main one while another has backends, however many rows it has.
+    #[test]
+    fn the_main_table_has_backends() {
+        let mut c = a4_on_two_tables();
+        let t = c.w.lb[&key4(A4, 443)].table_id;
+        c.w.maglev.retain(|k, _| k.table_id != t);
+        let mut c = ControlCore::new(c.w);
+        c.adopt_lbs().unwrap();
+        for port in [80, 443, 8080] {
+            assert_eq!(c.w.lb[&key4(A4, port)].table_id, 9, "port {port}");
+        }
+        assert_eq!(backends_in(&c, 9), BTreeSet::from([8]));
+    }
+
+    // Nor onto a table adopt failed to refill: then the address keeps its rows where they are.
+    #[test]
+    fn a_failed_refill_moves_no_row() {
+        let mut c = a4_on_two_tables();
+        let t = c.w.lb[&key4(A4, 443)].table_id;
+        for slot in 0..100 {
+            c.w.maglev.remove(&MaglevKey { table_id: t, slot });
+        }
+        c.w.maglev_upsert_fault = Some(t);
+        let mut c = ControlCore::new(c.w);
+        c.adopt_lbs().unwrap();
+        assert_eq!(c.w.lb[&key4(A4, 8080)].table_id, 9, "8080 stays");
+        assert_eq!(slots(&c, 9).len(), crate::maglev::TABLE_SIZE as usize);
+        c.w.maglev_upsert_fault = None;
+        assert!(c.delete_lb(b"203.0.113.50").unwrap());
+        assert!(c.w.lb.is_empty());
+        assert!(
+            slots(&c, 9).is_empty(),
+            "the delete still takes both tables"
+        );
+    }
+
+    // The counter can reach the top of the id space (the jump after a cut adopt saturates): an id
+    // past it is refused, not wrapped onto a live table or a panic.
+    #[test]
+    fn table_ids_never_wrap() {
+        let mut c = ControlCore::new(MemMapWriter::default());
+        c.next_table_id = u32::MAX;
+        let err = c.create_lb(b"203.0.113.50", 0, LbIpBytes::Ipv4(A4), UL, vec![(80, 6)]);
+        assert!(err.is_err());
+        assert!(c.w.lb.is_empty(), "nothing written");
+
+        // Adopt's copy for a shared table needs an id too; without one the address shares on.
+        let mut c = ControlCore::new(damaged().w);
+        c.next_table_id = u32::MAX;
+        c.adopt_lbs().unwrap();
+        let shared = c.w.lb[&key4([198, 51, 100, 9], 443)].table_id;
+        assert_eq!(shared, c.w.lb[&key4(A4, 443)].table_id);
     }
 }

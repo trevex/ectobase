@@ -34,6 +34,8 @@ pub struct MemMapWriter {
     pub lb: HashMap<LbKey, LbValue>,
     pub lb6: HashMap<LbKey6, LbValue>,
     pub maglev: HashMap<MaglevKey, LbBackend>,
+    /// Test knob: fail every `MAGLEV` write to this table.
+    pub maglev_upsert_fault: Option<u32>,
     /// Test knob: cut the adopt walk of each named map (`"LB"`, `"FW_BIND"`, `"IFACE_META"`, ...)
     /// short after that many entries, as a kernel map walk can fail part-way.
     pub walk_cut: HashMap<&'static str, usize>,
@@ -210,6 +212,9 @@ impl MapWriter for MemMapWriter {
         Ok(())
     }
     fn maglev_upsert(&mut self, k: MaglevKey, v: LbBackend) -> anyhow::Result<()> {
+        if self.maglev_upsert_fault == Some(k.table_id) {
+            anyhow::bail!("injected MAGLEV write failure");
+        }
         self.maglev.insert(k, v);
         Ok(())
     }
