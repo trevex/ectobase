@@ -299,8 +299,9 @@ func TestCompile_LBNoMatch(t *testing.T) {
 func TestCompile_PeerImports(t *testing.T) {
 	nic := testNIC() // Spec.VPCRef.Name == "blue"
 	peerings := []PeerImportSpec{
-		{VPCName: nic.Spec.VPCRef.Name, PeerVNI: 200, ImportPrefixes: []string{"10.1.0.0/24"}},
-		{VPCName: "some-other-vpc", PeerVNI: 300, ImportPrefixes: []string{"10.9.0.0/24"}}, // different VPC — must be ignored
+		{VPCNamespace: nic.Namespace, VPCName: nic.Spec.VPCRef.Name, PeerVNI: 200, ImportPrefixes: []string{"10.1.0.0/24"}},
+		{VPCNamespace: nic.Namespace, VPCName: "some-other-vpc", PeerVNI: 300, ImportPrefixes: []string{"10.9.0.0/24"}},      // different VPC — must be ignored
+		{VPCNamespace: "other-tenant", VPCName: nic.Spec.VPCRef.Name, PeerVNI: 400, ImportPrefixes: []string{"10.8.0.0/24"}}, // same VPC name, other namespace — must be ignored
 	}
 	c := Compile(nic, nic.Status.VNI, fwFor(t, nic), nil, peerings, nil, Placement{ClusterName: "test"})
 	if len(c.Spec.PeerImports) != 1 {
@@ -552,6 +553,114 @@ func TestNicsForPeering(t *testing.T) {
 	}
 	if len(reqs) != 2 || !got["blue-0"] || !got["green-0"] {
 		t.Fatalf("nicsForPeering = %+v, want [blue-0 green-0]", reqs)
+	}
+}
+
+// peeringIn builds a VPCPeering ns/localVPC → peerNS/peerVPC with the given state and exposed prefixes.
+func peeringIn(ns, name, localVPC, peerNS, peerVPC, state string, exposed ...string) *netv1.VPCPeering {
+	return &netv1.VPCPeering{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		Spec: netv1.VPCPeeringSpec{
+			VPCRef:          netv1.LocalObjectReference{Name: localVPC},
+			PeerVPCRef:      netv1.VPCReference{Namespace: peerNS, Name: peerVPC},
+			ExposedPrefixes: exposed,
+		},
+		Status: netv1.VPCPeeringStatus{State: state},
+	}
+}
+
+// A Ready peering ns-a/blue ↔ ns-a/green imports only into ns-a/blue's NICs: a VPC that is also
+// named blue in ns-b gets nothing.
+func TestReconcile_PeerImportsOnlyForPeeringNamespace(t *testing.T) {
+	s := lbScheme(t)
+	vpc := func(ns, name string, vni int32) *netv1.VPC {
+		return &netv1.VPC{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns}, Status: netv1.VPCStatus{VNI: vni}}
+	}
+	nic := func(ns, name, vpcName, ip string) *netv1.NetworkInterface {
+		return &netv1.NetworkInterface{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+			Spec:       netv1.NetworkInterfaceSpec{VPCRef: netv1.LocalObjectReference{Name: vpcName}},
+			Status:     netv1.NetworkInterfaceStatus{State: "Allocated", AllocatedIPs: []string{ip}},
+		}
+	}
+	cl := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&netv1.NetworkInterface{}).WithObjects(
+		vpc("ns-a", "blue", 100), vpc("ns-a", "green", 200), vpc("ns-b", "blue", 300),
+		peeringIn("ns-a", "blue-green", "blue", "ns-a", "green", netv1.VPCPeeringReady, "10.0.0.0/24"),
+		peeringIn("ns-a", "green-blue", "green", "ns-a", "blue", netv1.VPCPeeringReady, "10.1.0.0/24"),
+		nic("ns-a", "blue-0", "blue", "10.0.0.10"),
+		nic("ns-b", "blue-0", "blue", "10.0.0.10"),
+	).Build()
+	r := &CompiledNICReconciler{Client: cl, DefaultClusterName: "c1"}
+	imports := func(ns string) []compiledv1.CompiledPeerImport {
+		t.Helper()
+		req := reconcile.Request{NamespacedName: types.NamespacedName{Namespace: ns, Name: "blue-0"}}
+		if _, err := r.Reconcile(context.Background(), req); err != nil {
+			t.Fatal(err)
+		}
+		var c compiledv1.CompiledNIC
+		if err := cl.Get(context.Background(), types.NamespacedName{Namespace: "pool-c1", Name: compiledTwinName(ns, "blue-0")}, &c); err != nil {
+			t.Fatal(err)
+		}
+		return c.Spec.PeerImports
+	}
+	if got := imports("ns-a"); len(got) != 1 || got[0].PeerVNI != 200 {
+		t.Fatalf("ns-a/blue PeerImports = %+v, want one import of green (VNI 200)", got)
+	}
+	if got := imports("ns-b"); len(got) != 0 {
+		t.Fatalf("ns-b/blue PeerImports = %+v, want none (the peering is ns-a's)", got)
+	}
+}
+
+// The reciprocal must point back at the local VPC by namespace too: a peering ns-a/green → ns-b/blue
+// is not the reciprocal of ns-a/blue → ns-a/green, so its exposedPrefixes never reach blue.
+func TestResolvePeerImports_ReciprocalMatchesNamespace(t *testing.T) {
+	s := lbScheme(t)
+	blue := &netv1.VPC{ObjectMeta: metav1.ObjectMeta{Name: "blue", Namespace: "ns-a"}, Status: netv1.VPCStatus{VNI: 100}}
+	green := &netv1.VPC{ObjectMeta: metav1.ObjectMeta{Name: "green", Namespace: "ns-a"}, Status: netv1.VPCStatus{VNI: 200}}
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(blue, green,
+		peeringIn("ns-a", "blue-green", "blue", "ns-a", "green", netv1.VPCPeeringReady, "10.0.0.0/24"),
+		peeringIn("ns-a", "green-blue", "green", "ns-a", "blue", netv1.VPCPeeringReady, "10.1.0.0/24"),
+		// Same VPC names, wrong peer namespace. Listed after green-blue, so an index that drops the
+		// namespace would let it overwrite the real reciprocal.
+		peeringIn("ns-a", "zz-green-other-blue", "green", "ns-b", "blue", netv1.VPCPeeringPending, "10.9.0.0/24"),
+	).Build()
+	r := &CompiledNICReconciler{Client: cl}
+	imports, err := r.resolvePeerImports(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, im := range imports {
+		if im.VPCName != "blue" {
+			continue
+		}
+		if len(im.ImportPrefixes) != 1 || im.ImportPrefixes[0] != "10.1.0.0/24" {
+			t.Fatalf("blue import ImportPrefixes = %v, want [10.1.0.0/24] (only ns-a/green→ns-a/blue)", im.ImportPrefixes)
+		}
+		return
+	}
+	t.Fatalf("no import for ns-a/blue: %+v", imports)
+}
+
+// A cross-namespace peering re-enqueues the local VPC's NICs in its own namespace and the peer VPC's
+// NICs in the peer namespace, never a same-named VPC's NICs elsewhere.
+func TestNicsForPeering_CrossNamespace(t *testing.T) {
+	s := lbScheme(t)
+	nic := func(ns, name, vpcName string) *netv1.NetworkInterface {
+		return &netv1.NetworkInterface{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns}, Spec: netv1.NetworkInterfaceSpec{VPCRef: netv1.LocalObjectReference{Name: vpcName}}}
+	}
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(
+		nic("ns-a", "blue-0", "blue"), nic("ns-a", "green-0", "green"),
+		nic("ns-b", "blue-0", "blue"), nic("ns-b", "green-0", "green"),
+	).Build()
+	r := &CompiledNICReconciler{Client: cl}
+	p := peeringIn("ns-a", "blue-green", "blue", "ns-b", "green", "")
+	got := map[types.NamespacedName]bool{}
+	for _, req := range r.nicsForPeering(context.Background(), client.Object(p)) {
+		got[req.NamespacedName] = true
+	}
+	want := map[types.NamespacedName]bool{{Namespace: "ns-a", Name: "blue-0"}: true, {Namespace: "ns-b", Name: "green-0"}: true}
+	if len(got) != len(want) || !got[types.NamespacedName{Namespace: "ns-a", Name: "blue-0"}] || !got[types.NamespacedName{Namespace: "ns-b", Name: "green-0"}] {
+		t.Fatalf("nicsForPeering = %v, want %v", got, want)
 	}
 }
 
