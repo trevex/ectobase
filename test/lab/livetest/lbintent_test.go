@@ -26,12 +26,44 @@ const (
 	// advertise and the WAN routes back). Pinned rather than auto-allocated so it cannot collide
 	// with TestLbDistributeSmokeV4's hardcoded 192.0.2.1 — the allocator's lowest-free would.
 	lbIntentLbIP      = "192.0.2.7"
-	lbIntentNIC       = "lbi-nic"
 	lbIntentBackendIP = "10.0.5.10"
 	lbIntentMAC       = "52:54:00:00:05:10"
 	lbIntentBody      = "hello-intent-lb"
 	lbIntentTimeout   = 4 * time.Minute
 )
+
+// lbIntent is one N/S load balancer from intent plus the VPC its backend lives in. A test that sets
+// one up owns all of it: every object is named <prefix>-<kind>, and the VNI, overlay subnet, pool
+// and LB address are its own. Cleanup deletes with --wait=false, so a test that reused another's
+// names could find them still terminating.
+type lbIntent struct {
+	prefix     string // <prefix>-vpc, -subnet, -pool, -lb, -nic, ctr-<prefix>-nic; label app: <prefix>-backend
+	vni        int
+	subnet     string // the VPC's overlay v4 prefix; backendIP is inside it
+	poolPrefix string // a slice of fabric.PublicV4 that no other test's pool overlaps
+	lbIP       string // pinned (bring-your-own) inside poolPrefix
+	backendIP  string
+	mac        string
+	body       string // what the backend serves, and what the WAN curl looks for
+}
+
+// lbIntentWan is TestLbFromIntentReachesTheWan's load balancer.
+//
+// Its pool is a /27 of the edge-owned prefix, not the whole /24: IPPoolReconciler parks the later of
+// two OVERLAPPING pools in the same namespace at Conflict, and natintent_test's pool lives in the
+// same namespace. Disjoint slices let the tests hold a pool at once.
+var lbIntentWan = lbIntent{
+	prefix:     "lbi",
+	vni:        lbIntentVNI,
+	subnet:     "10.0.5.0/24",
+	poolPrefix: "192.0.2.0/27",
+	lbIP:       lbIntentLbIP,
+	backendIP:  lbIntentBackendIP,
+	mac:        lbIntentMAC,
+	body:       lbIntentBody,
+}
+
+func (l lbIntent) name(kind string) string { return l.prefix + "-" + kind }
 
 // TestLbFromIntentReachesTheWan is the North-South path driven by INTENT ALONE: apply a
 // LoadBalancer on the dispatch and a WAN client reaches the LB address, with nobody calling the dataplane
@@ -63,24 +95,51 @@ func TestLbFromIntentReachesTheWan(t *testing.T) {
 	if len(nodes) == 0 {
 		t.Skip("need at least one compute node")
 	}
-	backend := nodes[0]
+	wan := clab.ContainerName(cfg.Name, "wan")
+
+	// Steps 1-5: the intent, the backend Pod serving, the allocated LB address, the compiled LB
+	// membership in the pool, and both edges' maps programmed — see setUpLbFromIntent.
+	setUpLbFromIntent(t, ctx, cfg, nodes[0], lbIntentWan)
+
+	// 6. THE POINT. A WAN client curls the LB address and gets the backend's response. Nothing in this
+	//    test called AddLoadBalancer, AddLbBackend, AddRoute or AttachInterface — the LoadBalancer object
+	//    and a Container are the entire input.
+	//
+	//    The return hop is intent-driven too: the edge agents originate 0.0.0.0/0 into the public
+	//    VNI, and the backend node imports it into this VPC precisely because its NIC is an LB
+	//    member — so the DSR reply finds its way back with no hand-installed route either.
+	eventually(t, lbIntentTimeout, 5*time.Second, func() error {
+		out := curlFromWanV4(ctx, wan, lbIntentLbIP)
+		if !strings.Contains(out, lbIntentBody) {
+			return fmt.Errorf("curl http://%s/ from the WAN did not return %q:\n%s\n%s",
+				lbIntentLbIP, lbIntentBody, out, lbIntentDiagnostics(ctx, cfg))
+		}
+		return nil
+	})
+}
+
+// setUpLbFromIntent applies l's intent with its backend on the given node, registers its cleanup,
+// and waits through every control-path stage up to both edges having the load balancer in their
+// maps. It returns the backend's VTEP. It does not curl: reaching it from the WAN is the caller's
+// assertion.
+func setUpLbFromIntent(t *testing.T, ctx context.Context, cfg *config.Config, backend config.DerivedNode, l lbIntent) string {
+	t.Helper()
 	// The backend's VTEP: every interface on a node shares the node's one underlay address, which is
 	// exactly what the LB_IP record carries as owner_underlay and the edge stores as node_vtep.
 	backendVTEP := backend.IdentityAddr
-	wan := clab.ContainerName(cfg.Name, "wan")
 
 	// 1. Intent on the dispatch: a VPC + Subnet, a public IPPool covering the edge's public v4 prefix, a
 	//    LoadBalancer pinned to our LB address and selecting by label, and the backend NIC carrying that
 	//    label. No FirewallPolicy: the compiler materializes an explicit allow-all for every
 	//    direction no policy governs, which is what a k8s default-allow lowers to.
-	applyDispatch(t, ctx, cfg, lbIntentFixture(nodeK8sName(backend), backend.Cluster))
-	patchLbIntentVPCReady(t, ctx, cfg)
+	applyDispatch(t, ctx, cfg, l.fixture(nodeK8sName(backend), backend.Cluster))
+	l.patchVPCReady(t, ctx, cfg)
 	t.Cleanup(func() {
 		for _, kind := range []string{
-			"loadbalancer.net.ectobase.dev/lbi-lb", "ippool.net.ectobase.dev/lbi-pool",
-			"containers.compute.ectobase.dev/ctr-" + lbIntentNIC,
-			"networkinterface.net.ectobase.dev/" + lbIntentNIC,
-			"subnet.net.ectobase.dev/lbi-subnet", "vpc.net.ectobase.dev/lbi-vpc",
+			"loadbalancer.net.ectobase.dev/" + l.name("lb"), "ippool.net.ectobase.dev/" + l.name("pool"),
+			"containers.compute.ectobase.dev/ctr-" + l.name("nic"),
+			"networkinterface.net.ectobase.dev/" + l.name("nic"),
+			"subnet.net.ectobase.dev/" + l.name("subnet"), "vpc.net.ectobase.dev/" + l.name("vpc"),
 		} {
 			_, _ = kubectl(ctx, cfg, "dispatch", "delete", kind, "--ignore-not-found", "--wait=false")
 		}
@@ -93,7 +152,7 @@ func TestLbFromIntentReachesTheWan(t *testing.T) {
 	//    against the dataplane's attached interfaces.
 	var pod string
 	eventually(t, 3*time.Minute, 5*time.Second, func() error {
-		p, err := podForContainer(ctx, cfg, backend.Cluster, "default-ctr-"+lbIntentNIC)
+		p, err := podForContainer(ctx, cfg, backend.Cluster, "default-ctr-"+l.name("nic"))
 		if err != nil {
 			return err
 		}
@@ -113,12 +172,12 @@ func TestLbFromIntentReachesTheWan(t *testing.T) {
 	// see the request.
 	eventually(t, 90*time.Second, 5*time.Second, func() error {
 		out, err := kubectl(ctx, cfg, backend.Cluster, "exec", pod, "--",
-			"wget", "-q", "-O", "-", "-T", "3", "http://"+lbIntentBackendIP+"/")
+			"wget", "-q", "-O", "-", "-T", "3", "http://"+l.backendIP+"/")
 		if err != nil {
 			return fmt.Errorf("backend not serving on its overlay IP yet: %w\n%s", err, out)
 		}
-		if !strings.Contains(out, lbIntentBody) {
-			return fmt.Errorf("backend returned %q, want %q", strings.TrimSpace(out), lbIntentBody)
+		if !strings.Contains(out, l.body) {
+			return fmt.Errorf("backend returned %q, want %q", strings.TrimSpace(out), l.body)
 		}
 		return nil
 	})
@@ -127,16 +186,16 @@ func TestLbFromIntentReachesTheWan(t *testing.T) {
 	//    refuses to emit LB membership for a LoadBalancer that is not Allocated, so an LB address that
 	//    never lands means an edge that never programs anything.
 	eventually(t, 2*time.Minute, 3*time.Second, func() error {
-		lbIP, err := kubectl(ctx, cfg, "dispatch", "get", "loadbalancer.net.ectobase.dev", "lbi-lb",
+		lbIP, err := kubectl(ctx, cfg, "dispatch", "get", "loadbalancer.net.ectobase.dev", l.name("lb"),
 			"-o", "jsonpath={.status.allocatedIP}")
 		if err != nil {
 			return fmt.Errorf("get LoadBalancer status: %w", err)
 		}
-		if strings.TrimSpace(lbIP) != lbIntentLbIP {
-			state, _ := kubectl(ctx, cfg, "dispatch", "get", "loadbalancer.net.ectobase.dev", "lbi-lb",
+		if strings.TrimSpace(lbIP) != l.lbIP {
+			state, _ := kubectl(ctx, cfg, "dispatch", "get", "loadbalancer.net.ectobase.dev", l.name("lb"),
 				"-o", "jsonpath={.status.state}")
 			return fmt.Errorf("allocatedIP = %q (state %q), want %s",
-				strings.TrimSpace(lbIP), strings.TrimSpace(state), lbIntentLbIP)
+				strings.TrimSpace(lbIP), strings.TrimSpace(state), l.lbIP)
 		}
 		return nil
 	})
@@ -145,12 +204,12 @@ func TestLbFromIntentReachesTheWan(t *testing.T) {
 	//    and, since the proto change, for its service ports too.
 	eventually(t, 2*time.Minute, 5*time.Second, func() error {
 		out, err := kubectl(ctx, cfg, backend.Cluster, "get", "compilednics.compiled.ectobase.dev",
-			"default-"+lbIntentNIC, "-o", "jsonpath={.spec.lb[0].ip} {.spec.lb[0].ports[0].port}")
+			"default-"+l.name("nic"), "-o", "jsonpath={.spec.lb[0].ip} {.spec.lb[0].ports[0].port}")
 		if err != nil {
 			return fmt.Errorf("get CompiledNIC on %s: %w", backend.Cluster, err)
 		}
-		if got := strings.TrimSpace(out); got != lbIntentLbIP+" 80" {
-			return fmt.Errorf("CompiledNIC spec.lb = %q, want %q", got, lbIntentLbIP+" 80")
+		if got := strings.TrimSpace(out); got != l.lbIP+" 80" {
+			return fmt.Errorf("CompiledNIC spec.lb = %q, want %q", got, l.lbIP+" 80")
 		}
 		return nil
 	})
@@ -158,7 +217,7 @@ func TestLbFromIntentReachesTheWan(t *testing.T) {
 	// 5. Both edges programmed the load balancer — from the route bus alone, with nobody in this
 	//    test calling AddLoadBalancer or AddLbBackend.
 	//
-	//    Asserted on the edges' own BPF maps BEFORE the curl below, because it localizes a failure:
+	//    Asserted on the edges' own BPF maps BEFORE any WAN curl, because it localizes a failure:
 	//    if this passes and the curl does not, the control path is fine and the datapath is at
 	//    fault. It also names exactly what it expects (LB address, port, proto, backend), which a curl
 	//    cannot.
@@ -168,25 +227,11 @@ func TestLbFromIntentReachesTheWan(t *testing.T) {
 	for _, edge := range []string{"edge1", "edge2"} {
 		edge := edge
 		eventually(t, 2*time.Minute, 5*time.Second, func() error {
-			return edgeHasLb(ctx, cfg, edge, lbIntentLbIP, 80, 6, backendVTEP, lbIntentBackendIP, lbIntentVNI)
+			return edgeHasLb(ctx, cfg, edge, l.lbIP, 80, 6, backendVTEP, l.backendIP, l.vni)
 		})
 	}
 
-	// 6. THE POINT. A WAN client curls the LB address and gets the backend's response. Nothing in this
-	//    test called AddLoadBalancer, AddLbBackend, AddRoute or AttachInterface — the LoadBalancer object
-	//    and a Container are the entire input.
-	//
-	//    The return hop is intent-driven too: the edge agents originate 0.0.0.0/0 into the public
-	//    VNI, and the backend node imports it into this VPC precisely because its NIC is an LB
-	//    member — so the DSR reply finds its way back with no hand-installed route either.
-	eventually(t, lbIntentTimeout, 5*time.Second, func() error {
-		out := curlFromWanV4(ctx, wan, lbIntentLbIP)
-		if !strings.Contains(out, lbIntentBody) {
-			return fmt.Errorf("curl http://%s/ from the WAN did not return %q:\n%s\n%s",
-				lbIntentLbIP, lbIntentBody, out, lbIntentDiagnostics(ctx, cfg))
-		}
-		return nil
-	})
+	return backendVTEP
 }
 
 // edgeHasLb checks that an edge's datapath carries the LB address as a load balancer whose Maglev table
@@ -276,45 +321,43 @@ func TestEdgeAgentsRunWithoutAnApiserver(t *testing.T) {
 	}
 }
 
-// lbIntentFixture renders the whole intent: VPC, Subnet, IPPool, LoadBalancer and the backend NIC.
+// fixture renders the whole intent: VPC, Subnet, IPPool, LoadBalancer and the backend NIC.
 // The LoadBalancer pins spec.ip (bring-your-own) and selects its backend by label — the two halves
 // the compiler joins into CompiledNIC.spec.lb.
-func lbIntentFixture(node, cluster string) string {
+func (l lbIntent) fixture(node, cluster string) string {
 	return fmt.Sprintf(`apiVersion: net.ectobase.dev/v1alpha1
 kind: VPC
-metadata: {name: lbi-vpc}
-spec: {vni: %d, defaultPolicy: Allow}
+metadata: {name: %[1]s-vpc}
+spec: {vni: %[2]d, defaultPolicy: Allow}
 ---
 apiVersion: net.ectobase.dev/v1alpha1
 kind: Subnet
-metadata: {name: lbi-subnet}
-spec: {vpcRef: {name: lbi-vpc}, v4Prefix: 10.0.5.0/24}
+metadata: {name: %[1]s-subnet}
+spec: {vpcRef: {name: %[1]s-vpc}, v4Prefix: %[3]s}
 ---
 # The edge-owned public v4 prefix (fabric.PublicV4): both edges advertise it as our ASN and the WAN
-# routes it back via either, so any LB address inside it is anycast across the edge fleet.
-# A /27 of the edge-owned prefix, not the whole /24: IPPoolReconciler parks the later of two
-# OVERLAPPING pools in the same namespace at Conflict, and natintent_test's pool lives in the same
-# namespace. Disjoint halves let both tests hold a pool at once. .7 below is inside this /27.
+# routes it back via either, so any LB address inside it is anycast across the edge fleet. The
+# pool is a disjoint slice of it (see lbIntentWan), and the LB address below is inside the slice.
 apiVersion: net.ectobase.dev/v1alpha1
 kind: IPPool
-metadata: {name: lbi-pool}
-spec: {type: public, v4Prefix: 192.0.2.0/27}
+metadata: {name: %[1]s-pool}
+spec: {type: public, v4Prefix: %[4]s}
 ---
 apiVersion: net.ectobase.dev/v1alpha1
 kind: LoadBalancer
-metadata: {name: lbi-lb}
+metadata: {name: %[1]s-lb}
 spec:
-  ip: %q
-  poolRef: {name: lbi-pool}
+  ip: %[5]q
+  poolRef: {name: %[1]s-pool}
   ports: [{port: 80, proto: TCP}]
-  targetSelector: {matchLabels: {app: lbi-backend}}
+  targetSelector: {matchLabels: {app: %[1]s-backend}}
 ---
 apiVersion: net.ectobase.dev/v1alpha1
 kind: NetworkInterface
 metadata:
-  name: %s
-  labels: {app: lbi-backend}
-spec: {vpcRef: {name: lbi-vpc}, ips: [%q], mac: %q}
+  name: %[1]s-nic
+  labels: {app: %[1]s-backend}
+spec: {vpcRef: {name: %[1]s-vpc}, ips: [%[6]q], mac: %[7]q}
 ---
 # The Container owns the NIC and is the PLACEMENT AUTHORITY: it stamps CompiledNIC.clusterName (the
 # pool the twin is emitted into) and nodeName. Without an owning workload no CompiledNIC is ever
@@ -322,22 +365,22 @@ spec: {vpcRef: {name: lbi-vpc}, ips: [%q], mac: %q}
 # curl asserts on, bound to all interfaces so it is listening before the overlay iface is attached.
 apiVersion: compute.ectobase.dev/v1alpha1
 kind: Container
-metadata: {name: ctr-%[3]s, namespace: default}
+metadata: {name: ctr-%[1]s-nic, namespace: default}
 spec:
-  clusterName: %[7]q
-  nodeName: %[6]q
-  interfaceRefs: [{name: %[3]s}]
+  clusterName: %[9]q
+  nodeName: %[8]q
+  interfaceRefs: [{name: %[1]s-nic}]
   image: busybox:1.36
-  command: ["sh", "-c", "mkdir -p /www && echo %[8]s > /www/index.html && exec httpd -f -p 80 -h /www"]
-`, lbIntentVNI, lbIntentLbIP, lbIntentNIC, lbIntentBackendIP, lbIntentMAC, node, cluster, lbIntentBody)
+  command: ["sh", "-c", "mkdir -p /www && echo %[10]s > /www/index.html && exec httpd -f -p 80 -h /www"]
+`, l.prefix, l.vni, l.subnet, l.poolPrefix, l.lbIP, l.backendIP, l.mac, node, cluster, l.body)
 }
 
-func patchLbIntentVPCReady(t *testing.T, ctx context.Context, cfg *config.Config) {
+func (l lbIntent) patchVPCReady(t *testing.T, ctx context.Context, cfg *config.Config) {
 	t.Helper()
-	_, err := kubectl(ctx, cfg, "dispatch", "patch", "vpcs.net.ectobase.dev", "lbi-vpc",
+	_, err := kubectl(ctx, cfg, "dispatch", "patch", "vpcs.net.ectobase.dev", l.name("vpc"),
 		"--subresource=status", "--type=merge",
-		"-p", fmt.Sprintf(`{"status":{"vni":%d,"state":"Ready"}}`, lbIntentVNI))
-	require.NoError(t, err, "patch lbi-vpc status Ready")
+		"-p", fmt.Sprintf(`{"status":{"vni":%d,"state":"Ready"}}`, l.vni))
+	require.NoError(t, err, "patch %s status Ready", l.name("vpc"))
 }
 
 // lbIntentDiagnostics collects what actually distinguishes the failure modes when the WAN curl does
