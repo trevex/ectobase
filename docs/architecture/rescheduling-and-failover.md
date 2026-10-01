@@ -45,7 +45,7 @@ flowchart TD
         lost --> fence["Fence every node /64:<br/>storage (Ceph blocklist)<br/>+ network (route withdraw)"]
         fence -->|all confirmed AND<br/>coverage provably complete| rebind["Reschedule VMs to<br/>a healthy pool"]
         fence -->|any fence unconfirmed, or<br/>coverage not provable| block["FailoverBlocked<br/>(fail safe: leave in place)"]
-        rebind --> recover["On recovery: broker drains<br/>stale VMIs, moved VMs' routes<br/>withdrawn → un-fence"]
+        rebind --> recover["On recovery: broker drains<br/>stale VMIs, moved addresses'<br/>routes withdrawn → un-fence"]
     end
 
     node -.node lost.-> lost
@@ -258,7 +258,7 @@ the pool's storage for its multi-year default expiry. When a fenced pool comes
 back, its broker reports, per fenced `/64`, whether that prefix's stale VMIs are
 gone (`Status.NodeDrain[].Drained`). The reconciler's `releaseDrained` step
 un-fences only `/64`s the broker has confirmed drained and that no longer
-announce a VM failover moved away (see below):
+announce an address placed on another pool (see below):
 
 - the storage fence is driven `Fenced → Unfenced` in place (so csi-addons
   runs `ceph osd blocklist rm` on the state transition — a bare delete would
@@ -279,31 +279,55 @@ agent and flowplane kept running never withdraws such a zombie interface.
 
 So the release also waits on route state. Before it lifts either fence on a
 drained `/64`, the reconciler asks the reflector (`RouteBusAdmin.AnnouncedFrom`)
-which of the moved VMs' overlay host routes it still stores with a nexthop
+which overlay host routes placed on other pools it still stores with a nexthop
 inside that `/64`, fenced or not. It holds the fence while any is held, and
-rechecks every few seconds. The keys come from durable state, so a controller
-restart loses nothing: every VM that carries failover's `FailedOver` reason and
-is bound to another pool, and the `(VNI, overlay IP)` pairs of its NICs'
-compiled twins. The conditions don't name the pool a VM left, so this is every
-VM failover has moved. That is safe: a moved VM's address announced from any
-pool but its current one is a stale route anyway. The question is targeted on purpose. A recovered pool
-keeps announcing what it legitimately serves, including E/W LB anycast addresses
-that other pools share by design, and none of that holds its fence.
+rechecks every few seconds. The question reads placement, not history: the keys
+are the `(VNI, overlay IP)` pairs of every `CompiledNIC` twin compiled outside
+the recovering pool's namespace, whether its owner is a VM failover moved, a VM
+someone moved by hand while the pool was lost, a container, or a bare NIC. A
+workload placed on another pool is announced from this pool's `/64` legitimately
+only while a move off it is still in flight, and that is exactly what the
+release has to wait out. Failover's own `FailedOver` marks would not do: the
+status write after a rebind can lose a conflict or a crash, a planned move off a
+lost pool never gets one, and a later reschedule overwrites it. The twins are
+durable, so a controller restart loses nothing. The keys are asked in batches of
+5,000. The question is targeted on purpose: a recovered pool keeps announcing
+what it legitimately serves, including E/W LB anycast addresses that other pools
+share by design, and none of that holds its fence.
 
 The gate fails closed. If the reflector can't be asked (unreachable, no
 `--reflector-admin`, or a reflector older than the RPC, which answers
-`Unimplemented`), the fence stays. The reflector ships in the dispatch chart
-with the dispatch-controller, so an upgrade holds a release only while the two
-images disagree. The pool's
-`FenceReleaseBlocked` condition says why a drained `/64` is held: the route and
-VM it waits on (`RoutesStillAnnounced`), or the failed check
-(`RouteCheckFailed`). A zombie pool that never withdraws keeps its fence, along
-with the hiding of everything else it announces, until someone stops that agent.
+`Unimplemented`), or the twins can't be listed, the fence stays and the rest of
+the pass runs as usual. The reflector ships in the dispatch chart with the
+dispatch-controller, so an upgrade holds a release only while the two images
+disagree. The pool's `FenceReleaseBlocked` condition says why a drained `/64` is
+held: each route, the node announcing it, the nexthop it announces it by, and
+the NIC and pool it belongs to (`RoutesStillAnnounced`), or the failed check
+(`RouteCheckFailed`). It turns False once nothing is held, or nothing is fenced.
 
-What the gate does not cover: an address that belongs to no moved VM. That
-includes a VM deleted while its pool was lost, a NIC whose compiled twin is gone
-or whose IPs changed after the move, and a VM a later reschedule stripped of its
-`FailedOver` reason. Such a route is re-advertised on release, as before.
+### A pool that will not let go
+
+A node whose kubelet died while its mesh agent and flowplane kept running never
+withdraws the interface it lost. One such node holds the fence over its whole
+`/64`, or over the pool's aggregate, and with it the hiding of everything else
+the pool announces. To release it:
+
+1. Read the condition: `kubectl get clusterpool <pool> -o
+   jsonpath='{.status.conditions[?(@.type=="FenceReleaseBlocked")].message}'`.
+   Each entry reads `vni <n> <route> from node <node> via <nexthop> (nic
+   <namespace>/<name> on pool <pool>)`; `<node>` is the agent's `--node-id`, its
+   Kubernetes node name.
+2. End that node's route-bus session: stop its `mesh-agent` (on the host if the
+   kubelet cannot), or power the node off or cut it from the fabric. The
+   reflector withdraws everything a node announced when its session ends, and
+   its keepalive tears down a session that stops answering within seconds.
+3. The next recheck finds nothing held and releases the fence. The condition
+   turns False.
+
+What the gate does not cover: a stale address placed on no other pool. That
+includes a VM deleted while its pool was lost, and a NIC whose compiled twin is
+gone or whose IPs changed after the move. Such a route is re-advertised on
+release, as before.
 
 An un-drained `/64` stays fenced. This is the recovery-side fail-safe: storage
 is only reopened to a returned node once that node has proven it holds no stale

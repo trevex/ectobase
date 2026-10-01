@@ -281,9 +281,9 @@ of the others. An old `dispatch-controller` never runs `releaseFencedTwins`
 releases its retired twins, and the VMs it tries to rebind stay stuck waiting on a release that
 will never be reported. The `reflector` in the same chart must not lag the `dispatch-controller`
 either: before a recovered pool's fence is released, the controller asks the reflector
-(`AnnouncedFrom`) whether that pool still announces a VM failover moved away. An older reflector
-answers `Unimplemented`, and the controller holds the fence on that, so a release waits until the
-reflector runs the new image too.
+(`AnnouncedFrom`) whether that pool still announces an address placed on another pool. An older
+reflector answers `Unimplemented`, and the controller holds the fence on that, so a release waits
+until the reflector runs the new image too.
 
 Within a pool chart, `flowplane` must run the new image before `mesh-agent` does. The agent hands
 routes for its own guests' addresses to the dataplane and relies on flowplane letting a local
