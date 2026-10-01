@@ -55,8 +55,10 @@ The VTEP is:
   with the node's VTEP, and `ListInterfaces` reports it back as the interface's `underlay_route`.
 
 flowplane resolves the VTEP once at startup, in this order: `--local-underlay` if set; else the host
-address inside `--underlay-within` (the expected node aggregate); else the kubelet node IP from the
-`HOST_IP` or `NODE_IP` environment variable; else the address on a `lo` or `dummy*` fabric loopback.
+address inside `--underlay-within` (the expected node aggregate); else the `HOST_IP` or `NODE_IP`
+environment variable, if it holds an IPv6 address; else the address on a `lo` or `dummy*` fabric
+loopback. The pool chart sets neither environment variable, so deployed nodes rely on
+`--underlay-within` (the chart's `underlayWithin` value) or on loopback inference.
 
 ### No per-endpoint underlay, no underlay IPAM
 
@@ -72,7 +74,7 @@ had to identify the endpoint itself, and every interface got its own `/128` carv
 ### The node /64 is the fence coordinate
 
 The `/64` that contains a node's VTEP survives with one job: it is the coordinate failover uses to
-fence the node. The agent writes it onto its own `Node` as an annotation (`StampNodePrefix` in
+[fence](../concepts/what-is-ectobase.md#vocabulary) the node. The agent writes it onto its own `Node` as an annotation (`StampNodePrefix` in
 `mesh/agent/nodeprefix.go`), and failover fences that prefix on both the route bus and Ceph. See
 [failover](failover.md).
 
@@ -105,9 +107,10 @@ without the eBPF program having to grow the packet. And the optional hardware ti
 with a tc-flower `tunnel_key` action toward the same device (see
 [attaching workloads](attaching-workloads.md#sr-iov-vf-offload)).
 
-`fp-geneve0` carries the gateway MAC (`--gateway-mac`). The device carries inner Ethernet, and on the
-WAN edge a frame handed to the local kernel must have a destination MAC equal to the device's own, or
-the kernel drops it as `PACKET_OTHERHOST`.
+`fp-geneve0` carries the MAC given by `--gateway-mac`. The device carries inner Ethernet. On a WAN
+edge `--gateway-mac` is the virtual-router MAC guests address (`02:00:00:00:00:01`), so frames from
+guests already match the device. On compute nodes the pool chart passes the fabric router's MAC, and
+it has no effect on delivery there.
 
 ### Options: the DSR TLV
 
@@ -149,7 +152,7 @@ flowplane does not generate ICMP "packet too big" messages. It relies on adverti
 
 ## VNIs and multi-tenancy
 
-A **VNI** (virtual network identifier) names one tenant network, a `VPC`. The mesh controller
+A **VNI** (virtual network identifier) names one tenant network, a `VPC`. The mesh-controller
 allocates VNIs from 1000 to 2^24 − 1, the range a Geneve header can carry; a `VPC` can also pin one in
 `spec.vni`. VNI 0 is reserved for the route bus's public VNI, which only carries the WAN edges'
 default routes and never appears on the wire.
@@ -184,24 +187,23 @@ peer's VNI, so the sender must stamp that VNI, not its own.
 
 ## The egress walk
 
-A guest's packet enters flowplane on the host side of its device, at `tc_guest_tx`. For an IPv4
-packet the program runs these steps in order (`process_guest_tx` in
-`flowplane-core/src/datapath/guest_tx.rs` is the shared logic):
+A guest's packet enters flowplane on the host side of its device, at `tc_guest_tx`. The program first
+answers the guest's control traffic (ARP, IPv6 Neighbor and Router Solicitations, DHCP) and sends
+the reply straight back; see [DHCP, ARP and ND](../features/dhcp-arp-nd.md). For any other IPv4
+packet it runs these steps in order (`forward_decision_v4` in `flowplane-ebpf/src/egress.rs`; the
+simulator runs the same core steps through `process_guest_tx`):
 
-1. Local responders. ARP and IPv6 Neighbor Solicitations for the gateway, Router Solicitations,
-   and DHCP requests are answered on the spot and sent back to the guest. See
-   [DHCP, ARP and ND](../features/dhcp-arp-nd.md).
-2. Conntrack and egress firewall. A new flow, or one whose entry predates the current firewall
-   epoch, meets the interface's egress rules, which deny by default. An established flow skips them.
-3. Address rewrites. A reply to a DSR-load-balanced flow gets its source rewritten to the
+1. Conntrack and egress firewall. A new flow, or one whose entry predates the current firewall
+   epoch, meets the interface's egress rules. An established flow skips them.
+2. Address rewrites. A reply to a DSR-load-balanced flow gets its source rewritten to the
    load-balancer address, and floating-IP mappings apply.
-4. Route lookup. A longest-prefix match on `(VNI, destination)` in `ROUTES`. A miss passes the
+3. Route lookup. A longest-prefix match on `(VNI, destination)` in `ROUTES`. A miss passes the
    packet to the host stack.
-5. NAT. If the route is external (a default route toward a WAN edge), the source is translated to
+4. NAT. If the route is external (a default route toward a WAN edge), the source is translated to
    the interface's NAT address and port block.
-6. Track and meter. The flow is recorded in conntrack, and external egress is policed against the
+5. Track and meter. The flow is recorded in conntrack, and external egress is policed against the
    interface's public lane.
-7. Deliver. If `INTERFACES` says the destination is on this node, take the same-host fast path.
+6. Deliver. If `INTERFACES` says the destination is on this node, take the same-host fast path.
    Otherwise stamp the tunnel key from the route (`nexthop_vni`, `nexthop_ipv6`) and redirect to
    `fp-geneve0`.
 
@@ -222,11 +224,15 @@ two programs run on the device's tcx ingress hook, in order:
 `uplink_rx` resolves the target in this order (`process_uplink_rx` in
 `flowplane-core/src/datapath/uplink.rs`):
 
-- Load balancer. If the destination is a load-balancer address, Maglev picks a backend. A local
-  backend is delivered to; a remote one is re-stamped with that backend's VTEP and sent back out
-  through `fp-geneve0`, without the packet ever being decapsulated by flowplane.
+- Load balancer (edge and simulator only today; see [load balancing](../features/loadbalancer.md)).
+  If the destination is a load-balancer address, Maglev picks a backend. A local backend is delivered
+  to; a remote one is re-stamped with that backend's VTEP and sent back out through `fp-geneve0`.
 - NAT return. A reply to a NAT address restores the guest's address from conntrack and delivers
   it.
+- Floating IP. A destination in `FLOATING_IPS` is rewritten to the guest behind it, which is then
+  delivered as a local interface.
+- Neighbour NAT relay. A destination address and port inside another node's NAT block
+  (`NAT_OWNERS`, same VNI) is re-stamped toward the owner's VTEP and sent back out `fp-geneve0`.
 - Local interface. `INTERFACES[(VNI, destination)]` names a local interface: run the ingress
   firewall on a new flow, rewrite the inner Ethernet header, and redirect to the interface's device.
 - WAN edge. On an edge, a miss hands the packet to the local kernel to be routed onto the WAN.
@@ -261,16 +267,16 @@ sequenceDiagram
 
 ## The same-host fast path
 
-When both guests are on the same node, step 7 of the egress walk finds the destination in
+When both guests are on the same node, step 6 of the egress walk finds the destination in
 `INTERFACES` and never touches `fp-geneve0`. flowplane runs the destination's ingress firewall on a
 new flow (a same-node packet never passes through `uplink_rx`, so this is where that check happens),
-rewrites the inner Ethernet header (destination = the guest's MAC, source = the gateway MAC
-`02:00:00:00:00:01`) and redirects to the destination's device with a plain `bpf_redirect`.
+rewrites the inner Ethernet header (destination = the guest's MAC, source = the shared
+virtual-router MAC `02:00:00:00:00:01`) and redirects to the destination's device with a plain `bpf_redirect`.
 
-Every local interface also has a self-route in `ROUTES` pointing at the node's own VTEP, so step 4
+Every local interface also has a self-route in `ROUTES` pointing at the node's own VTEP, so step 3
 finds a route for a local guest even before the route bus has said anything.
 
-## bpf_redirect_peer
+## Delivering with `bpf_redirect_peer`
 
 `bpf_redirect_peer` moves a packet straight to the ingress of a device's peer in another network
 namespace, in the same softirq, skipping the host-side transmit and a trip back through the stack.
@@ -286,12 +292,12 @@ Everywhere else delivery is a plain `bpf_redirect`:
 - The same-host fast path. Peer redirect from the netkit peer hook does not reach a VM's tap
   either, so this path keeps the plain redirect for every destination.
 
-## The edge and north/south traffic
+## The WAN edge and north-south traffic
 
 Traffic to and from the internet goes through WAN edges. An edge runs flowplane with `--role edge`
 next to a router (VyOS in the lab), attaches `wan_rx` to its WAN uplink, and joins the overlay like
 any node. Its agent originates `0.0.0.0/0`, `::/0` and `64:ff9b::/96` into the public VNI with the
-edge's anycast VTEP as the nexthop; nodes with guests that need egress import those defaults into
+edge's underlay address as the nexthop; nodes with guests that need egress import those defaults into
 their VNIs.
 
 - Egress: a guest's packet to the internet matches the imported default, is NAT-translated on its

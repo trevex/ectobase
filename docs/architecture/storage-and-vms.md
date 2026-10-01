@@ -11,9 +11,12 @@ How a VM's network interface attaches to the overlay is covered in
 
 ## The objects involved
 
-A VM is declared once on the dispatch and lowered into per-pool twins. The **compiler** (the
-mesh-controller) writes the twins into namespace `pool-<name>` of the pool the VM is bound to, the
-pool's **broker** copies them down, and the materializers on the pool act on them.
+A VM is declared once on the dispatch and lowered into per-pool
+[twins](../concepts/what-is-ectobase.md#vocabulary). The
+[compiler](../concepts/what-is-ectobase.md#vocabulary) writes them into namespace `pool-<name>` of
+the [pool](../concepts/what-is-ectobase.md#vocabulary) the VM is bound to, the pool's
+[broker](../concepts/what-is-ectobase.md#vocabulary) copies them down, and the vm-materializer on the
+pool acts on them.
 
 | Declared on the dispatch | Compiled twin | Materialized on the pool as |
 |---|---|---|
@@ -43,7 +46,7 @@ flowchart LR
         dv["DataVolume"]
         pvc["PVC (block, RWO)"]
         dcvm -->|vm-materializer| kvm
-        dcva -->|volume-materializer| dv --> pvc
+        dcva -->|vm-materializer| dv --> pvc
         kvm -.disk.-> pvc
     end
     ceph[("shared Ceph cluster<br/>RBD image")]
@@ -61,7 +64,7 @@ means the pool's default), and an optional `bootImage`. For every `VolumeRef` on
 exists, the compiler emits one `CompiledVolumeAttachment`. An attachment whose `Volume` has a
 `bootImage` is marked `boot: true`.
 
-On the pool, the volume-materializer turns each attachment into a CDI `DataVolume`:
+On the pool, the vm-materializer's volume reconciler turns each attachment into a CDI `DataVolume`:
 
 - The claim is `ReadWriteOnce` with `volumeMode: Block`. A raw block device is the mode KubeVirt
   wants for a VM disk.
@@ -89,7 +92,7 @@ carry it.
 | Report | broker, `ReportDiskIdentities` | Copies the recorded identity up onto the attachment twin on the dispatch. A failed copy fails the broker's tick, so it is retried rather than lost. |
 | Mirror | dispatch, `DiskIdentityMirrorReconciler` | Copies the identity onto `Volume.status.diskIdentity`. It never clears an identity. |
 | Stamp | compiler | Writes the `Volume`'s identity into every attachment it compiles for that volume, in whichever pool. |
-| Adopt | pool, volume-materializer | An attachment with an identity and no `DataVolume` of its own is a disk that moved here. The materializer creates a static `Retain` PV that replays the identity, pre-bound to a claim named after the attachment, instead of asking CDI for a new image. |
+| Adopt | pool, the vm-materializer's volume reconciler | An attachment with an identity and no `DataVolume` of its own is a disk that moved here. The materializer creates a static `Retain` PV that replays the identity, pre-bound to a claim named after the attachment, instead of asking CDI for a new image. |
 
 Two details matter for correctness:
 
@@ -159,15 +162,15 @@ what it builds and why it sometimes waits.
 
 ### What it builds
 
-- **Disks.** With attachments, the VM boots from persistent disks: the boot attachment first, then
+- Disks. With attachments, the VM boots from persistent disks: the boot attachment first, then
   the rest by name. A provisioned disk is referenced through its `DataVolume`; a disk with a
   recorded identity is referenced through its claim, since an adopted disk has no `DataVolume`. The
   volume name is the attachment name either way, so guest disk order does not change when a VM
   moves. With no attachments, the VM boots an ephemeral `containerDisk` from `spec.image`.
-- **Cloud-init.** If the VM has `cloudInit.userData`, a NoCloud disk is added.
-- **Interfaces.** One interface per compiled NIC, with the MAC allocated centrally and the
+- Cloud-init. If the VM has `cloudInit.userData`, a NoCloud disk is added.
+- Interfaces. One interface per compiled NIC, with the MAC allocated centrally and the
   `flowplane` network binding plugin. See [Attaching workloads](attaching-workloads.md).
-- **Run strategy and resources** come from the compiled spec. The compiler defaults an empty run
+- Run strategy and resources come from the compiled spec. The compiler defaults an empty run
   strategy to `RerunOnFailure`, so KubeVirt restarts a VM whose node dies, inside the pool.
 
 The materializer applies the VM with server-side apply and owns only the fields it sets. KubeVirt's
@@ -194,7 +197,7 @@ re-triggers it. Attachments that carry the VM's `workload` label but are not nam
 ### Placement flows back
 
 The broker knows which node KubeVirt started the VMI on. It writes that, with the node's /64
-underlay prefix, onto `CompiledVM.status.placement` in its own pool namespace. A dispatch controller
+underlay prefix, onto `CompiledVM.status.placement` in its own pool namespace. The mesh-controller
 mirrors it onto `VirtualMachine.status.placement`. The broker does not write the `VirtualMachine`
 itself because that object lives in a tenant namespace shared by every pool's workloads, and per-pool
 RBAC cannot scope such a write.
@@ -223,7 +226,7 @@ grant an unfence fails and the entry stays.
 When the dispatch fails a pool over, it first cuts that pool's nodes off from Ceph so they cannot
 write a disk that another pool is about to attach. This section describes exactly how the dispatch
 drives that cut through csi-addons. When and why it fences is in
-[Scheduling, rescheduling and failover](failover.md).
+[Failover and rescheduling](failover.md).
 
 ### The CR
 
@@ -267,7 +270,8 @@ messages:
 
 Two facts about csi-addons shape the rest:
 
-- Ceph removes a blocklist entry only on the `Fenced` to `Unfenced` transition of `spec.fenceState`.
+- Ceph removes a blocklist entry only when csi-addons reconciles the CR with `spec.fenceState:
+  Unfenced`, which in practice means flipping it from `Fenced` to `Unfenced`.
 - Deleting a `NetworkFence` only drops csi-addons' finalizer. It never unfences. A CR deleted before
   its unfence ran leaves a blocklist entry behind, with a multi-year expiry and nothing tracking it.
 
@@ -311,17 +315,27 @@ stateDiagram-v2
 
 Because no path deletes a CR before its unfence is reported, a missing CR reliably means "released".
 
-!!! warning "Never delete a NetworkFence by hand"
-    Deleting the CR leaves the Ceph blocklist entry in place. To lift a fence manually, patch it to
-    `Unfenced` and let csi-addons run the removal:
+!!! warning "Do not delete a NetworkFence, and do not unfence one a pool still tracks"
+    - Never delete a `NetworkFence`. Deleting it drops csi-addons' finalizer and leaves the Ceph
+      blocklist entry in place.
+    - Never patch one to `Unfenced` while any `ClusterPool` lists its prefix in
+      `status.fencedPrefixes`. csi-addons lifts the blocklist as soon as it reconciles the flip,
+      which bypasses the drain and route gates that decide when a fence may come off. On a pool that
+      is still lost, its nodes could write disks already rebound elsewhere until failover's next pass
+      fences again. On a recovered pool nothing re-fences at all, because the release path never
+      calls `Fence`.
+    - Fix what the pool's status names instead; see
+      [A pool that will not let go](failover.md#a-pool-that-will-not-let-go).
+
+    Only for a stranded entry, one that no `ClusterPool` lists and whose nodes are powered off or
+    provably run none of the moved VMs, patch the CR to `Unfenced` and let csi-addons remove the entry:
 
     ```sh
     kubectl patch networkfence <name> --type=merge -p '{"spec":{"fenceState":"Unfenced"}}'
     ```
 
-    Failover works from whatever state it finds. If it still holds the pool lost, its next pass
-    waits for the unfence message and then fences the prefix again. If it is releasing the prefix,
-    it deletes the CR once the unfence message appears.
+    Once the CR reports `Succeeded` with `unfencing operation successful`, it is spent. A later fence
+    of the same prefix deletes it and replaces it with a fresh `Fenced` CR.
 
 ### What the fencer cannot see
 
@@ -337,7 +351,7 @@ true of an in-place flip, so the CR protocol above cannot close it.
 | `Volume` type | `api/storage/v1alpha1/volume_types.go` |
 | VM and attachment compilers | `mesh/controllers/compiledvm.go`, `mesh/controllers/compiledvolumeattachment.go` |
 | vm-materializer (`buildVM`, `readyToMaterialize`) | `mesh/controllers/vmmaterializer.go` |
-| volume-materializer and adoption | `mesh/controllers/volumematerializer.go`, `mesh/controllers/volumeadopt.go` |
+| The vm-materializer's volume reconciler and adoption | `mesh/controllers/volumematerializer.go`, `mesh/controllers/volumeadopt.go` |
 | Capture, `Retain`, release of a disk | `mesh/controllers/diskidentity.go` |
 | Identity report and mirror | `dispatch/pkg/broker/reportdiskidentity.go`, `mesh/controllers/diskidentitymirror.go` |
 | Image reclaim on `Volume` delete | `mesh/controllers/volumereclaim.go` |
@@ -352,7 +366,7 @@ and list the RBD pool.
 ## Where to go next
 
 - [Moving a VM between clusters](vm-moves.md): the move gate that orders release and attach.
-- [Scheduling, rescheduling and failover](failover.md): when the dispatch fences a pool, and when
+- [Failover and rescheduling](failover.md): when the dispatch fences a pool, and when
   it releases the fence.
 - [Attaching workloads](attaching-workloads.md): how a VM's interface joins the overlay.
 - [Move a VM](../guides/move-a-vm.md): drive a move on the lab.

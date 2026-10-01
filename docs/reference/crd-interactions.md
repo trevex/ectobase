@@ -2,10 +2,11 @@
 
 The generated API pages describe each kind on its own. This page describes how the kinds relate:
 which ones users write, how the compiler turns them into compiled objects, which component acts
-on each compiled object, and where addresses and placement come from.
+on each compiled object, and where addresses and placement come from. Terms such as dispatch,
+pool, compiler and twin are defined in the [vocabulary](../concepts/what-is-ectobase.md#vocabulary).
 
 All ectobase kinds are version `v1alpha1` in groups under `ectobase.dev`, and the
-**dispatch**'s aggregated apiserver (`dispatch-apiserver`) serves all of them
+dispatch's aggregated apiserver (`dispatch-apiserver`) serves all of them
 (`dispatch/cmd/apiserver/main.go`).
 
 ## The five API groups
@@ -21,7 +22,7 @@ The groups split the API by who writes it and when.
 | [`platform.ectobase.dev`](api/platform.md) | the operator at enrollment, then controllers and brokers on status | `ClusterPool`, `RouteBusIdentity` |
 
 `net`, `compute` and `storage` hold intent: what the user wants. `compiled` is derived: the
-**compiler** (`mesh-controller`) produces it and nobody edits it by hand. `platform` describes the
+compiler (the mesh-controller) produces it and nobody edits it by hand. `platform` describes the
 fleet itself.
 
 `IPAllocation` is the one `net` kind that users don't write. The allocators create one per
@@ -33,16 +34,15 @@ enforces uniqueness there (see [Where addresses come from](#where-addresses-come
     or reconciles it. The dataplane has a floating-IP DNAT path, but it is not driven from this
     kind yet.
 
-The `compiled` kinds also exist as CRDs on every **pool**, because that is where the twins land.
+The `compiled` kinds also exist as CRDs on every pool, because that is where the twins land.
 The pool chart installs the `net` CRDs too, but no pool component reads them: the agent, the CNI
 and the materializers read only compiled kinds.
 
 ## From intent to a running workload
 
-Lowering runs in four steps. A user declares intent on the dispatch; the compiler flattens each
-workload's slice of it into small, self-contained compiled objects; the pool's **broker** copies
-those objects down to the pool; and executors on the pool turn them into pods, VMs, disks and
-datapath state.
+[From intent to a running workload](../concepts/intent-to-running.md) tells the story of a request
+end to end. This section is the lookup: which compiled kind each intent kind becomes, and which
+component acts on it in the pool.
 
 ```mermaid
 flowchart LR
@@ -83,18 +83,9 @@ flowchart LR
     CVA -->|broker, then vm-materializer| DV
 ```
 
-### Workloads own placement
+### Intent to compiled
 
-A `VirtualMachine` or `Container` decides where it runs; its `NetworkInterface`s, named in
-`spec.interfaceRefs`, follow it. A workload with an empty `spec.clusterName` is bound to a pool by
-the `dispatch-controller`'s scheduler, which writes `spec.clusterName`. The node inside the pool
-is chosen later by the pool's own kube-scheduler. Because NICs inherit placement, a workload and
-all its interfaces always land on the same pool without the user restating it per interface. A
-NIC without an owning workload takes its own `spec.clusterName`, or the compiler's default.
-
-### The compiler lowers intent
-
-The compiler watches the intent groups and writes one compiled object per source object.
+The compiler writes one compiled object per source object.
 
 | Intent | Compiled | What it carries |
 | --- | --- | --- |
@@ -103,31 +94,18 @@ The compiler watches the intent groups and writes one compiled object per source
 | `Container` | `CompiledContainer` | the same, for `pod-materializer` |
 | `VirtualMachine` and each `Volume` it references | `CompiledVolumeAttachment` | one per entry in `spec.volumeRefs`: the disk to provision or adopt |
 
-A `CompiledNIC` is complete on its own: the agent on the node never reads the intent kinds.
-
-Central IPAM gates the `CompiledNIC`. The compiler emits one only when the NIC's
-`status.state` is `Allocated`, `status.observedGeneration` matches its generation, and
-`status.allocatedIPs` is filled. The overlay addresses come from `status.allocatedIPs`, never
-from `spec.ips`, and the MAC from `status.allocatedMAC`. A load balancer joins a NIC's
-memberships only once it is `Allocated` with a `status.allocatedIP`. A source that drops out of
-`Allocated` stops new compiles but keeps its last compiled object (see
+Each twin lives in the namespace `pool-<clusterName>` on the dispatch and carries the pool in
+`spec.clusterName`. It is named `<sourceNamespace>-<sourceName>`; a `CompiledVolumeAttachment`
+is named `<vmNamespace>-<vmName>-<volume>`. A finalizer on the source object tears its twins
+down. A `CompiledNIC` is emitted only once the NIC is `Allocated` by central IPAM, and a source
+that drops out of `Allocated` keeps its last compiled object (see
 [IPAM migration](../operations/ipam-migration.md#keep-last-good-a-bad-edit-does-not-tear-down-a-workload)).
 
-Each compiled object goes into the namespace `pool-<clusterName>` on the dispatch, named
-`<sourceNamespace>-<sourceName>`, and carries the pool in `spec.clusterName`. A finalizer on the
-source object tears its twin down. Owner references cannot do it, because Kubernetes forbids an
-owner in one namespace from owning an object in another. A periodic orphan sweep in the compiler
-removes twins whose source vanished anyway, for example after someone force-removed a finalizer.
+### Compiled to running
 
-### The broker syncs twins to the pool
-
-Each pool runs one `dispatch-broker`. It watches the compiled objects in its own `pool-<name>`
-namespace on the dispatch, which is the only namespace its RBAC allows, and reconciles them as a
-set onto the pool's own apiserver, back into each object's source namespace. Upward, it reports
-the pool's lease, node prefixes, drain state, each VM's placement and each provisioned disk's
-identity. It writes only status subresources, so it cannot change what the dispatch asked for.
-
-### Executors on the pool
+The broker (`dispatch-broker`) copies each twin from `pool-<name>` on the dispatch into the
+pool, back into its source namespace. On the compiled objects and its `ClusterPool` it writes
+only status subresources: the lease, node prefixes, drain state, VM placement and disk identity.
 
 | Compiled | Executor | Produces |
 | --- | --- | --- |
@@ -135,11 +113,6 @@ identity. It writes only status subresources, so it cannot change what the dispa
 | `CompiledContainer` | `pod-materializer` | a `Pod` attached to the overlay through Multus and `flowplane-cni` |
 | `CompiledVM` | `vm-materializer` | a KubeVirt `VirtualMachine` |
 | `CompiledVolumeAttachment` | `vm-materializer` | a CDI `DataVolume`: an RBD-backed PVC, imported from a boot image or blank |
-
-The agent stamps each node's underlay /64 onto its `Node`, which is how the broker learns the
-pool's node prefixes. Placement and disk identity travel the other way: the broker writes them
-onto the twins' status, and controllers in the compiler mirror them onto the source
-`VirtualMachine` and `Volume`.
 
 ## Where addresses come from
 
@@ -179,8 +152,8 @@ Two consequences follow from that choice:
   consumer. That consumer parks in `Exhausted`, and the deletion of an `IPAllocation` re-enqueues
   it, so the window costs a retry, not an outage.
 
-`IPPool.status` reports `state` (`Ready`, `Invalid`, or `Conflict` for the later of two pools
-whose prefixes overlap in one namespace), `total` and `allocated`. `allocated` is for operators
+`IPPool.status` reports `state` (`Pending`, `Ready`, `Invalid`, or `Conflict` for the later of
+two pools whose prefixes overlap in one namespace), `total` and `allocated`. `allocated` is for operators
 only. No allocator reads it back: a counter cannot say which addresses are free, and a stale one
 would invite a double allocation.
 

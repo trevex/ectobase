@@ -88,24 +88,18 @@ Write for an engineer who is new to ectobase but knows Kubernetes and Linux netw
 
 ### Terms
 
-Use one term for one thing, and define it at first use on each page or link to where it is
-defined. The core vocabulary:
+The [vocabulary](../concepts/what-is-ectobase.md#vocabulary) on "What ectobase is" is the single
+glossary. Use its terms, one term for one thing, and define each at first use on a page or link
+to the glossary. Add a new term there, not on the page that first needs it. A few conventions
+that trip people up:
 
-| Term | Means |
-|---|---|
-| dispatch | The fleet control plane: the aggregated apiserver on kine and postgres, plus `dispatch-controller`. |
-| pool | A compute cluster, represented by a `ClusterPool`. Its objects live in `pool-<name>` on the dispatch. |
-| broker | Runs per pool; syncs the `Compiled*` twins down and status up. |
-| compiler | `mesh-controller`, which lowers intent into `Compiled*` objects. |
-| twin | A `Compiled*` object on the dispatch and its copy in the pool. |
-| materializer | `pod-materializer` and `vm-materializer`. |
-| agent | `mesh-agent`, on every node and every WAN edge. |
-| reflector | The route-bus hub. |
-| route bus | How overlay routes are distributed. |
-| flowplane | The eBPF dataplane. |
-| VTEP | A node's tunnel endpoint: one /128 underlay address per node. |
-| fence | A reflector route fence plus a Ceph `NetworkFence` on a node's /64. |
-| planned move | A change of a workload's `spec.clusterName`. |
+- Write "broker (`dispatch-broker`)" at first use on a page, then "broker".
+- Write "east-west" and "north-south", never E/W or N/S.
+- Write "the mesh-controller" for the compiler's binary.
+- A planned move is a change of a `VirtualMachine`'s `spec.clusterName` made on purpose, not by
+  failover. Changing a `Container`'s pool has no release gate and is not a planned move.
+- Link text matches the target page's title: "Deploy with Helm", "Runbook", "Failover and
+  rescheduling".
 
 ### Facts
 

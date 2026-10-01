@@ -148,7 +148,7 @@ The two-instance synchronisation tests themselves are dropped.
 | `test_virtsvc.py`, `xtratest_flow_timeout.py::test_virtsvc_tcp_timeout` | dpservice's virtual services, a DPDK-specific port-to-service NAT table | flowplane has no such feature. |
 | The SR-IOV cases of `test_pf_to_vf.py` and `test_vf_to_pf.py` | physical-function to virtual-function representor forwarding | dpservice's representor model. The load-balancer, NAT and firewall cases in these files are mapped above. |
 | `test_telemetry.py` | DPDK graph counters, heap stats, the Prometheus exporter | DPDK internals. |
-| `test_zzz_grpc.py` | dpservice's gRPC API surface and error codes | flowplane's `DataplaneNode` API has its own handler tests (`flowplane/src/handlers.rs` runs against an in-memory `ControlCore`). |
+| `test_zzz_grpc.py` | dpservice's gRPC API surface and error codes | flowplane's `DataplaneNode` API has its own handler tests (`flowplane/flowplane/src/handlers.rs` runs against an in-memory `ControlCore`). |
 | `test_arp.py::test_l2_addr_once` | MAC learned from the representor, then updated by DHCP | dpservice's representor model. flowplane takes the guest MAC from the control plane, and its DHCPv4 responder updates `PORT_META` and the interface entries when a request arrives from a different MAC (`learn_mac`, called from `tc_guest_dhcp`). That update is eBPF glue with no sim or anchor test. |
 | `test_vni.py::test_vni_existence`, `test_vni_neighnats`, `test_vni_dnat_reset` | dpservice's VNI lifecycle API | control-plane API only, with no datapath behaviour to observe. |
 | `xtratest_ha.py`, the synchronisation tests | active and backup table synchronisation | flowplane restarts by adoption, not by peer sync. |

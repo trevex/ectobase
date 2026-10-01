@@ -39,7 +39,9 @@ make release    # the same, in release mode
 ```
 
 `flowplane-ebpf` is not a host crate. The workspace's `default-members` leave it out, and
-`flowplane/build.rs` builds the bytecode through `aya-build` during `make build`. The Go modules
+`flowplane/flowplane/build.rs` builds the bytecode through `aya-build` during `make build`. The
+`default-members` also leave out `flowplane-device`, so its own tests and lints run only with
+`-p flowplane-device`; no `make` target does that. The Go modules
 build with the plain `go` toolchain.
 
 Container images:
@@ -79,11 +81,11 @@ can be overridden.
 | `make tap-dhcp-probe`, `make tap-vm-smoke` | DHCP on a real tap; a CirrOS VM on a real tap (needs KVM) | sudo |
 | `make test-all` | `test`, `e2e` and `ha` | sudo |
 | `make lab-up`, `make lab-test`, `make lab-down` | bring up the lab, run the live suite, tear it down | sudo |
-| `make bpf-clean` | free leaked flowplane BPF pins on the host | sudo |
+| `make bpf-clean` | free leaked flowplane BPF pins on the host and in lab node containers; run it with the lab down, since it kills every `flowplane serve` | sudo |
 
 The privileged targets need passwordless sudo: they load and attach eBPF programs, mount bpffs
 and create namespaces and devices. The scripts elevate individual commands themselves. On NixOS
-see [the runbook](../operations/runbook.md#nixos-and-the-real-sudo) for the real `sudo` path.
+see [Runbook](../operations/runbook.md#nixos-and-the-real-sudo) for the real `sudo` path.
 [Testing strategy](testing/strategy.md) explains what each tier proves.
 
 ## Before you call a change done
@@ -190,7 +192,7 @@ storage and failover tests.
 `make lab-deploy` does not push images; only `lab up` does. To run new code on a running lab,
 build the image, push it into the in-fabric registry through `127.0.0.1:5000`, and restart the
 workload. The lab installs with `imagePullPolicy=Always`, so the restart pulls the new digest. See
-[the runbook](../operations/runbook.md#a-redeploy-runs-the-old-image).
+[Runbook](../operations/runbook.md#a-redeploy-runs-the-old-image).
 
 ## Known limitations
 

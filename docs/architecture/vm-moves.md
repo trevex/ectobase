@@ -5,14 +5,15 @@ overlay IP, its MAC and its VNI, and it is break-before-make: the VM stops on th
 starts on the new one. This page explains the mechanism, why it is ordered that way, how a failover
 move differs, and what is not built yet.
 
-A **pool** is a compute cluster with its own namespace `pool-<name>` on the dispatch; the
-**compiler** is the mesh-controller that lowers a `VirtualMachine` into per-pool twins; each pool's
-**broker** syncs those twins down. [Storage and VMs](storage-and-vms.md) describes the twins and the
-disk identity this page relies on.
+Each [pool](../concepts/what-is-ectobase.md#vocabulary) has its own namespace `pool-<name>` on the
+dispatch. The [compiler](../concepts/what-is-ectobase.md#vocabulary) lowers a `VirtualMachine` into
+per-pool [twins](../concepts/what-is-ectobase.md#vocabulary), and each pool's
+[broker](../concepts/what-is-ectobase.md#vocabulary) syncs them down.
+[Storage and VMs](storage-and-vms.md) describes the twins and the disk identity this page relies on.
 
 ## A move is a `spec.clusterName` change
 
-There is no separate move object. A **planned move** is an edit of `spec.clusterName` on the
+There is no separate move object. A planned move is an edit of `spec.clusterName` on the
 `VirtualMachine`:
 
 ```sh
@@ -115,13 +116,12 @@ looks again every 5 seconds, because the downstream teardown raises no dispatch 
 optimistically locked: a twin's name is reused when a move is reversed, and a stale cached read of
 the old twin must not mark the new one released.
 
-The broker's sync pass and release pass never run at the same time (one reconcile worker). Otherwise
-a release pass could see a retired twin with nothing downstream yet, just before a concurrent sync
-created its VM, and report a release that is not true.
+The broker's sync pass and release pass never run at the same time; why that matters is explained in
+[One worker, deliberately](multi-cluster.md#one-worker-deliberately).
 
 ### 3. The gate opens and the target starts the VM
 
-A mesh controller drops the `source-released` finalizer from a twin whose `status.released` is set,
+The mesh-controller drops the `source-released` finalizer from a twin whose `status.released` is set,
 and the twin disappears. The compiler then writes the `CompiledVM` and its attachments into the
 target namespace. Each attachment carries the disk identity recorded on the `Volume`, so the target
 pool adopts the original RBD image by its CSI handle rather than provisioning a blank one. The
@@ -177,10 +177,10 @@ pool's broker cannot report anything.
 | Source pool | healthy and reachable | lost: lease stale beyond 2 minutes |
 | Proof that the source let go | the source broker's `letGo` | the fence: Ceph blocklist plus reflector route fence, with complete coverage |
 | Who sets `status.released` | the source broker (`ReportReleases`) | failover (`releaseFencedTwins`) |
-| Source VM afterwards | stopped before the target starts | may still run, cut off from Ceph and from the overlay; the pool's broker removes it when the pool returns, and the fence is held until it is gone |
+| Source VM afterwards | stopped before the target starts | may still run, cut off from Ceph and from the overlay; the pool's broker removes it when the pool returns; the fence is held until the broker reports the /64 drained and its routes are withdrawn (in `spec.underlayPrefix` mode only the route gate holds; see [Known gaps](failover.md#known-gaps)) |
 
 The failover path and its release gates are described in
-[Scheduling, rescheduling and failover](failover.md). A planned move whose source pool dies mid-move
+[Failover and rescheduling](failover.md). A planned move whose source pool dies mid-move
 needs no special case: the twin stays terminating, the pool goes lost, failover fences it and
 releases the twin, and the move completes.
 
@@ -193,10 +193,26 @@ claim that is not going away. A release check that errors is logged by the sourc
 Fencing a healthy pool does not release anything: `releaseFencedTwins` runs only once the pool is
 lost. There is deliberately no force flag. For the rare case where the proof cannot be made by the
 machinery (the pool's `ClusterPool` was deleted, the pool never had a lease, or its fence coverage is
-incomplete), an operator with write access to `compiledvms/status` can make the broker's report by
-hand. First check on the source pool that nothing can still run the VM or write its disks: no
-KubeVirt `VirtualMachine`, no VMI, no virt-launcher pod, and no claim carrying the VM's `workload`
-label. Then:
+incomplete, or its fences never confirm), an operator with write access to `compiledvms/status`
+can make the broker's report by hand. First check everything the broker's `letGo` would check:
+
+1. On the source pool, in namespace `<namespace>`, nothing can still run the VM or write its disks:
+    - no `CompiledVM` named `<namespace>-<vm>` (the vm-materializer recreates the KubeVirt VM from
+      it);
+    - no KubeVirt `VirtualMachine` and no VMI named `<namespace>-<vm>`;
+    - no virt-launcher pod owned by that VMI;
+    - no claim carrying the label `workload: <vm>`.
+2. On the dispatch, the twin you are about to patch is the retired one. This must print a timestamp:
+
+    ```sh
+    kubectl get compiledvms <namespace>-<vm> -n pool-<source> \
+      -o jsonpath='{.metadata.deletionTimestamp}'
+    ```
+
+    A reversed move reuses the twin's name, and a released mark on a live twin is never reset, so its
+    own later retirement would pass with no proof.
+
+Then:
 
 ```sh
 kubectl patch compiledvms <namespace>-<vm> -n pool-<source> --subresource=status --type=merge \
@@ -215,21 +231,12 @@ kubectl patch compiledvms <namespace>-<vm> -n pool-<source> --subresource=status
 
 What a live cross-cluster move needs, beyond what exists:
 
-- **Conntrack portability.** flowplane's connection tracking is per node. It holds established TCP
-  state, NAT translations (including the source port chosen for a SNAT'd flow), LB and DSR bindings,
-  and the firewall re-evaluation epoch. Even with memory transferred perfectly, packets of an existing
-  flow would reach a node with no entry: the firewall would evaluate them as new flows and drop them
-  unless a rule admits them, and SNAT'd return traffic would lose its port mapping. Without moving that state, a migration is warm,
-  not live. Hardware-offloaded flows on the source node's representor would not follow either.
-- **A cross-cluster handover.** KubeVirt's live migration is intra-cluster: a
-  `VirtualMachineInstanceMigration` runs between virt-handlers of one cluster. Crossing pools needs a
-  stretched pool, a libvirt-level handover orchestrated outside KubeVirt, or a decision to stay warm.
-- **ReadWriteMany disks.** KubeVirt live migration needs the disk attached on both ends at once. All
-  disks are `ReadWriteOnce` block volumes today, and the move gate exists precisely to forbid two
-  attachments.
-- **Route cutover.** A make-before-break move would have the source and target announce the same /32
-  at once. The reflector merges nexthops and agents program the first of a sorted set, so traffic
-  would stay on, or flip to, an arbitrary end. A migration-aware nexthop preference does not exist.
+| Requirement | Why | Status |
+|---|---|---|
+| Conntrack portability | flowplane's connection tracking is per node: established TCP state, NAT translations (including the source port chosen for a SNAT'd flow), LB and DSR bindings, and the firewall re-evaluation epoch. Without it, packets of an existing flow reach a node with no entry, the firewall evaluates them as new flows and drops them unless a rule admits them, and SNAT'd return traffic loses its port mapping. Hardware-offloaded flows on the source node's representor would not follow either. Without moving that state a migration is warm, not live. | Needs its own design |
+| A cross-cluster handover | KubeVirt's live migration is intra-cluster: a `VirtualMachineInstanceMigration` runs between virt-handlers of one cluster. Crossing pools needs a stretched pool, a libvirt-level handover orchestrated outside KubeVirt, or a decision to stay warm. | No approach chosen |
+| ReadWriteMany disks | KubeVirt live migration needs the disk attached on both ends at once. All disks are `ReadWriteOnce` block volumes today, and the move gate exists precisely to forbid two attachments. | Not built |
+| Route cutover | A make-before-break move has the source and target announce the same /32 at once. The reflector merges nexthops and agents program the first of a sorted set, so traffic would stay on, or flip to, an arbitrary end. | No migration-aware nexthop preference exists |
 
 Pool evacuation (cordoning a pool and moving all its VMs) is also not built; it would be a loop over
 the planned move described here.
@@ -256,5 +263,5 @@ Ceph pool.
 ## Where to go next
 
 - [Move a VM](../guides/move-a-vm.md): run a planned move on the lab.
-- [Scheduling, rescheduling and failover](failover.md): the fence that proves a lost pool let go.
+- [Failover and rescheduling](failover.md): the fence that proves a lost pool let go.
 - [Storage and VMs](storage-and-vms.md): how the disk keeps its identity.

@@ -22,8 +22,8 @@ The dispatch chart deploys `dispatch-apiserver` with kine and postgres, `dispatc
 
 ### Addresses and PKI
 
-The route bus, the broker's dispatch connection and the fence API all run over mTLS from one
-root. cert-manager is required in the cluster.
+The route bus, the connection from each pool's broker (`dispatch-broker`) to the dispatch, and
+the fence API all run over mTLS from one root. cert-manager is required in the cluster.
 
 | Value | Default | Meaning |
 | --- | --- | --- |
@@ -84,15 +84,15 @@ Tier-1 failover objects when enabled.
 | `uplink` | `eth1` | Declared as the overlay uplink, but no template reads it today: the `flowplane` wrapper uses `$XDP_UPLINK` with a fallback of `eth1`, and nothing sets `XDP_UPLINK`. Required by the schema. |
 | `underlayWithin` | `""` | The node-underlay aggregate (a CIDR). When set, `flowplane` picks the host address inside it as the underlay, past management and host-DNS addresses. Empty means infer it from the `dummy*` or `lo` fabric loopback. The lab sets `fd00:cafe::/32`. |
 
-The `flowplane` wrapper also adds every other `eth1` and up interface that is up as an extra
-uplink, so returns arriving over a second top-of-rack switch are handled too.
+The `flowplane` wrapper also passes every other interface named `eth1` or higher whose state is
+up as `--extra-uplink`, so returns arriving over a second top-of-rack switch are decapped too.
 
 ### Control-plane addresses
 
 | Value | Default | Meaning |
 | --- | --- | --- |
 | `reflectorAddress` | `[fd00:db8:0:1::1]:1338` | The reflector's session address that the agent dials. |
-| `apiserverAddress` | `https://[fd00:db8:0:1::1]:6443` | This pool's own apiserver, written into the agent's kubeconfig. The agent reads its `CompiledNIC`s here and never talks to the dispatch. That kubeconfig skips TLS verification and authenticates with the ServiceAccount token. The lab sets `https://127.0.0.1:6443`. |
+| `apiserverAddress` | `https://[fd00:db8:0:1::1]:6443` | This pool's own apiserver, written into the agent's kubeconfig. The agent reads its `CompiledNIC`s here. It never talks to the dispatch apiserver; its only link to the dispatch cluster is its route-bus session to the reflector. Because the agent runs `hostNetwork` on every node, `127.0.0.1` works only where every node runs an apiserver. That kubeconfig skips TLS verification and authenticates with the ServiceAccount token. The lab sets `https://127.0.0.1:6443`. |
 | `dispatchServer` | `https://[fd00:db8:0:1::1]:6444` | The `dispatch-apiserver` URL the broker dials directly, on 6444 rather than the host apiserver's 6443. The host must equal the dispatch chart's `dispatchApiserver.serviceIP`. |
 
 ### Broker and PKI
@@ -108,7 +108,7 @@ uplink, so returns arriving over a second top-of-rack switch are handled too.
 
 | Value | Default | Meaning |
 | --- | --- | --- |
-| `installCRDs` | `true` | Install the `net` and `compiled` CRDs from `crd-bases/` with the chart. Helm manages them on upgrade but does not delete one the chart stops shipping. |
+| `installCRDs` | `true` | Install the `net` and `compiled` CRDs from `crd-bases/` as ordinary chart resources. Helm updates them on upgrade and deletes any it no longer renders. Never upgrade a live pool to `installCRDs=false`, and never `helm uninstall` it: removing the compiled CRDs deletes every twin, and garbage collection then deletes the VMs, Pods and DataVolumes the materializers own. |
 | `vmMaterializer.enabled` | `false` | Deploy `vm-materializer`, which turns `CompiledVM`s into KubeVirt VMs and `CompiledVolumeAttachment`s into CDI `DataVolume`s. Enable only on pools with KubeVirt and CDI. |
 
 ### Tier-1 failover

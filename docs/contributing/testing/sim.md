@@ -47,7 +47,7 @@ tests can assert pacing without a kernel qdisc. Its methods map onto the eBPF en
 | `uplink_v6` | the IPv6 ingress path (`xdp_uplink_v6`, reached by tail call) |
 | `uplink_nat64_ingress` | NAT64 reply reconstruction on ingress |
 | `host_uplink`, `host_uplink_peer`, `host_uplink_v6` | seed a local guest's interface entry, then run ingress; the `_peer` variant marks a veth or netkit target, so the core chooses `bpf_redirect_peer` |
-| `wan_rx` | the edge's `wan_rx`: Maglev selection for a WAN load-balancer address |
+| `wan_rx` | the edge's `wan_rx`: Maglev selection for a WAN load-balancer address, and the NAT-return relay to a port block's owner |
 | `guest_arp_nd` | the guest-facing ARP and IPv6 ND responder |
 | `guest_dhcp4` | the DHCPv4 OFFER and ACK responder |
 

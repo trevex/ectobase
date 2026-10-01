@@ -9,8 +9,9 @@ rebuilds, what it loses, and the order in which to upgrade them so that no step 
 | Component | Replicas | On restart |
 |---|---|---|
 | `flowplane` | one per node (DaemonSet) | adopts its pinned maps and re-points its pinned links; forwarding does not stop |
-| `mesh-agent` | one per node (DaemonSet) | reconnects to the reflector and re-announces; the dataplane keeps its routes meanwhile |
-| `broker` | 1, `Recreate` | stateless; re-derives everything on its start-up pass |
+| agent (`mesh-agent`) | one per node (DaemonSet) | reconnects to the reflector and re-announces; the dataplane keeps its routes meanwhile |
+| broker (`dispatch-broker`) | 1, `Recreate` | stateless; re-derives everything on its start-up pass |
+| `pod-materializer`, `vm-materializer` | 1 each, `Recreate` | stateless; reconcile from the local twins on start |
 | `dispatch-controller` | 1, leader-elected | stateless; the new leader picks up from the API |
 | `mesh-controller` | 1, `Recreate`, leader-elected | stateless; the new leader picks up from the API |
 | `reflector` | 1, `Recreate` | starts empty; the agents rebuild its table, but its fences are lost |
@@ -26,9 +27,8 @@ A flowplane restart leaves no gap in forwarding. The eBPF programs and their sta
 kernel, independent of the process that loaded them. Two bpffs pinning mechanisms carry them across
 a restart: pinned maps keep the state, and pinned links keep the programs on their hooks.
 
-!!! success "Status: Implemented"
-    Restart-adopt with pinned maps and pinned links is the default on kernels 6.6 and later.
-    `TestRestartContinuity` in the live suite and the `make ha` contract test cover it.
+This is the default on kernels 6.6 and later. `TestRestartContinuity` in the live suite and the
+`make ha` contract test cover it; see [How it is tested](#how-it-is-tested).
 
 ### Pinned maps and the interface journal
 
@@ -159,14 +159,9 @@ after a whole walk:
 
 ### Held keys
 
-A **held key** is a route key that a local interface's self-route owns. It matters most during a VM
-move. When a VM lands on a node, the fabric may still carry its address with the old node as
-nexthop. The guest's self-route must win the kernel entry on this node, but the fabric's route must
-not be lost either.
-
-So while a local interface lives, its `/32` or `/128` key is held. A mesh `AddRoute` for that key
-updates only the shadow, and a mesh `WithdrawRoute` removes it only from the shadow. When the
-interface detaches, flowplane reinstalls whatever mesh route the shadow holds for the key.
+While a local interface lives, its self-route holds its `/32` or `/128` key: a mesh route for
+that key changes only flowplane's shadow, not the kernel entry. Why keys are held, and how the
+agent uses that during a VM move, is in [The route bus](route-bus.md).
 
 On adopt, every recovered interface's self-route is rewritten and holds its key again. That repairs
 a node where older code had let a mesh route overwrite a self-route. A self-route whose interface
@@ -188,62 +183,13 @@ missing slots is rewritten whole, and two addresses sharing one table each get t
 
 ## The agent after a flowplane restart
 
-The mesh-agent owns the routes it learned from the route bus. After a flowplane restart it re-sends
-them, because a flowplane restart can lose routes the agent still wants. This section covers how
-the agent notices, how it limits the re-send, and how it retries a route that fails.
-
-### Noticing the restart
-
-Every flowplane process generates a random instance ID at start and returns it in each
-`ListInterfaces` response. The agent calls `ListInterfaces` on every reconcile tick, every 5
-seconds. It queues a full re-send when either:
-
-- the instance ID changed, or
-- the dataplane answers again after a failed call.
-
-A dataplane that predates the instance ID returns an empty one. For that case the agent re-sends
-everything every 5 minutes as a safety net.
-
-### A budgeted re-send
-
-A full re-send is paid out over ticks, at most 256 dataplane calls per tick. The loop that makes
-those calls also drains the route-bus stream, and it drains nothing while it calls. Once the
-agent's 64-message receive buffer is full, messages back up in the reflector's per-session queue,
-which drops live deltas beyond 1024, and no resync can recover those. 256 calls take a fraction of
-a second, so the stream keeps moving. At that rate 10,000 routes take
-about three minutes. The queue puts held local host keys first, since those are the ones a
-restarted flowplane cannot recover from its maps.
-
-Each tick first converges the keys that drifted from what the agent last programmed. A converged
-tick makes no calls at all. The remaining budget then goes to the re-send queue. flowplane's
-`AddRoute` replaces in place, so re-sending a route it already holds is a harmless upsert.
-
-### Backoff that never delays a withdraw
-
-A call that flowplane refuses backs off per key: retries come 1, 2, 4 and more ticks apart, capped
-at 60 ticks (five minutes). Backoff applies only while the key still wants the exact route that
-failed:
-
-- A key that now wants nothing, such as a revoked peering or a forgotten VNI, is withdrawn at once.
-  A cross-VPC route must not outlive its peering by a backoff interval.
-- A key that now wants a different route starts over and goes out at once.
-- An unreachable dataplane is not the key's fault. It is logged but not backed off, so each key goes
-  out as soon as the dataplane is back.
-
-Keys still failing are summarised in the log about once a minute.
-
-### Unsubscribe hysteresis
-
-A VNI that drops out of the agent's subscriptions keeps its learned routes for three successful
-ticks, about 15 seconds, before they are forgotten and withdrawn. A guest pod that restarts
-detaches and re-attaches within a tick or two, and a single reconcile can read peering config
-without an import. Dropping a VNI's routes on either event would blackhole it until the
-re-subscribe replayed them.
-
-Firewall and QoS need no special restart handling. The agent replaces each local interface's whole
-firewall rule set (`ReplaceInterfaceFirewall`) on every tick, so after a restart the next tick
-re-asserts it. The route bus itself, including reconnects and the end-of-table prune, is covered
-in [The route bus](route-bus.md).
+Every flowplane process reports a fresh instance ID in `ListInterfaces`, and the agent reads it on
+every reconcile tick, every 5 seconds. When the ID changes, or the dataplane answers again after a
+failure, the agent re-sends every route it learned from the route bus. It sends held local host
+keys first, makes at most 256 dataplane calls per tick, and backs off per key in a way that never
+delays a withdraw. Firewall and QoS need no special handling: the agent replaces each local
+interface's whole firewall rule set on every tick anyway. The re-send budget, the backoff and the
+unsubscribe hysteresis are described in [The route bus](route-bus.md).
 
 ## Controller leader election
 
@@ -325,36 +271,24 @@ Two cautions:
 - Moving an existing installation from `emptyDir` to `pvc` starts postgres on an empty directory
   once. kine and the apiserver then need restarts, because kine creates its schema only at start
   and the apiserver keeps serving its stale watch cache. The steps are in
-  [Deploying with Helm](../operations/deploy-helm.md).
+  [Deploy with Helm](../operations/deploy-helm.md).
 
 ## Rollout order
 
-Components on both sides of each protocol must agree, so upgrade order matters. On first install
-the dispatch chart goes first, because its `ClusterIssuer` and root must exist before a pool can
-enroll. On upgrade the order reverses.
+On first install the dispatch chart goes first, because its `ClusterIssuer` and root must exist
+before a pool can enroll. On upgrade, three rules apply:
 
-1. Upgrade every pool chart, then the dispatch chart. A planned move, or deleting a VM, relies on
-   the pool's broker speaking the release protocol. An older broker treats a retired `CompiledVM`
-   as still desired and keeps recreating its VM, and it never reports a release. Nothing runs on
-   two pools, since the design fails closed, but every move off that pool and every VM delete on
-   it waits until the pool is upgraded.
-2. Within a pool, run the new flowplane before the new mesh-agent. The agent passes routes for its
-   own guests' addresses through to the dataplane, and relies on flowplane holding those keys. An
-   older flowplane lets such a route overwrite the guest's self-route, and a later withdraw deletes
-   it, which cuts the guest off on its own node. A normal `helm upgrade` can briefly pair a new
-   agent with an old flowplane on a node; the new flowplane repairs such a self-route when it
-   adopts. Never upgrade the `mesh` image on a pool on its own.
+1. Upgrade every pool chart before the dispatch chart, so every broker speaks the release protocol.
+2. Within a pool, run the new flowplane before the new agent, so flowplane already holds local keys.
 3. Within the dispatch chart, the apiserver, `dispatch-controller`, `mesh-controller` and
-   `reflector` move together. An older reflector answers the fence-release route check with
-   `Unimplemented`, and the dispatch-controller holds the fence on that, so a release waits until
-   the reflector catches up.
+   `reflector` move together.
 
-The operator steps, including a one-time patch for Deployments created before they switched to
-`Recreate`, are in [Deploying with Helm](../operations/deploy-helm.md).
+What breaks if you get each one wrong, and the operator steps, are in
+[Deploy with Helm](../operations/deploy-helm.md#upgrade-order).
 
 ## Where to go next
 
 - [Multi-cluster orchestration](multi-cluster.md): the broker's sync and release protocol.
 - [The route bus](route-bus.md): sessions, snapshots and fences in the reflector.
 - [Maps and state](dataplane/maps.md): the pinned maps flowplane adopts.
-- [Operator runbook](../operations/runbook.md): diagnosing a node or a pool in trouble.
+- [Runbook](../operations/runbook.md): diagnosing a node or a pool in trouble.

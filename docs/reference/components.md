@@ -1,7 +1,8 @@
 # Components
 
-ectobase is one control plane, the **dispatch**, driving many compute clusters, the **pools**,
-with a dataplane on every pool node. This page lists each running component: what it does,
+ectobase is one control plane, the dispatch, driving many compute clusters, the pools, with a
+dataplane on every pool node (terms as defined in the
+[vocabulary](../concepts/what-is-ectobase.md#vocabulary)). This page lists each running component: what it does,
 where it runs and what it talks to. Use it to find the binary behind a behaviour, or to read a
 `kubectl get pods` listing.
 
@@ -54,7 +55,7 @@ The aggregated apiserver that serves every ectobase API group: `net`, `compute`,
 `compiled` and `platform`. Users write intent into it and controllers write compiled objects into
 it. It stores everything in kine over postgres. With `pki.enabled` it runs `hostNetwork` on port
 6444, presents a cert-manager serving certificate and trusts the `ectobase-ca` root as a client
-CA, so brokers can reach it directly over mTLS. In-cluster clients reach it through the host
+CA, so brokers (`dispatch-broker`) can reach it directly over mTLS. In-cluster clients reach it through the host
 apiserver's aggregation layer. One replica, `Recreate` strategy.
 
 ### kine and postgres
@@ -82,7 +83,7 @@ is `dispatch-controller`; the reflector accepts admin calls only from that CN.
 
 ### mesh-controller
 
-The **compiler** (`mesh/cmd/controller`). It lowers intent into the `compiled` group and runs the
+The compiler (`mesh/cmd/controller`). It lowers intent into the `compiled` group and runs the
 central allocators beside the compilers:
 
 | Area | Reconcilers |
@@ -98,7 +99,7 @@ listener is off so a restart cannot collide on a host port.
 
 ### reflector
 
-The **reflector** (`mesh/cmd/reflector`) is the hub of the **route bus**. Agents open
+The reflector (`mesh/cmd/reflector`) is the hub of the route bus. Agents open
 `routebus.v1` sessions to it on port 1338, announce their routes, and receive the routes of the
 VNIs (virtual network identifiers) they subscribe to. The `dispatch-controller` uses a separate admin port, 1339, to set and
 clear route fences and to ask what a fenced prefix still announces (`AnnouncedFrom`). It runs
@@ -125,7 +126,8 @@ The per-node control loop (`mesh/cmd/agent`), a `hostNetwork` DaemonSet. It read
 and learns overlay routes over the route bus. It stamps the node's underlay /64 onto the `Node`
 object. With `pki.enabled` it creates its own cert-manager `Certificate` (CN = node name, IP SAN =
 its underlay address) from the pool's `ectobase-pool-ca` `Issuer`, so the reflector can tie each
-route's nexthop to the node that announced it. It never talks to the dispatch.
+route's nexthop to the node that announced it. It never talks to the dispatch apiserver; its
+only link to the dispatch cluster is its route-bus session to the reflector.
 
 ### flowplane-cni
 
@@ -164,8 +166,9 @@ KubeVirt and CDI. See [Storage and VMs](../architecture/storage-and-vms.md).
 No chart deploys the WAN edges. Each edge runs `flowplane serve --role edge`, which attaches
 `wan_rx` to the WAN-facing interface, and a `mesh-agent` with `--edge-loopback` and no
 kubeconfig. The edge agent mints its own route-bus certificate from the edge fleet's
-intermediate and serves `/readyz` only once its route-bus session has converged, so an edge can
-hold back its anycast advertisement until it has the load-balancer tables. In the lab both run
+intermediate. With `--health-addr` set, it answers `/readyz` with 200 only once its route-bus
+session has converged, meant for holding back the edge's anycast advertisement until it has the
+load-balancer tables; nothing in the lab gates the edge's advertisement on it yet. In the lab both run
 as containerlab nodes in each edge's network namespace. See [The WAN edge](../features/ns-edge.md).
 
 ## Deployment map

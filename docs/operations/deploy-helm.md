@@ -16,7 +16,7 @@ of the pool chart.
 | Chart | Runs on | Installs |
 |---|---|---|
 | `charts/ectobase-dispatch` | the dispatch cluster | `dispatch-apiserver` (aggregated apiserver) with kine and postgres, `dispatch-controller`, `mesh-controller` (the compiler), the `reflector`, and the `ectobase-ca` root CA with its `ClusterIssuer` |
-| `charts/ectobase-pool` | each pool cluster | the `flowplane` dataplane, `mesh-agent`, `dispatch-broker`, the `flowplane-cni` installer, `pod-materializer`, the `net` and `compiled` CRDs, two Multus `NetworkAttachmentDefinition`s, and, when enabled, `vm-materializer` and the Tier-1 failover objects |
+| `charts/ectobase-pool` | each pool cluster | the `flowplane` dataplane, `mesh-agent`, the broker (`dispatch-broker`), the `flowplane-cni` installer, `pod-materializer`, the `net` and `compiled` CRDs, two Multus `NetworkAttachmentDefinition`s, and, when enabled, `vm-materializer` and the [Tier-1](../architecture/failover.md#two-tiers) failover objects |
 
 Every value is listed in the [Helm values reference](../reference/helm-values.md). What each
 component does is in [Components](../reference/components.md).
@@ -59,10 +59,21 @@ starts or a `helm install` that the API rejects.
 | Multus | each pool | Pods and VMs reach the overlay as a secondary network through Multus and `flowplane-cni`. The lab installs a thin Multus DaemonSet after the pool chart. |
 | KubeVirt and CDI | pools with `vmMaterializer.enabled` | `vm-materializer` creates KubeVirt `VirtualMachine`s and CDI `DataVolume`s. The KubeVirt CR also needs the `NetworkBindingPlugins` feature gate and a `flowplane` network binding (`domainAttachmentType: tap`, NAD `ectobase-system/flowplane`); the lab sets both in `test/lab/internal/deploy/kubevirt.go`. |
 | medik8s NodeHealthCheck and Self Node Remediation | pools with `tier1Failover.enabled` | The chart renders their custom resources, not the operators. |
+| The six ectobase images | every cluster | The charts default to `ghcr.io/trevex/ectobase/<name>:dev`, but CI (`.github/workflows/docker.yml`) publishes only `flowplane`, tagged by commit SHA, `main` or git tag. Build all six with `make lab-app-images`, push them to a registry the nodes can reach, and set `images.*` on both charts. |
 
 Talos enforces the baseline Pod Security level cluster-wide, so on Talos the privileged
 namespaces are not optional. A plain kind cluster does not enforce PSA, but labelling the
 namespaces costs nothing.
+
+!!! warning "Dev-grade defaults"
+    Treat both charts as unhardened. In particular:
+
+    - `kine.password` defaults to `kine`. Postgres reads it only when it initialises an empty
+      data directory, so set it before the first install.
+    - The five `APIService`s that register the ectobase groups with the dispatch's host
+      apiserver use `insecureSkipTLSVerify: true`.
+    - The kubeconfig the pool chart writes for `mesh-agent` skips TLS verification of the pool's
+      apiserver; it authenticates with the agent's ServiceAccount token.
 
 ## Install the dispatch chart
 
@@ -133,15 +144,18 @@ them, because each one is scoped to a single pool. The lab generates them in
 | Namespace `pool-<pool>` | Where the compiler writes this pool's `Compiled*` twins. |
 | `ClusterPool` `<pool>` | The pool's inventory entry. Its name must be a DNS-1123 label of at most 58 characters, so that `pool-<pool>` is itself a legal namespace name. |
 | `RouteBusIdentity` `<pool>` | Carries the pool's intermediate-CA request and the signed certificate. |
-| Role and RoleBinding `dispatch-broker` in `pool-<pool>` | `get`, `list`, `watch` on the four compiled kinds; `get`, `update`, `patch` on `compiledvms/status` and `compiledvolumeattachments/status`. Bound to the user `ectobase:cluster:<pool>`. |
+| Role and RoleBinding `dispatch-broker` in `pool-<pool>` | The broker's access to this pool's twins. Bound to the user `ectobase:cluster:<pool>`. |
 | ServiceAccount `dispatch-broker-bootstrap-<pool>` in `system` | The identity behind the short-lived first-boot token. |
-| ClusterRole and ClusterRoleBinding `dispatch-broker-pool-<pool>` | `resourceNames: [<pool>]` access to its own `RouteBusIdentity` and `ClusterPool` (status writes only). Bound to both the user and the bootstrap ServiceAccount. |
+| ClusterRole and ClusterRoleBinding `dispatch-broker-pool-<pool>` | `resourceNames: [<pool>]` access to its own `RouteBusIdentity` (get and update, so it can file its CSR in `spec.request`) and its own `ClusterPool` (read, plus status writes). Bound to both the user and the bootstrap ServiceAccount. |
+
+The verbs each grant carries are listed in
+[Architecture overview](../architecture/overview.md#trust-boundaries).
 
 The scoping is the security boundary. A `RouteBusIdentity` holds a pool's intermediate CA, so a
 fleet-wide grant would let one pool's credential obtain another pool's CA and mint certificates
 for that pool's nodes. The identity is created ahead of time because RBAC cannot scope `create`
-by name. A broker can write only status subresources, so it can never change a spec, create a
-twin or delete one.
+by name. Apart from filing its own CSR, a broker writes only status subresources, so it can
+never change a workload's spec, create a twin or delete one.
 
 ## Install the pool chart
 
@@ -189,7 +203,10 @@ helm upgrade --install ectobase-pool charts/ectobase-pool \
 - `broker.clusterName` is required and must match the `ClusterPool` name. The chart refuses to
   render without it.
 - `apiserverAddress` is this pool's own apiserver, which the agent reads its `CompiledNIC`s from.
-  The agent never talks to the dispatch.
+  The agent never talks to the dispatch apiserver; its only link to the dispatch cluster is its
+  route-bus session to the reflector. `mesh-agent` is a `hostNetwork` DaemonSet on every node, so
+  `127.0.0.1:6443` works only where every node runs an apiserver, as in the lab's single-node
+  pools. On a pool with worker nodes, set an address every node can reach over the fabric.
 - `reflectorAddress` and `dispatchServer` point at the dispatch: the reflector's session port and
   `dispatch-apiserver` on 6444.
 - `underlayWithin` tells `flowplane` which host address is the underlay, past management and
@@ -256,9 +273,8 @@ flowchart LR
 
 A planned move and a VM delete both rely on the pool's broker reporting that it has let a
 retired `CompiledVM` twin go (`ReportReleases` in `dispatch/pkg/broker/release.go`). An old broker
-has no such report. It also treats a twin with a deletion timestamp as still wanted, so it keeps
-recreating the VM and its disks. Nothing is destroyed and nothing runs on two pools at once, but
-every move off that pool and every delete of a VM on it waits until the new broker lands.
+has no such report, so every move off that pool and every delete of a VM on it waits until the
+new broker lands.
 
 ### Dispatch components together
 
@@ -270,8 +286,8 @@ retired twins, and the VMs it rebinds wait on a release that never comes.
 The `reflector` must not lag the controller either. Before the controller lifts a recovered
 pool's fence, it asks the reflector (`AnnouncedFrom`) whether that pool still announces any
 address now placed on another pool. An old reflector answers `Unimplemented`; the controller
-treats that as a failed check and holds the fence until the reflector is upgraded too. The
-[runbook](runbook.md#a-pool-that-will-not-let-go) covers what that looks like.
+treats that as a failed check and holds the fence until the reflector is upgraded too.
+[Runbook](runbook.md#a-pool-that-will-not-let-go) covers what that looks like.
 
 ### flowplane before mesh-agent
 
@@ -283,6 +299,14 @@ node; the new `flowplane` repairs any self-route damaged that way when it adopts
 startup. Never upgrade the `mesh` image on a pool on its own.
 
 ## Upgrading an existing release
+
+!!! warning "Never drop the CRDs from a live pool"
+    The pool chart renders the `net` and `compiled` CRDs from `templates/crds.yaml` as ordinary
+    chart resources, without `helm.sh/resource-policy: keep`. Helm updates them on upgrade and
+    deletes any it no longer renders. Never upgrade a live pool to `installCRDs=false`, and never
+    `helm uninstall` it: removing the compiled CRDs deletes every twin, and garbage collection
+    then deletes the KubeVirt VMs, Pods and DataVolumes the materializers own through their
+    controller owner references.
 
 Three one-time steps apply to releases installed by older chart versions.
 

@@ -73,7 +73,7 @@ The deliver decision has three outcomes:
 - `tc_guest_dhcp` answers DHCPv4 with a fixed-layout reply built by `flowplane_core::dhcp` (address,
   gateway, MTU, DNS, host name), growing the skb to the reply length first. It answers DHCPv6 with
   code in the eBPF crate, because the DHCPv6 reply's option block has a length only known at run time.
-  On a DHCPv4 request it also learns the guest's MAC and writes it into `PORT_META` and `INTERFACES`.
+  On a DHCPv4 request it also learns the guest's MAC and writes it into `PORT_META`, `INTERFACES` and `INTERFACES6`.
 - `tc_guest_nat64` translates IPv6 to IPv4 (`process_guest_tx_nat64`), shrinking the packet by 20
   bytes with `bpf_skb_adjust_room`, then routes the IPv4 packet and encapsulates it like any other.
 - `tc_guest_egress_v6` is the IPv6 counterpart of the IPv4 pipeline (`process_guest_tx_v6`):
@@ -104,15 +104,22 @@ map functions cannot keep its packet bounds across the call.
 
 1. Load balancer: Maglev selects a backend for a load-balancer address. A local backend is
    delivered to; a remote one gets a new tunnel key toward its VTEP and goes straight back out through
-   `fp-geneve0`.
+   `fp-geneve0`. Only the WAN edges program load balancers today (see
+   [load balancing](../../features/loadbalancer.md)), so on compute nodes this arm runs in the
+   simulator only.
 2. NAT return: a reply to a registered NAT address has a reverse conntrack entry that restores the
    guest's address (and for NAT64, expands the IPv4 reply back to IPv6). No ingress firewall runs: it
    is the reply to a flow the guest started.
-3. Local interface: `INTERFACES[(VNI, destination)]` names a local device. A new flow meets the
+3. Floating IP: a destination in `FLOATING_IPS` is rewritten (DNAT) to the guest behind it, which
+   then goes through step 5.
+4. Neighbour NAT relay: a destination address and port inside a NAT block another node owns
+   (`NAT_OWNERS`, same VNI) gets a tunnel key toward the owner's VTEP and goes back out through
+   `fp-geneve0`.
+5. Local interface: `INTERFACES[(VNI, destination)]` names a local device. A new flow meets the
    interface's ingress firewall, the inner Ethernet header is rewritten, and the packet is delivered.
-4. Edge local deliver: on a WAN edge, a miss on `INTERFACES` finds the edge sentinel in `UNDERLAY`
+6. Edge local deliver: on a WAN edge, a miss on `INTERFACES` finds the edge sentinel in `UNDERLAY`
    and hands the packet to the local kernel.
-5. Drop: any other miss. A decapsulated overlay packet with no local owner never reaches the
+7. Drop: any other miss. A decapsulated overlay packet with no local owner never reaches the
    node's own stack.
 
 The glue then executes the result: a tunnel key and redirect to `fp-geneve0`, a `bpf_redirect`, a
@@ -127,13 +134,15 @@ delivery path has to account for this:
 - L2 guests (veth, tap, the VM's netkit L2 pair, a VF) get destination = the guest's MAC.
 - L3 netkit pods get the all-zero MAC. An L3 netkit device has no ARP and filters on destination
   MAC, accepting only its own all-zero address or broadcast and multicast.
-- The WAN edge's local delivery cannot fix this with a MAC rewrite alone, because the kernel marked
-  the packet type when the inner frame surfaced on `fp-geneve0`, before tc ran. The glue reclassifies
-  the skb as `PACKET_HOST` with `bpf_skb_change_type`, and `fp-geneve0` carries the gateway MAC so the
-  rewritten destination matches it.
+- The WAN edge's local delivery (`edge_local_deliver`) rewrites the destination to the primary
+  uplink's MAC (`LOCAL.uplink_mac`). That alone is not enough, because the kernel marked the packet
+  type when the inner frame surfaced on `fp-geneve0`, before tc ran. So the glue then reclassifies the
+  skb as `PACKET_HOST` with `bpf_skb_change_type`. On an edge, `fp-geneve0` is also created with
+  `--gateway-mac` set to the virtual-router MAC guests address (`02:00:00:00:00:01` in the lab), so
+  inner frames from guests already match the device.
 
 `bpf_redirect_peer` is used only when `uplink_rx` delivers to a container (veth or netkit L3), whose
-peer is the pod's interface. See [the overlay](../overlay.md#bpf_redirect_peer) for why VMs, VFs and
+peer is the pod's interface. See [the overlay](../overlay.md#delivering-with-bpf_redirect_peer) for why VMs, VFs and
 the same-host path use a plain redirect.
 
 ## wan_rx: the edge's WAN side
@@ -179,7 +188,7 @@ falling back to generic mode, and prints the first bytes of the latest packet ev
 - Use drop reasons. The `skb:kfree_skb` tracepoint carries the drop reason. Aggregating reason and
   location over a failing flow tells a `PACKET_OTHERHOST` drop from a netfilter drop or a header error,
   which all look the same to `tcpdump`.
-- Run the verifier. `make verifier` (root) loads every program through the kernel verifier. A
+- Run the verifier. `make verifier` (root) loads every forwarding program through the kernel verifier. A
   stack-budget regression only shows up there.
 
 ## Where to go next

@@ -76,7 +76,7 @@ blocks; `CHECK` is a no-op.
 `AttachState::attach` (`flowplane/flowplane/src/attach/mod.rs`):
 
 1. Validates the request: an interface id, at least one overlay IPv4 or IPv6 address, an explicit MAC
-   for VM device types, and a PCI address for a VF.
+   for the `tap`, `pod-tap` and `vf` device types, and a PCI address for a VF.
 2. Picks the MAC: the caller's, or one derived deterministically from the interface id, so a
    detach and re-attach keeps the same MAC.
 3. Checks idempotence (below) before touching any device.
@@ -99,8 +99,8 @@ VTEP. It carries no MTU: flowplane sets the guest MTU on the device itself (see
 | `device_type` | What flowplane builds | Delivery into the guest |
 |---|---|---|
 | `""` or `auto` (default) | `netkit` if the kernel can create a netkit device, else `veth` | as for the chosen type |
-| `netkit` | a netkit pair in L3 mode; the primary stays in the root namespace, the peer becomes the pod's interface | `bpf_redirect_peer` |
-| `veth` | a veth pair; the host end stays in the root namespace | `bpf_redirect_peer` |
+| `netkit` | a netkit pair in L3 mode; the primary stays in the root namespace, the peer becomes the pod's interface | `bpf_redirect_peer` from `uplink_rx`; plain `bpf_redirect` on the same-host path |
+| `veth` | a veth pair; the host end stays in the root namespace | `bpf_redirect_peer` from `uplink_rx`; plain `bpf_redirect` on the same-host path |
 | `pod-tap` | a netkit pair in L2 mode plus a tap in the pod namespace, for KubeVirt | `bpf_redirect` |
 | `tap` | a single root-namespace tap whose file descriptor goes to qemu | `bpf_redirect` |
 | `vf` | an SR-IOV VF moved into the pod; its switchdev representor is the datapath device | `bpf_redirect` |
@@ -185,7 +185,8 @@ flowplane does not configure anything inside the VM. The guest configures itself
 Advertisements, answered by the datapath (below).
 
 The `tap` device type, a single root-namespace tap whose file descriptor is handed to qemu, exists for
-non-KubeVirt use and the lab's smoke tests; the KubeVirt path does not use it.
+non-KubeVirt use and the host test scripts (`test/tap-attach-netns.sh`); the KubeVirt path does not
+use it.
 
 ## DHCP, ARP and ND
 
@@ -204,9 +205,10 @@ configured its address. See [DHCP, ARP and ND](../features/dhcp-arp-nd.md).
 
 ## After the attach: the agent finds the interface
 
-The CNI plugin only attaches. The mesh agent on the same node then notices the new interface and
-does the rest: it announces the interface's host routes on [the route bus](route-bus.md) and programs
-its firewall, NAT, load-balancer, peering and QoS policy from the `CompiledNIC`.
+The CNI plugin only attaches. The agent on the same node then notices the new interface and does the
+rest: it announces the interface's host routes, and those of any load-balancer address it backs, on
+[the route bus](route-bus.md), and programs its firewall, NAT, peering and QoS policy from the
+`CompiledNIC`.
 
 The agent decides that a `CompiledNIC` is local by matching its `(VNI, overlay IP)` against what
 flowplane's `ListInterfaces` reports (`localNIC` in `mesh/agent/reconcile.go`), never by a node name.
@@ -225,7 +227,7 @@ veth or netkit primary removes the pod-side peer too.
 ## SR-IOV VF offload
 
 !!! warning "Status: Partial"
-    VF attach and the flower offload of established east/west TCP flows are built and merged. They
+    VF attach and the flower offload of established east-west TCP flows are built and merged. They
     are tested on `netdevsim`, which proves only the control plane: the kernel accepts and returns
     the netlink messages, and the attach programs the maps. `netdevsim` does not offload tc-flower, so
     hardware forwarding is unproven on real NICs. SF (sub-function) backends and UDP offload are not
@@ -245,8 +247,8 @@ release the VF itself; the device plugin owns VF reclaim.
 
 ### Flow offload
 
-With `serve --offload`, flowplane runs an offload manager (`flowplane/src/offload.rs`)
-that polls conntrack every 5 s. A flow is eligible when it is plain east/west traffic (no NAT, load
+With `serve --offload`, flowplane runs an offload manager (`flowplane/flowplane/src/offload.rs`)
+that polls conntrack every 5 s. A flow is eligible when it is plain east-west traffic (no NAT, load
 balancing or NAT64 rewrite), TCP in the established state, and not due a firewall re-evaluation. For
 each eligible flow from an offloaded interface to a remote node, it installs a tc-flower filter on the
 representor: a 5-tuple match, then a `tunnel_key` set (VNI, remote VTEP, UDP 6081) and a `mirred`
@@ -260,6 +262,12 @@ to remove what it installs:
 - a filter whose hardware packet counter has not moved for 120 s is deleted, since an offloaded flow's
   software conntrack entry stops being refreshed;
 - a flow that closes, stops being eligible or moves to another VTEP is deleted or reinstalled.
+
+!!! warning "Suspected gap: same-node flows"
+    The manager treats any route with a non-zero nexthop as remote. A local guest's self-route
+    carries the node's own VTEP, so a same-node flow between two offloaded VFs may be offloaded as an
+    encapsulation to the node's own VTEP (`resolve_desired` in `offload.rs`). This has been reported
+    as a suspected code bug.
 
 ## Where to go next
 

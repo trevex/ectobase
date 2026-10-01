@@ -6,7 +6,7 @@ The code has three parts:
 
 - **flowplane**: the eBPF dataplane (Rust, aya, tcx), on every pool node and every WAN edge. Every forwarding decision is a map lookup. It carries tenant traffic as Geneve over a routed IPv6 fabric, and implements multi-VNI routing, stateful NAT (including NAT64), Maglev load balancing with DSR, a per-interface firewall, DHCP/ARP/ND responders and QoS shaping.
 - **mesh**: the network control plane (Go). The compiler lowers intent into per-pool `Compiled*` objects, a per-node agent programs flowplane from them, and the reflector distributes overlay routes over a custom route bus. The materializers that create Pods and KubeVirt VMs live here too.
-- **dispatch**: fleet orchestration (Go). An aggregated apiserver backed by kine and postgres serves the whole API; a per-pool broker syncs each pool's compiled objects down and status back up; the dispatch-controller schedules workloads onto pools and fails over VMs from a lost pool.
+- **dispatch**: fleet orchestration (Go). An aggregated apiserver backed by kine and postgres serves the whole API; a per-pool broker (`dispatch-broker`) syncs each pool's compiled objects down and status back up; the dispatch-controller schedules workloads onto pools and fails over VMs from a lost pool.
 
 ```mermaid
 flowchart TB

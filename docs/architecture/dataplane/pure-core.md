@@ -116,7 +116,7 @@ Two pieces of eBPF-side logic sit outside the core today:
 | Level | Command | Root | Proves |
 |---|---|---|---|
 | Core and simulator | `make sim` | no | The logic, over every case a scenario sets up, on one node or a multi-node fabric |
-| Verifier | `make verifier` | yes | Every program loads: stack budget, instruction limits, bounds |
+| Verifier | `make verifier` | yes | Every forwarding program loads: stack budget, instruction limits, bounds |
 | Byte-parity anchors | `make sim-anchor` | yes | The compiled bytecode, run through `BPF_PROG_TEST_RUN`, matches the simulator byte for byte |
 
 Anchors have a hard limit on the ingress side. A test skb from `BPF_PROG_TEST_RUN` carries no tunnel

@@ -53,10 +53,10 @@ the same kind of `NetworkInterface`. On the overlay a container and a VM look th
 { .card }
 
 flowplane, an eBPF dataplane on every node, carries tenant traffic in Geneve over IPv6.
-A VPC is fleet-wide: its workloads share one VNI and reach each other whichever pool
-they run in.
+A VPC is fleet-wide: its workloads share one VNI (the overlay's network identifier) and
+reach each other whichever pool they run in.
 
-:material-swap-horizontal: __Workloads that outlive a cluster__
+:material-swap-horizontal: __VMs that outlive a cluster__
 { .card }
 
 When a pool is lost, the dispatch fences it and reschedules its VMs elsewhere. A VM can

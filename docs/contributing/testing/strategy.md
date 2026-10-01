@@ -12,7 +12,7 @@ the datapath tiers together.
 |---|---|---|---|---|
 | Rust unit and layout | `make test` | `flowplane-common` `#[repr(C)]` layouts, `flowplane-control` map programming against an in-memory writer, and the `flowplane` daemon's unit tests (this also builds the eBPF object) | no | yes |
 | Datapath sim | `make sim` | `flowplane-core` unit tests and the in-process sim: byte-level behaviour of every datapath path, single node and across a multi-node `Fabric` | no | yes |
-| Go unit and envtest | `go test` per module, run by `make ci` | controllers, allocators, compilers, the broker, the reflector, failover and fencing, against a real in-process apiserver where needed (`KUBEBUILDER_ASSETS`) | no | yes |
+| Go unit and envtest | `go test` per module, run by `make ci` | controllers, allocators, compilers, the broker (`dispatch-broker`), the reflector, failover and fencing, against a real in-process apiserver where needed (`KUBEBUILDER_ASSETS`) | no | yes |
 | Chart tests | `make chart-test` | rendered chart output and snapshots, via `helm-unittest` | no | yes |
 | Verifier | `make verifier` | every forwarding program loads through the kernel verifier: stack and instruction limits | sudo | no |
 | Byte-parity anchors | `make sim-anchor` | the real bytecode, run with `BPF_PROG_TEST_RUN`, agrees with the native core on the same input | sudo | no |
@@ -54,7 +54,7 @@ The live suite (`test/lab/livetest/`, run by `lab test` as
 - zero-loss forwarding across a `flowplane` restart (`TestRestartContinuity`) and an edge
   restart (`TestEdgeLBSurvivesFlowplaneRestart`);
 - the fleet end to end: BGP and ECMP on the underlay, brokers and the reflector, load balancing
-  and NAT from intent, NAT64 and DNS64, VPC peering, planned moves, volume moves and Tier-2
+  and NAT from intent, NAT64 and DNS64, VPC peering, planned moves, volume moves and [Tier-2](../../architecture/failover.md#two-tiers)
   failover with Ceph fencing.
 
 Each live test skips when the fabric is not up. Each [guide](../../guides/index.md) names the

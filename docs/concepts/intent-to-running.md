@@ -1,7 +1,7 @@
 # From intent to a running workload
 
 Every request in ectobase takes the same path: you write intent on the dispatch, the
-compiler lowers it into `Compiled*` objects for one pool, the broker copies them into that
+compiler lowers it into `Compiled*` objects for one pool, the broker (`dispatch-broker`) copies them into that
 pool, and the materializers and the agent make them real. Status then flows back the
 other way. This page follows one VM through that path and explains why each stage exists.
 
@@ -46,7 +46,7 @@ sequenceDiagram
     M->>K: create a KubeVirt VirtualMachine (pinned MAC, flowplane binding)
     K->>F: launcher pod sandbox: flowplane-cni attaches the interface
     A->>F: list interfaces, find the new one
-    A->>F: program firewall, NAT, LB and QoS from its CompiledNIC
+    A->>F: program firewall, NAT and QoS from its CompiledNIC
     A->>R: announce (VNI, overlay IP) at this node's VTEP
     R-->>A: every other agent on that VNI learns the route
     B->>API: CompiledVM status.placement (pool, node, node /64)
@@ -61,12 +61,10 @@ interface's policy and the node's routes converged for as long as it runs.
 
 ### 1. Intent
 
-You write objects in four groups on the dispatch: `net.ectobase.dev` (`VPC`, `Subnet`,
-`NetworkInterface`, `FirewallPolicy`, `LoadBalancer`, `NATGateway`, `FloatingIP`,
-`VPCPeering`, `IPPool`), `compute.ectobase.dev` (`VirtualMachine`, `Container`),
-`storage.ectobase.dev` (`Volume`) and `platform.ectobase.dev` (`ClusterPool`). Intent
-says what you want, a VPC, an interface in it, a VM that owns the interface, and nothing
-about which node does what.
+You write objects in four of the five API groups on the dispatch (`net`, `compute`,
+`storage` and `platform`); [CRD interactions](../reference/crd-interactions.md) lists every
+kind and how they relate. Intent says what you want, a VPC, an interface in it, a VM that
+owns the interface, and nothing about which node does what.
 
 The fifth group, `compiled.ectobase.dev`, is output only. The compiler writes it; you
 don't.
@@ -133,8 +131,9 @@ Inside the pool, three consumers act on the twins.
   `CompiledNIC` (by annotation for a container, by MAC for a VM) and asks flowplane to
   attach the interface.
 - The mesh-agent sees the new interface on its node, matches it to its `CompiledNIC` by VNI
-  and overlay IP, and programs its firewall, NAT, load-balancer and QoS state. It then
-  announces the interface's address on the route bus.
+  and overlay IP, and programs its firewall, egress NAT and QoS state. It then announces
+  the interface's address on the route bus. For each load balancer the interface backs, it
+  announces the LB address too, which the WAN edges program.
 
 [Workloads](workloads.md) covers the container and VM paths in more detail.
 

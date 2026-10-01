@@ -4,12 +4,7 @@ ectobase spreads workloads over many Kubernetes clusters without making any of t
 others. You write intent once, on the dispatch. The dispatch compiles it into small, pool-scoped
 objects, decides which pool runs each workload, and lets each pool pull its own share. This page
 explains that path end to end: the API and its storage, the compilers, the `Compiled*` twins, the
-broker that moves them, scheduling, IP allocation, and how the dispatch decides a pool is healthy.
-
-!!! success "Status: Implemented"
-    The full path, from intent on the dispatch to a workload running on a pool, is implemented and
-    runs in the lab's live test suite. Failover from a lost pool is covered on its own page,
-    [Scheduling, rescheduling and failover](failover.md).
+broker (`dispatch-broker`) that moves them, scheduling, IP allocation, and how the dispatch decides a pool is healthy.
 
 ## The path in one picture
 
@@ -58,8 +53,9 @@ so the dispatch's host cluster installs no CRDs for them.
 | `compiled.ectobase.dev` | `CompiledNIC`, `CompiledVM`, `CompiledVolumeAttachment`, `CompiledContainer` |
 
 The API is aggregated for two reasons. One process owns the whole schema, so every client sees
-one consistent fleet API. And the pools need only the compiled subset, which the pool chart
-installs as ordinary CRDs, so no pool has to understand the intent schema.
+one consistent fleet API. And the pools need only the compiled subset, so no pool has to
+understand the intent schema. (The pool chart still installs the `net.ectobase.dev` CRDs alongside
+the compiled ones, but no pool component reads them.)
 
 The dispatch apiserver stores objects in kine, an etcd v3 shim, and kine stores them in postgres.
 Postgres holds all of the dispatch's state, so by default its data directory is a
@@ -194,7 +190,8 @@ The `compiled.ectobase.dev` group imports nothing from the intent groups, so a p
 nothing but this group. Even `CompiledVM.status.placement` uses its own `VMPlacement` type rather
 than the one in `compute.ectobase.dev`.
 
-The pool writes back only through twin status:
+Besides its `ClusterPool` status and its `RouteBusIdentity`, the pool writes back only through twin
+status:
 
 - `CompiledVM.status.placement`: the pool, node and node `/64` where the VM runs.
 - `CompiledVM.status.released`: the pool has let go of a retired twin's VM.
@@ -265,45 +262,11 @@ look alike to the sync.
 
 ### The release check
 
-A move waits for the old pool to let go of the VM, and the broker reports that in a separate work
-item, the release check (`ReportReleases`, `dispatch/pkg/broker/release.go`). For each retired
-`CompiledVM` twin it checks that nothing on the pool can still run the VM or write its disks:
-
-- no `CompiledVM`, KubeVirt `VirtualMachine` or `VirtualMachineInstance` of that name;
-- no virt-launcher pod owned by that VMI. A pod leaves the API only after kubelet has torn its
-  volumes down, so its absence means qemu is gone.
-- no PVC carrying the twin's `workload` label.
-
-Only then does it set `status.released`. The write is optimistic-locked, because a twin's name is
-not unique over time. A move that is reversed recreates a live twin under the same name, and a
-plain patch from a stale read would mark that new twin released.
-
-While any twin is still held, the release check runs again every 5 seconds rather than every minute.
-The teardown it waits for raises no dispatch event, and the move is stalled until it finishes.
-
-The release check is its own work item because the queue backs off per item. If it shared an item
-with the sync, an unrelated failing sync (one bad container twin, say) would stretch the release
-poll to the backoff ceiling, and every move off the pool would wait it out.
-
-```mermaid
-sequenceDiagram
-    autonumber
-    participant D as dispatch (pool-k02)
-    participant B as broker k02
-    participant P as pool k02
-    Note over D: twin retired: deletionTimestamp set,<br>held by source-released finalizer
-    D-->>B: watch event
-    B->>B: enqueue sync + release
-    B->>D: sync: list twins (retired twin not desired)
-    B->>P: delete CompiledVM downstream
-    P->>P: KubeVirt VM, VMI, launcher pod and disk claims are torn down
-    loop every 5 s while held
-        B->>P: release check: VM, VMI, launcher pod, PVCs gone?
-    end
-    B->>D: patch status.released = true (optimistic lock)
-    D->>D: mesh-controller drops the finalizer, twin disappears
-    Note over D: the new pool's twin can now be compiled
-```
+A second work item, the release check (`ReportReleases`, `dispatch/pkg/broker/release.go`), marks
+a retired `CompiledVM` twin `status.released` once nothing on the pool can still run that VM or
+write its disks, and polls every 5 seconds while any twin is still held. It is a separate item so
+that a failing sync's backoff never slows a move; what it checks, and how the move waits on it, is
+in [Moving a VM between clusters](vm-moves.md).
 
 ### One worker, deliberately
 
@@ -325,14 +288,15 @@ node or VMI list never delays a lease renewal.
 | Loop | Writes | Used for |
 |---|---|---|
 | Heartbeater | `ClusterPool.status.lease` (holder, renew time) and `status.allocatable`, the sum over Ready nodes | pool health and scheduling capacity |
-| Status reporter | `ClusterPool.status.nodePrefixes` (each node's underlay `/64`), `status.nodeDrain`, `CompiledVM.status.placement`, disk identities on `CompiledVolumeAttachment` | fencing, drain confirmation, placement, keeping a disk across a move |
+| Status reporter | `ClusterPool.status.nodePrefixes` (the distinct underlay `/64`s of its nodes; usually one per pool, since nodes share a `/64` and each holds a `/128` in it), `status.nodeDrain`, `CompiledVM.status.placement`, disk identities on `CompiledVolumeAttachment` | fencing, drain confirmation, placement, keeping a disk across a move |
 
-Both write `ClusterPool` status with a merge patch and no resourceVersion precondition. Three
-writers share that status subresource: the heartbeater, the status reporter, and the dispatch's
-pool-health controller. A full update from a cached read would conflict with the others and
-overwrite their fields.
+Both write `ClusterPool` status with a merge patch and no resourceVersion precondition. Four
+writers share that status subresource: the heartbeater, the status reporter, the dispatch's
+pool-health controller (`status.phase`), and failover (`status.fencedPrefixes`, and clearing a
+lost pool's `status.nodeDrain`). A full update from a cached read would conflict with the others
+and overwrite their fields.
 
-The node `/64` comes from an annotation the mesh-agent stamps on its own Node. A node without it is
+The node `/64` comes from an annotation the agent stamps on its own Node. A node without it is
 left out rather than guessed. When the VMI list fails, the reporter leaves `nodeDrain` exactly as
 stored. "Could not list" must never read as "nothing runs here", because the dispatch releases a
 fence on a drained `/64`.
@@ -489,7 +453,7 @@ pool stays bound. Fencing, rebinding and recovery are described in
 
 ## Where to go next
 
-- [Architecture overview](overview.md): every component, and the trust boundaries between them.
 - [Moving a VM between clusters](vm-moves.md): the release protocol a planned move uses.
 - [Scheduling, rescheduling and failover](failover.md): what happens when a pool is lost.
 - [HA and restarts](ha-and-restarts.md): leader election, persistence and rollout order.
+- [The overlay network](overlay.md): how workloads on different pools reach each other.

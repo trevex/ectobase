@@ -83,7 +83,7 @@ names would make the copy target collide with the build directory.
 
 | Path | What |
 |---|---|
-| `mesh/cmd/` | Five binaries, all in the `mesh` image: `agent`, `controller` (the compiler), `reflector`, `pod-materializer`, `vm-materializer`. Each has an `rbac.go` with its RBAC markers. |
+| `mesh/cmd/` | Five binaries, all in the `mesh` image: `agent`, `controller` (the compiler), `reflector`, `pod-materializer`, `vm-materializer`. All but the reflector have an `rbac.go` with their RBAC markers; the reflector holds no Kubernetes credentials. |
 | `mesh/agent/` | The per-node agent: desired-state computation from `CompiledNIC`s, reconcilers for firewall, load balancing, NAT, imports and QoS, the route-bus client, the node certificate and the node-prefix stamp. |
 | `mesh/controllers/` | Everything `mesh-controller` and the materializers run: the four compilers, the allocators (`vpc.go`, `subnet.go`, `ippool.go`, `nicipam.go`, `lbip.go`, `natgateway.go`, `ipalloc.go`), finalizers and the orphan sweep, the placement and disk-identity mirrors, volume reclaim, and the pod, VM and volume materializers. |
 | `mesh/allocator/` | Pure allocation helpers: IPAM, MACs, NAT port blocks. |

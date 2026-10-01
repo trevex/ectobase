@@ -75,7 +75,7 @@ exit. A kind's `+genclient` marker drives all of it, so a new kind gets a client
 | Groups | Output | Why |
 | --- | --- | --- |
 | `net`, `compiled` | `charts/ectobase-pool/crd-bases/` | Installed on each pool with `installCRDs`. The pool chart's `crds.yaml` template includes every file in that directory, so a changed field reaches the chart with no manual edit. |
-| `compute`, `storage`, `platform` | `test/crds/` | Shipped in no chart; the dispatch apiserver serves these groups itself. The copies exist for the envtest suites in `mesh/controllers`. |
+| `compute`, `storage`, `platform` | `test/crds/` | Shipped in no chart; the dispatch apiserver serves these groups itself. The copies exist for the envtest suites in `mesh/controllers` and `dispatch/test`. |
 
 The aggregated apiserver serves all five groups from the Go types, not from these manifests.
 

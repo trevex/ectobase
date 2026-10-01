@@ -58,7 +58,7 @@ Ceph RBD image.
 |---|---|---|
 | Workloads | `Container` and `VirtualMachine`, both scheduled onto pools | [Workloads](workloads.md) |
 | Networking | VPCs, subnets, interfaces, routing, firewall, NAT, load balancing, VPC peering, QoS, DHCP/ARP/ND | [Routing and VNIs](../features/routing-vni.md) |
-| Reaching the outside | WAN edges that announce public prefixes and carry N/S traffic | [The WAN edge](../features/ns-edge.md) |
+| Reaching the outside | WAN edges that announce public prefixes and carry north-south traffic | [The WAN edge](../features/ns-edge.md) |
 | Storage | Persistent RBD-backed `Volume`s for VMs, whose disk follows the VM between pools | [Storage and VMs](../architecture/storage-and-vms.md) |
 | Resilience | Fence-gated failover of a lost pool, and planned VM moves between pools | [Failover](../architecture/failover.md), [VM moves](../architecture/vm-moves.md) |
 
@@ -71,8 +71,8 @@ Knowing the boundaries saves time. All but the last one are deliberate.
   interface is added next to it.
 - It doesn't stretch one cluster across sites. Each pool is an independent Kubernetes
   cluster with its own control plane. A pool works from a local copy of its compiled
-  objects, so a short loss of contact with the dispatch doesn't stop its workloads. A pool
-  that stays unreachable is failed over.
+  objects, so a short loss of contact with the dispatch doesn't stop its workloads. The VMs
+  of a pool that stays unreachable are failed over to other pools; containers stay bound.
 - It doesn't use BGP for overlay routes. They travel over ectobase's own route bus. The
   underlay only has to route IPv6 to each node's VTEP; how it does that is up to the
   fabric (the lab uses eBGP).
@@ -107,7 +107,7 @@ These terms mean the same thing on every page. Each links to the page that cover
     Intent says what you want, not how a node achieves it.
 
 [Compiler](intent-to-running.md)
-:   The `mesh-controller` on the dispatch. It allocates addresses and VNIs, and lowers
+:   The mesh-controller on the dispatch. It allocates addresses and VNIs, and lowers
     intent into `Compiled*` objects for one pool.
 
 [Twin](intent-to-running.md)
@@ -115,7 +115,7 @@ These terms mean the same thing on every page. Each links to the page that cover
     the broker keeps of it in the pool.
 
 [Broker](../architecture/multi-cluster.md)
-:   Runs in each pool. It syncs that pool's twins down from the dispatch and reports status
+:   The broker (`dispatch-broker`) runs in each pool. It syncs that pool's twins down from the dispatch and reports status
     (lease, capacity, VM placement, disk identity, releases) back up.
 
 [Materializer](workloads.md)
@@ -136,18 +136,43 @@ These terms mean the same thing on every page. Each links to the page that cover
 [flowplane](../architecture/dataplane/index.md)
 :   The eBPF dataplane, written in Rust. It runs on every pool node and on each WAN edge.
 
+[Underlay](../architecture/overlay.md)
+:   The routed IPv6 fabric that connects every node in every pool and the WAN edges. It
+    only has to carry IPv6 between VTEPs and needs no routes for tenant addresses.
+
+[Overlay](../architecture/overlay.md)
+:   The tenant network that rides on the underlay. Workload traffic travels between nodes
+    encapsulated in Geneve, so tenant address ranges never appear on the fabric.
+
+[Geneve](../architecture/overlay.md)
+:   The tunnel encapsulation the overlay uses: an outer IPv6 and UDP header (port 6081)
+    plus a Geneve header that carries the VNI.
+
 [VTEP](../architecture/overlay.md)
 :   A node's tunnel endpoint: one `/128` underlay IPv6 address per node, shared by every
     interface on that node.
+
+[VPC](../features/routing-vni.md)
+:   An isolated tenant network. Each VPC has one VNI, and workloads in different VPCs share
+    no routes unless the VPCs are peered.
 
 [VNI](../features/routing-vni.md)
 :   The virtual network identifier carried in the Geneve header. Each VPC has one,
     allocated fleet-wide, and it keeps tenants' address ranges apart.
 
+[WAN edge](../features/ns-edge.md)
+:   A router at the border of the fabric that connects the overlay to outside networks. It
+    runs flowplane and a mesh-agent but is not a Kubernetes node.
+
+[East-west, north-south](../features/ns-edge.md)
+:   East-west traffic stays inside the fleet, between workloads. North-south traffic
+    crosses a WAN edge, to or from outside networks.
+
 [Fence](../architecture/failover.md)
-:   A barrier around a node's `/64` underlay prefix (or a pool's whole underlay prefix): a
-    route fence in the reflector plus a Ceph `NetworkFence` on storage. Failover fences a
-    pool before it reschedules anything from it.
+:   A barrier around an underlay prefix: the `/64` around a node's VTEP, which in the usual
+    topology every node of a pool shares, or the pool's whole underlay prefix. It is a route
+    fence in the reflector plus a Ceph `NetworkFence` on storage. Failover fences a pool
+    before it reschedules anything from it.
 
 [Drain](../architecture/failover.md)
 :   A pool's report that a fenced `/64` no longer hosts a stale VM. A fence is released
@@ -160,10 +185,11 @@ These terms mean the same thing on every page. Each links to the page that cover
 
 [Failover](../architecture/failover.md)
 :   What the dispatch does when a pool stays unreachable: fence it, then rebind its VMs to
-    healthy pools.
+    healthy pools. Containers on a lost pool stay bound to it.
 
 [Planned move](../architecture/vm-moves.md)
-:   A change of a VM's `spec.clusterName` while both pools are healthy.
+:   A change of a `VirtualMachine`'s `spec.clusterName` made on purpose, not by failover.
+    Changing a `Container`'s pool has no release gate and is not a planned move.
 
 ## Where to go next
 

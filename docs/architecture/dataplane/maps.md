@@ -12,7 +12,7 @@ shared byte for byte by the eBPF programs and userspace, with layout tests.
 |---|---|
 | The control core (`flowplane-control`, through the daemon's aya map writer) | All policy and configuration: interfaces, routes, firewall, NAT, load balancers, meters' rates, DHCP settings. Driven by `DataplaneNode` gRPC calls. |
 | The loader (`flowplane`) | Node identity (`LOCAL`), the Geneve device's ifindex, the tail-call program arrays. |
-| The eBPF programs | Connection state: `CONNTRACK`, `CONNTRACK6`, `NAT_CT6`, `DSR`, `DSR6`, meter state in `METER`, and the guest MAC learned from DHCPv4. |
+| The eBPF programs | Connection state: `CONNTRACK`, `CONNTRACK6`, `NAT_CT6`, `DSR`, `DSR6`, meter state in `METER`, and the guest MAC learned from DHCPv4 (into `PORT_META`, `INTERFACES` and `INTERFACES6`). |
 | The userspace sweepers | Conntrack aging (every 10 s), and the offload manager when enabled. |
 
 Almost every map is pinned under the pin directory (`/sys/fs/bpf/flowplane` by default), so the maps
@@ -50,7 +50,7 @@ direction. See [the firewall](../../features/firewall.md).
 
 | Map | Type (capacity) | Key → value | Holds |
 |---|---|---|---|
-| `FW_BIND` | hash (1024) | device ifindex → `FwBind` | The interface's ingress and egress scope ids. A missing entry or scope 0 denies. Rebinding is one write. |
+| `FW_BIND` | hash (1024) | device ifindex → `FwBind` | The interface's ingress and egress scope ids. A missing entry or scope 0 denies at the datapath; where a VPC's policy leaves a direction open, the compiler writes an explicit allow-all rule instead. Rebinding is one write. |
 | `FW_CLASS`, `FW_CLASS6` | hash of maps (4096 scopes) | scope id → LPM trie (up to 4096 entries) | Stage 1: the peer address prefix → a class local to the scope. |
 | `FW_POLICY`, `FW_POLICY6` | hash of maps (4096 scopes) | scope id → LPM trie (up to 16384 entries) | Stage 2: `[class, protocol, port]` → a precedence. |
 | `FW_EPOCH` | array (1) | 0 → `u32` | The node's firewall epoch, bumped after every `FW_BIND` change. A conntrack entry records the epoch it was checked under, so an established flow meets a changed policy again. |
@@ -110,6 +110,13 @@ See [load balancing](../../features/loadbalancer.md).
 
 There are no device maps (`DEVMAP`): every delivery is a `bpf_redirect` or `bpf_redirect_peer` on the
 skb.
+
+## Sizing
+
+The capacities above are compile-time defaults. The loader overrides a few at load time from
+environment variables: `FLOWPLANE_CONNTRACK_MAX` (also `--conntrack-max`), `FLOWPLANE_ROUTES_MAX`,
+`FLOWPLANE_INTERFACES_MAX`, `FLOWPLANE_MAGLEV_MAX`, `FLOWPLANE_NAT_MAX`, `FLOWPLANE_LB_MAX` and
+`FLOWPLANE_PORT_META_MAX` (`flowplane/flowplane/src/loader.rs`).
 
 ## Access through the Maps trait
 

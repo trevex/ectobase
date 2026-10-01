@@ -27,8 +27,9 @@ validated and reserved, and an empty one is allocated.
 
 Compilation waits on that status. The compiler emits a NIC's `CompiledNIC` only when the NIC is
 `Allocated` for its current generation, and sources the overlay addresses from
-`status.allocatedIPs`, never from `spec.ips`. A NIC whose pinned address falls outside every
-`Subnet` goes `Invalid` and does not compile. Watch `kubectl get networkinterfaces` and
+`status.allocatedIPs`, never from `spec.ips`. A NIC goes `Invalid` and does not compile when its
+pinned address lies outside its `Subnet`, or when it names no `subnetRef` in a VPC that has more
+than one `Subnet`. Watch `kubectl get networkinterfaces` and
 `kubectl get loadbalancers` for `Invalid`, `Pending` or `Exhausted` before you retire anything
 that relied on the old behaviour.
 
@@ -51,7 +52,14 @@ an internal range can't be handed out as a public address by accident.
 
 `LoadBalancer.spec.poolRef` is unchanged; it now resolves to an `IPPool`, so no load balancer
 needs editing. The pools themselves must be recreated, because an `LBPool` cannot become an
-`IPPool` in place and `type` has no safe default:
+`IPPool` in place and `type` has no safe default.
+
+!!! warning "These steps need an image that serves both kinds"
+    Steps 1 to 3 need a dispatch running an image from `ce7f5cf7`, the commit just before
+    `62744b07` retired `LBPool`: the only point in history where the load-balancer allocator
+    reads `IPPool` and `LBPool` is still served. On a current image `LBPool` is not served at
+    all, so old `LBPool` objects can be neither listed nor deleted; they stay behind as
+    unreachable rows in kine.
 
 1. For each `LBPool`, create an `IPPool` with the same name, the same prefixes and
    `reservedIPs`, and `type: public`. Every `LBPool` was a public range. Wait for
@@ -78,16 +86,14 @@ needs editing. The pools themselves must be recreated, because an `LBPool` canno
 3. Delete the old `LBPool` objects.
 
 On the dispatch nothing else is needed: the aggregated apiserver serves the `net` group, and the
-kind stops being served once the new image rolls out. A pool cluster that still has the old CRD
-needs it removed by hand:
+kind stops being served once the new image rolls out. On a pool, the chart rendered the
+`lbpools.net.ectobase.dev` CRD from `templates/crds.yaml`, so the pool-chart upgrade that drops it
+deletes it, along with any `LBPool` objects. Only a pool whose CRDs were installed outside the
+chart (`installCRDs=false`) needs it removed by hand:
 
 ```sh
 kubectl delete crd lbpools.net.ectobase.dev
 ```
-
-Helm does not remove a CRD it no longer renders, so after a pool chart upgrade the CRD and any
-`LBPool` objects stay readable with nothing reconciling them. Deleting the CRD deletes every
-remaining `LBPool` with it, so finish the three steps first.
 
 ## Keep-last-good: a bad edit does not tear down a workload
 
@@ -97,6 +103,11 @@ compile; it never deletes a compiled object. If a NIC or load balancer drops out
 mid-edit), it goes `Invalid` or `Pending` and its existing `CompiledNIC` stays. The datapath
 keeps serving the last good addresses until allocation succeeds again. A transient bad edit
 must not cut live connectivity.
+
+The status write that leaves `Allocated` also clears `status.allocatedIPs`, so the allocator no
+longer remembers the old address. An unpinned NIC can come back with a different one. Pin the
+address in `spec.ips` if it must not change. The MAC is not affected: `status.allocatedMAC` is
+kept.
 
 To actually revoke an allocation, delete the `NetworkInterface` or `LoadBalancer`. The source's
 finalizer then removes its compiled twin, and garbage collection removes the `IPAllocation`s it

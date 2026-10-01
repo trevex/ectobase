@@ -74,7 +74,8 @@ the fabric within seconds.
 
 Routes are scoped by VNI. `Subscribe(vni)` makes the reflector replay that VNI's current table in
 prefix order and close it with `EndOfRIB{vni, record_count}`. After that, every change to the VNI's
-table reaches every subscriber except the origin that caused it. Subscribing again to a VNI the
+table reaches its subscribers. An `Announce` skips the origin that sent it; a withdraw, including the
+withdraws when a session drops, reaches the origin too. Subscribing again to a VNI the
 session already holds does nothing; a client that wants a fresh replay unsubscribes first.
 
 A key can have several origins. HA WAN edges all announce the same default route, and several
@@ -106,7 +107,8 @@ dataplane and the `Compiled*` objects in its pool:
 
 - a host route (`/32` or `/128`) for each overlay address attached on this node, with the node's VTEP
   as the nexthop;
-- an anycast route for each load-balancer address a local interface backs;
+- a host route for each load-balancer address a local interface backs (every backend announces the
+  same key);
 - an SNAT port block for each local NAT source, owned by the node's VTEP;
 - on a WAN edge, the defaults `0.0.0.0/0`, `::/0` and `64:ff9b::/96` in the public VNI (VNI 0), and
   the edge's public records;
@@ -128,8 +130,13 @@ certificate carries its node name as the CN and its VTEP as the only IP SAN.
 
 On every session the reflector builds an **underlay guard** (`underlayGuard` in
 `mesh/reflector/underlayauthz.go`) from the verified certificate's IP SANs. It rejects any `Announce`
-whose nexthop, and any `AnnounceNat` or `AnnouncePublic` whose owner, is not exactly one of those
-addresses. A rejected announce is logged and dropped; the session stays up.
+whose primary nexthop (`nexthop_underlay`), and any `AnnounceNat` or `AnnouncePublic` whose owner, is
+not exactly one of those addresses. A rejected announce is logged and dropped; the session stays up.
+
+!!! warning "Known gap: extra nexthops"
+    `Announce` also has an `extra_nexthops` field, which the protocol marks as carried but not yet
+    used and agents never set. The reflector stores those addresses without the guard's check
+    (`mesh/reflector/server.go`), so today the check covers only the primary nexthop.
 
 The match is exact, not a prefix match, for two reasons:
 
@@ -138,8 +145,9 @@ The match is exact, not a prefix match, for two reasons:
 - Nodes in a cluster can share a `/64`; the lab gives every node in a cluster a `/128` from one
   cluster `/64`. A `/64` match would let any node announce a neighbour's VTEP and draw its traffic.
 
-A speaker that legitimately announces an owner other than its datapath address, a WAN edge pairing
-its anycast VTEP with its own loopback, carries both addresses as IP SANs.
+A speaker that legitimately announces an owner other than its datapath address carries both addresses
+as IP SANs. That is the WAN edge, whose `EDGE_UNDERLAY` record pairs its underlay address with its own
+control loopback.
 
 Withdraws are guarded too. A route `Withdraw` only ever removes the session's own origin from the
 key. `WithdrawNat` and `WithdrawPublic` succeed only if this session's origin announced the stored
@@ -169,11 +177,16 @@ flowchart TB
 
 Each pool's broker generates an intermediate key locally and sends only a CSR to the dispatch. The
 signer (`dispatch/pkg/pki`) returns a CA certificate that cannot sign further CAs and is
-name-constrained to the pool's DNS domain and its underlay ranges (`pki.underlayCIDRs` in the pool
-chart). Go's TLS verification enforces those constraints, so one pool's intermediate cannot mint a
-valid leaf for another pool's addresses. Each agent then mints its own leaf from the pool's
+name-constrained to the pool's DNS domain and, if they are set, its underlay ranges
+(`pki.underlayCIDRs` in the pool chart). Go's TLS verification enforces those constraints. Each agent then mints its own leaf from the pool's
 cert-manager `Issuer` (`mesh/agent/nodecert.go`). A WAN edge has no cert-manager; its agent mints its
 leaf in-process from an edge CA directory (`--routebus-intermediate`).
+
+!!! warning "Set `pki.underlayCIDRs` in production"
+    The IP name constraint exists only when `pki.underlayCIDRs` is set; with no ranges the signer adds
+    none (`dispatch/pkg/pki/signer.go`). The pool chart's default is empty. Without it, one pool's
+    intermediate can mint a valid leaf for another pool's addresses, and the reflector's exact-match
+    check would accept it. The lab sets it to each pool's `/48`.
 
 ## Fences
 
@@ -188,8 +201,8 @@ A fence is a filter on advertised nexthops, not a deletion:
   out of what subscribers are told, and an announce from inside a fenced prefix is stored but not
   advertised.
 - Changes fan out. `SetFence` recomputes every route: a key with nothing left becomes a WITHDRAW,
-  and a key another origin still announces becomes an ADD with the remaining nexthops (an anycast
-  route, or a VM now running on another pool). `ClearFence` re-advertises from what the RIB stored.
+  and a key another origin still announces becomes an ADD with the remaining nexthops (a key several
+  nodes announce, or a VM now running on another pool). `ClearFence` re-advertises from what the RIB stored.
 - A key's own origins are skipped. The fence fanout goes to every subscriber except the key's
   origins. The origin knows its own route, and an ADD for its own guest's `/32` would overwrite the
   guest's local self-route.
@@ -202,8 +215,11 @@ API is on its own listener and only accepts the client certificate CN `dispatch-
 (`--admin-client-cn`), so an agent with a valid session certificate cannot fence anything.
 
 !!! note
-    The RIB and the fence set live in the reflector's memory. A restarted reflector starts empty;
-    agents re-announce when they reconnect.
+    The RIB and the fence set live in the reflector's memory. A restarted reflector starts empty.
+    Agents re-announce their routes when they reconnect, but nothing re-announces a fence: failover
+    sets it again on its next pass over a pool that is still lost, which it requeues every failover
+    threshold. Until then the fence is missing. Once the pool counts as recovered but its fence is
+    still held, nothing sets the fence again. See [HA and restarts](ha-and-restarts.md).
 
 ### AnnouncedFrom: the release gate
 
@@ -220,15 +236,16 @@ nexthop of each holding. A key matches in its own spelling or in canonical form.
 Failover asks it about the addresses of every workload now placed on another pool, and keeps both
 fences while any of them is still announced from the fenced prefix. The pool then shows a
 `FenceReleaseBlocked` condition naming the holder. The question is deliberately narrow: a recovered
-pool legitimately shares keys with other origins, such as its east/west load-balancer anycast
-addresses, and those must not hold its fence. See [failover](failover.md).
+pool legitimately shares keys with other origins, such as the load-balancer host routes its backends
+announce, and those must not hold its fence. See [failover](failover.md).
 
 ## From the bus into flowplane
 
 The agent programs learned routes into flowplane in two halves. Each `RouteUpdate` is applied as it
 arrives (event-driven), and every reconcile tick converges whatever is left (level-triggered). The
-level-triggered half is what makes the system robust: a failed call, a flowplane restart, or a
-peering change with no route update at all are all caught on the next tick.
+level-triggered half recovers what the event-driven half misses: an `AddRoute` or `WithdrawRoute`
+that failed, routes a restarted flowplane lost, and a peering or egress change that arrives with no
+route update at all. Each is put right on the next tick.
 
 ### Desired versus programmed
 
@@ -312,14 +329,14 @@ the pinned `ROUTES` maps (`adopt_routes`), but a mesh route that a self-route wa
 never in the kernel, so it is lost. The instance-id re-send restores it within one agent tick.
 
 !!! warning "Rollout order"
-    The agent relies on flowplane holding local keys. Deploy flowplane before the mesh agent on a
+    The agent relies on flowplane holding local keys. Deploy flowplane before the agent on a
     pool. Against an older flowplane, a passed-through `AddRoute` for a local key replaces the
     self-route with an encapsulation, and a `WithdrawRoute` deletes it.
 
 ## Why not BGP for the overlay
 
 Overlay routes change often, come in several types (routes, NAT blocks, edge identities), and need
-policy hooks that BGP does not have: per-VNI scoping, anycast reference counting, fast withdraw on
+policy hooks that BGP does not have: per-VNI scoping, reference counting of keys several nodes announce, fast withdraw on
 session loss, certificate-bound origins and fences. A small typed protocol expresses all of that
 directly. BGP stays where it fits: the lab's fabric routes the VTEP `/128`s with it, and the WAN edges
 announce the platform's public prefixes over it.

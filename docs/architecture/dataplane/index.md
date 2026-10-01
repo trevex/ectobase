@@ -112,10 +112,11 @@ flowplane creates only after the datapath is loaded and attached.
 | Caller | RPCs |
 |---|---|
 | `flowplane-cni` | `AttachInterface`, `DetachInterface` |
-| mesh agent, routes | `ListInterfaces`, `AddRoute`, `WithdrawRoute` |
-| mesh agent, NAT | `AddNatSource`, `WithdrawNatSource`, `AddNeighborNat`, `WithdrawNeighborNat`, `ReplaceNeighborNats` |
-| mesh agent, load balancing | `AddLoadBalancer`, `DelLoadBalancer`, `AddLbBackend`, `DelLbBackend` |
-| mesh agent, policy | `ReplaceInterfaceFirewall`, `ConfigureQoS` |
+| agent, routes | `ListInterfaces`, `AddRoute`, `WithdrawRoute` |
+| agent, NAT | `AddNatSource`, `WithdrawNatSource`, `AddNeighborNat`, `WithdrawNeighborNat`, `ReplaceNeighborNats` |
+| agent, load balancing (WAN edges only) | `AddLoadBalancer`, `DelLoadBalancer`, `AddLbBackend`, `DelLbBackend` |
+| agent, policy | `ReplaceInterfaceFirewall`, `ConfigureQoS` |
+| none (unused) | `ConfigureNetwork`, a no-op |
 
 Most calls are idempotent or declarative by design: `AddRoute` replaces an existing route in place,
 withdrawing an absent route is not an error, and `ReplaceInterfaceFirewall` and `ReplaceNeighborNats`
@@ -136,7 +137,7 @@ covers the mechanism.
 The eBPF verifier limits each program to a 512-byte stack across nested calls, and much of the
 program structure (separate tail-called programs, out-of-line helpers, `uplink_dsr_note` as its own
 program) exists to stay under it. `make ci` cannot see a verifier rejection; `make verifier` (needs
-root) loads every program through the kernel verifier and is part of finishing any datapath change.
+root) loads every forwarding program through the kernel verifier and is part of finishing any datapath change.
 
 ## Where to go next
 

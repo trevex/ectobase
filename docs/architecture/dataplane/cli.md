@@ -21,19 +21,21 @@ attach and how the maps get filled. This page documents the subcommands in
 1. resolves the node's VTEP;
 2. creates or confirms `fp-geneve0` and attaches `uplink_dsr_note` and `uplink_rx` to it, or adopts
    the pinned maps and links of a previous run;
-3. derives the guest MTU;
-4. on an edge, attaches `wan_rx` to the WAN uplink and writes the local-deliver sentinel;
+3. on an edge, attaches `wan_rx` to the WAN uplink and writes the local-deliver sentinel; attaches
+   any extra uplinks;
+4. derives the guest MTU;
 5. starts conntrack aging and, with `--offload`, the offload manager;
-6. serves `DataplaneNode` and the gRPC health service.
+6. on adopt, re-points or re-attaches the guest program of each recovered interface;
+7. serves `DataplaneNode` and the gRPC health service.
 
-All map state then comes from gRPC: the CNI plugin attaches interfaces, and the mesh agent programs
+All map state then comes from gRPC: the CNI plugin attaches interfaces, and the agent programs
 routes, NAT, load balancers, firewalls and QoS. See [the dataplane overview](index.md).
 
 | Flag | Meaning |
 |---|---|
 | `--addr` | Required. A `unix://` path binds a Unix socket with mode `0600` (the deployed form: `unix:///run/flowplane/dataplane.sock`); anything else is parsed as a TCP address. |
 | `--uplink` | Required. The primary fabric uplink: its MAC and ifindex go into `LOCAL`, it gets the `fq` qdisc for EDT pacing, and its MTU feeds the guest MTU. `uplink_rx` does not attach here; it attaches to `fp-geneve0`. |
-| `--extra-uplink` | More fabric uplinks (repeatable). They count toward the guest MTU. Decapsulation needs no per-uplink attach, because `fp-geneve0` receives from every uplink. |
+| `--extra-uplink` | More fabric uplinks (repeatable). They count toward the guest MTU and each gets an `fq` qdisc. `serve` still attaches `uplink_rx` to each, where it sees only encapsulated frames and passes them; decapsulation happens on `fp-geneve0`, which receives from every uplink. |
 | `--role node\|edge` | `node` (default) or `edge`. An edge also attaches `wan_rx` and writes the local-deliver sentinel into `UNDERLAY`. |
 | `--wan-uplink` | The WAN-facing interface `wan_rx` attaches to. Required with `--role edge`. |
 | `--local-underlay` | The node's VTEP. Overrides every other source. |
@@ -51,8 +53,10 @@ routes, NAT, load balancers, firewalls and QoS. See [the dataplane overview](ind
 ### The VTEP
 
 Without `--local-underlay`, `serve` resolves the VTEP in this order: the host address inside
-`--underlay-within`; the kubelet node IP in `HOST_IP` or `NODE_IP` (set from `status.hostIP`); the
-address on a `lo` or `dummy*` fabric loopback. It fails if none applies.
+`--underlay-within`; `HOST_IP` or `NODE_IP`, if it holds an IPv6 address; the
+address on a `lo` or `dummy*` fabric loopback. It fails if none applies. The pool chart sets neither
+environment variable, so deployed nodes rely on `--underlay-within` (the chart's `underlayWithin`
+value) or on loopback inference.
 
 ### The guest MTU
 
@@ -105,7 +109,7 @@ no Kubernetes.
 `tc-bringup` attaches `tc_guest_tx` to one device (`--tap`) and programs that device's `PORT_META`,
 the DHCP settings and, optionally, `LOCAL` (`--uplink`) and routes (`--remote`, `--remote6`). It
 exercises the guest edge on its own: the DHCP and ND responders and the egress decision. It does not
-create `fp-geneve0`. The tap and DHCP smoke scripts under `test/` use it.
+create `fp-geneve0`. `test/tc-dhcp-netns.sh` and `test/tc-egress-netns.sh` use it.
 
 ## load and inspect
 

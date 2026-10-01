@@ -92,15 +92,16 @@ KubeVirt `runStrategy`, optional `cloudInit` user data, `interfaceRefs` and `vol
   new pool. On pool loss, [failover](../architecture/failover.md) rebinds it.
 
 !!! warning "Status: Partial"
-    A VM gets one overlay interface. flowplane-cni finds the interface by the single MAC in
-    the launcher pod's Multus annotation, and it rejects a launcher with several.
+    A VM gets one overlay interface. flowplane-cni finds the interface by the MAC in the
+    launcher pod's Multus annotation and cannot tell several flowplane interfaces apart, so
+    only single-interface VMs are supported.
 
 ### Volumes
 
 A `Volume` (`storage.ectobase.dev`) is a persistent RBD disk: a `size`, an optional
 `storageClass`, and an optional `bootImage` to import into it. The disk belongs to the
 `Volume`, not to the pool it was first provisioned on. Once a pool provisions it, the
-broker reports the disk's CSI identity, and the compiler records it on the `Volume`'s
+broker (`dispatch-broker`) reports the disk's CSI identity, and the compiler records it on the `Volume`'s
 `status.diskIdentity`. When the VM lands on another pool, that pool binds the same RBD
 image through a static PersistentVolume instead of provisioning a new one.
 [Storage and VMs](../architecture/storage-and-vms.md) covers the details.

@@ -1,83 +1,48 @@
-# Scheduling, rescheduling and failover
+# Failover and rescheduling
 
-This page explains how the dispatch places a VM on a pool, how it notices that a pool is gone, and
-how it moves that pool's VMs elsewhere without ever letting two copies of a VM write the same disk.
-It also covers the way back: how a recovered pool earns its fences off again, and what to do when
-it does not.
+This page explains what the dispatch does when a pool is lost: how it notices, fences, rebinds the
+pool's VMs, and lets the fence go once the pool is back. Throughout, it never lets two copies of a VM
+write the same disk. The page also covers what an operator does when a recovered pool's fence does
+not come off.
 
-Terms used here: the **dispatch** is the fleet control plane; a **pool** is a compute cluster,
-represented by a `ClusterPool`, whose twins live in namespace `pool-<name>` on the dispatch; the
-**broker** runs in each pool and syncs twins down and status up; the **reflector** is the hub of
-the route bus. A **fence** on a prefix is two things at once: a reflector route fence and a Ceph
-`NetworkFence`.
+The [dispatch](../concepts/what-is-ectobase.md#vocabulary) is the fleet control plane, and each
+[pool](../concepts/what-is-ectobase.md#vocabulary) is a compute cluster with its own namespace
+`pool-<name>` on the dispatch. A [fence](../concepts/what-is-ectobase.md#vocabulary) on a prefix is
+two things at once: a reflector route fence and a Ceph `NetworkFence`.
 
 !!! warning "Status: Partial"
     Fencing, rebinding, the release of retired twins and the drain-gated recovery are exercised end
-    to end on the lab by `TestTier2Failover`, which checks the Ceph blocklist and that the target
-    pool boots the original disk by CSI handle. The route gate on fence release is covered by envtest
-    only: no live run has yet had to wait on it. Tier-2 has had no soak or chaos testing.
+    to end on the lab by `TestTier2Failover`. It checks the Ceph blocklist, and that the target pool
+    creates the VMI and binds the original disk by CSI handle; it does not require the guest to
+    reach `Running`. The route gate on fence release is covered by unit tests against a fake client
+    and an in-process reflector RIB; no live run has yet had to wait on it. Tier-2 has had no soak or
+    chaos testing.
 
 ## Two tiers
 
 ectobase remediates at two scopes that do not depend on each other.
 
-- **Tier-1, inside a pool.** A dead node is handled by the pool itself, with no dispatch involvement.
-  KubeVirt restarts a VM elsewhere in the pool (the compiler defaults `runStrategy` to
-  `RerunOnFailure`), and the pool chart can render a medik8s `NodeHealthCheck` and
-  `SelfNodeRemediationTemplate` (`tier1Failover.enabled`, off by default) to reboot or taint the
-  node out of service.
-- **Tier-2, across pools.** When a whole pool is lost, the dispatch fences it and rebinds its VMs to
-  healthy pools.
+| Tier | Scope | What acts |
+|---|---|---|
+| Tier-1 | one node, inside a pool | The pool itself, with no dispatch involvement. KubeVirt restarts a VM elsewhere in the pool (the compiler defaults `runStrategy` to `RerunOnFailure`), and the pool chart can render a medik8s `NodeHealthCheck` and `SelfNodeRemediationTemplate` to reboot or taint the node out of service. |
+| Tier-2 | a whole pool | The dispatch fences the pool and rebinds its VMs to healthy pools. |
 
 A node failure is common and recoverable in place. Losing a pool is rare, and recovering from it
 means starting stateful VMs on other hardware, which is only safe once the old hardware provably
 cannot write their disks. Different problems, so different mechanisms. Tier-2's threshold is long
-enough that Tier-1 has normally handled a node blip before Tier-2 would act.
+enough that Tier-1 has normally handled a node blip before Tier-2 would act. The Tier-1 chart values
+(`tier1Failover.*`, off by default) are listed in [Helm values](../reference/helm-values.md).
 
-The Tier-1 values in the pool chart:
-
-```yaml
-tier1Failover:
-  enabled: false                          # renders nothing when false
-  snrNamespace: self-node-remediation
-  unhealthyThreshold: 60s                 # node Ready=Unknown/False this long before remediation
-  minHealthy: "51%"                       # never remediate below this healthy quorum
-  remediationStrategy: OutOfServiceTaint  # Automatic | ResourceDeletion | OutOfServiceTaint
-  watchdog:
-    enabled: false                        # true arms /dev/watchdog for a hardware self-fence
-    device: /dev/watchdog
-```
-
-The rest of this page is Tier-2.
-
-## Initial placement
-
-A VM declared without `spec.clusterName` is bound by the dispatch scheduler. The scheduler only picks
-the pool; inside the pool, KubeVirt and kube-scheduler pick the node.
-
-The scheduler (`dispatch/pkg/scheduler`) considers pools that are:
-
-- in phase `Ready`,
-- matched by the VM's `poolSelector`, if it has one, and
-- able to fit the VM: for every requested resource, the requests of every VM and `Container`
-  already bound to the pool plus this VM's must stay within the pool's reported `allocatable`.
-
-Among those it picks the pool with the highest minimum free fraction across the requested resources,
-breaking ties by name. It writes `spec.clusterName` and sets the VM's `Scheduled` condition to
-`True` (`Bound`), or to `False` (`Unschedulable`) when nothing fits. Binds are serialized by a single
-reconcile worker so two VMs cannot both claim the last capacity.
-
-!!! note
-    The initial scheduler does not read `spec.antiAffinity`. Only failover's batch placement,
-    described below, honours it.
-
-Once bound, `spec.clusterName` is the VM's placement. Changing it is a move, whoever changes it; see
-[Moving a VM between clusters](vm-moves.md).
+The rest of this page is Tier-2. How a VM gets its pool in the first place, and what
+`spec.clusterName` means, is in
+[Multi-cluster orchestration](multi-cluster.md#scheduling-how-a-workload-gets-a-pool); changing that
+field later is a move, described in [Moving a VM between clusters](vm-moves.md).
 
 ## Detecting a lost pool
 
-The dispatch learns that a pool is alive from its broker's lease. This section explains how a stale
-lease turns into a failover.
+The dispatch learns that a pool is alive from its broker's lease; how the lease drives the pool's
+phase is described in [Multi-cluster orchestration](multi-cluster.md#pool-health). Failover adds one
+more threshold on top.
 
 ```mermaid
 stateDiagram-v2
@@ -94,20 +59,11 @@ stateDiagram-v2
     end note
 ```
 
-1. The broker renews `status.lease.renewTime` on its `ClusterPool` every 10 seconds.
-2. The pool-health reconciler (`dispatch/pkg/clusterpool`) derives `status.phase`: `Pending` with no
-   lease, `Ready` when the lease is at most `HealthStale` (30 s) old, `Unknown` when older. It mirrors
-   the phase into a `Ready` condition (`LeaseFresh`, `LeaseExpired` or `NoLease`).
-3. The failover reconciler (`dispatch/pkg/failover`) treats a pool as lost when its phase is
-   `Unknown` and its lease is older than `FailoverThreshold` (2 minutes).
-
-Two fail-safe defaults sit here. A pool with no lease timing at all is never lost: without evidence
-of how long it has been gone, the dispatch does nothing destructive. And the 2-minute threshold is
-deliberately far above the 30-second health window.
-
-Only one dispatch-controller acts at a time. Two would each fence and rebind the same pool, so the
-manager holds the leader-election Lease `ectobase-dispatch-controller` before it starts any
-reconciler. See [HA and restarts](ha-and-restarts.md).
+The failover reconciler (`dispatch/pkg/failover`) treats a pool as lost when its phase is `Unknown`
+and its lease is older than `FailoverThreshold` (2 minutes), far above the 30-second health window.
+A pool with no lease timing at all is never lost: without evidence of how long it has been gone, the
+dispatch does nothing destructive. Only one dispatch-controller acts at a time, under leader election;
+see [HA and restarts](ha-and-restarts.md).
 
 ## Failover, step by step
 
@@ -176,17 +132,15 @@ can no longer be reached.
 
 For each target, the reconciler applies both fences and needs both confirmed:
 
-- **Storage fence.** A csi-addons `NetworkFence` puts the prefix on the Ceph blocklist. It counts as
-  confirmed only when the CR is `Fenced` and reports `Succeeded` with the message
-  `fencing operation successful`. The CR protocol is described in
-  [Storage and VMs](storage-and-vms.md#the-storage-fence-csi-addons-networkfence).
-- **Network fence.** `RouteBusAdmin.SetFence` on the reflector. The reflector keeps every stored
-  route but stops advertising any nexthop inside the prefix. Where another origin announces the
-  same key, such as a VM already running on its new pool, subscribers keep receiving that origin's
-  nexthop. See [Route bus](route-bus.md).
+| Fence | Mechanism | Confirmed when |
+|---|---|---|
+| Storage | A csi-addons `NetworkFence` puts the prefix on the Ceph blocklist. The CR protocol is in [Storage and VMs](storage-and-vms.md#the-storage-fence-csi-addons-networkfence). | The CR is `Fenced` and reports `Succeeded` with `fencing operation successful`. |
+| Network | `RouteBusAdmin.SetFence` on the reflector. It keeps every stored route but stops advertising any nexthop inside the prefix; where another origin announces the same key, such as a VM already running on its new pool, subscribers keep that origin's nexthop. See [Route bus](route-bus.md). | The RPC succeeds. |
 
-The prefix is recorded in `status.fencedPrefixes` as soon as its storage fence is applied, even if a
-later step fails, so recovery knows to release it. `fencedPrefixes` only grows during fencing; only a
+The prefix is recorded in `status.fencedPrefixes` once its storage fence is confirmed, even if its
+network fence or a later prefix then fails, so recovery knows to release it. A storage fence that
+was created but not yet confirmed is not recorded; see [Known gaps](#known-gaps).
+`fencedPrefixes` only grows during fencing; only a
 successful release removes an entry.
 
 The network fencer fails safe by default: unless the dispatch-controller runs with
@@ -204,6 +158,7 @@ spec is never touched.
 | `storage fence unconfirmed for <prefix>: NetworkFence ... created; awaiting Succeeded` | Normal for one pass; csi-addons has not run the fence yet. |
 | `storage fence unconfirmed for <prefix>: ... not active (result=..., message=...)` | csi-addons reports something other than a successful fence. Check csi-addons and the Ceph caps. |
 | `storage fence unconfirmed for <prefix>: ... unfence not yet reported` | An earlier release is still unfencing that CR. The fencer waits for it, then fences afresh. |
+| `storage fence unconfirmed for <prefix>: NetworkFence <name> was unfenced; replacing it with a fresh Fenced one` or `... is being deleted; awaiting it to re-fence` | Normal for one pass while a spent CR is replaced. |
 | `network fence unconfirmed for <prefix>` | The reflector admin API is unreachable or not configured. |
 | `fenced the N reported node /64s ... coverage is not provably complete` | Several /64s and no `spec.underlayPrefix`. |
 | `no pool to fail over to: ...` | Fenced and complete, but no `Ready` pool fits this VM. |
@@ -211,9 +166,10 @@ spec is never touched.
 ### Rebind
 
 With every fence confirmed and coverage complete, the reconciler collects every VM whose
-`spec.clusterName` is the lost pool and places them together with `ScheduleBatch`. Each VM uses the
-same rules as initial placement (`Ready`, `poolSelector`, fit, spread), and two more apply within the
-batch:
+`spec.clusterName` is the lost pool and places them together with `ScheduleBatch`. Candidates must be
+`Ready` and match the VM's `poolSelector`, as at initial placement. Fit and spread differ:
+`ScheduleBatch` starts from an empty allocation, so they count only the batch's own requests, not
+the workloads already bound to each target pool (see [Known gaps](#known-gaps)). Within the batch:
 
 - requests are accumulated per target, so the batch does not over-commit a pool by itself;
 - VMs sharing `spec.antiAffinity.group` avoid a pool the batch already put that group on, falling
@@ -232,8 +188,8 @@ the VM's twin on the lost pool and compiles nothing into the target until that t
 On a healthy pool, the broker proves that a retired twin's VM is gone by setting the twin's
 `status.released`. A lost pool's broker cannot. The fence makes the proof true anyway: nothing on
 that pool can reach Ceph. So, on every pass where the pool is lost with complete coverage,
-`releaseFencedTwins` sets `status.released` on every terminating `CompiledVM` in `pool-<name>`. A
-mesh controller then drops the finalizer, the twin disappears, and the compiler writes the VM into
+`releaseFencedTwins` sets `status.released` on every terminating `CompiledVM` in `pool-<name>`. The
+mesh-controller then drops the finalizer, the twin disappears, and the compiler writes the VM into
 the target.
 
 It runs on every pass, not once, because a twin is only retired after the rebind has been compiled,
@@ -241,7 +197,7 @@ which is a later pass. A watch on terminating twins wakes the reconciler right a
 after the 2-minute requeue. The status patch is optimistically locked, so a stale cached read cannot
 mark a live twin of the same name released.
 
-The target pool then adopts the original disk by its recorded CSI identity and boots the VM. Its
+The target pool then adopts the original disk by its recorded CSI identity and starts the VM. Its
 overlay IP, MAC and VNI do not change, because central IPAM allocations have no pool dimension. The
 agent on the new node recognises the interface by `(VNI, overlay IP)` and programs its policy; see
 [Attaching workloads](attaching-workloads.md).
@@ -297,7 +253,8 @@ fences and rebinds their VMs elsewhere. `forgetDrain` covers the same hole from 
 The broker reports drain every 10 seconds, separately from its lease heartbeat:
 
 1. `gatherNodes` reads each node's /64 from the annotation `net.ectobase.dev/underlay-prefix`, which
-   the mesh agent stamps on its own `Node`. A node without it is not reported.
+   the agent stamps on its own `Node`. A node without it is not reported, and a VMI on such a
+   node does not hold any prefix's drain.
 2. `gatherVMNodes` lists the pool's KubeVirt `VirtualMachineInstance`s and maps each scheduled VMI
    to its node.
 3. `ReportStatus` marks a fenced prefix busy if any VMI runs on a node in it, and writes
@@ -317,24 +274,35 @@ down; drain is reported only once their VMIs are gone.
 ### Gate 3: route state and `FenceReleaseBlocked`
 
 "Drained" means the stale VMI objects are gone, not that their routes are. The recovered node's
-agent withdraws a moved VM's /32 only after the CNI DEL has detached its interface and on its next
-reconcile tick. A node whose kubelet died while its mesh-agent and flowplane kept running never
-withdraws it. Released first, the reflector would re-advertise that /32 with two nexthops, the stale
-source and the new pool, and agents program only the first nexthop of that sorted set. Other nodes
-could send the VM's traffic to the stale copy, and a stale copy that still has its interface may
-still be running the guest, so storage stays fenced as long as the route does.
+agent withdraws a moved VM's /32 only after the CNI DEL has detached its interface, on its next
+reconcile tick. A node whose kubelet died while its agent and flowplane kept running never withdraws
+it at all.
 
-So before lifting either fence, the reconciler asks the reflector `RouteBusAdmin.AnnouncedFrom`: which
-of these keys do you still store, fenced or not, with a nexthop inside this prefix? The keys are the
-`(VNI, host route)` pairs of every `CompiledNIC` twin compiled outside the recovering pool's
-namespace, whether its owner is a failed-over VM, a VM moved by hand, a container, or a bare NIC.
-They are sent in batches of 5,000.
+If the fence came off first, the reflector would re-advertise the /32 from what it stored, now with
+two nexthops:
 
-The question reads placement, not history, for three reasons: the status write after a rebind can
-lose a conflict or a crash, a planned move off a lost pool never gets a `FailedOver` mark, and a later
-reschedule overwrites it. Twins are durable, so a controller restart loses nothing. The question is
-also targeted on purpose. A recovered pool keeps announcing what it legitimately serves, including
-E/W LB anycast addresses that other pools share by design, and none of that holds its fence.
+```mermaid
+flowchart LR
+    R["reflector<br/>vni 100 10.0.0.5/32"]
+    R -->|"nexthops, sorted"| L["[ VTEP in k02's /64 (stale),<br/>VTEP in k03's /64 (new) ]"]
+    L -->|"agents program only the first"| S["traffic to the stale copy on k02"]
+```
+
+Agents program only the first nexthop of that sorted set, so other nodes could send the VM's traffic
+to the stale copy. A stale copy that still has its interface may still be running the guest, so
+storage stays fenced as long as the route does.
+
+Before lifting either fence, the reconciler therefore asks the reflector
+(`RouteBusAdmin.AnnouncedFrom`) which of a set of keys it still stores, fenced or not, with a nexthop
+inside the prefix. The keys are the `(VNI, host route)` pairs of every `CompiledNIC` twin compiled
+outside the recovering pool's namespace: a failed-over VM, a VM moved by hand, a container, or a bare
+NIC. They go in batches of 5,000.
+
+The question reads placement, not history. A `FailedOver` mark would not do: its status write can be
+lost to a conflict or a crash, a planned move off a lost pool never gets one, and a later reschedule
+overwrites it. Twins are durable, so a controller restart loses nothing. The question is also
+targeted: the recovered pool keeps announcing what it legitimately serves, such as the LB host
+routes its backends announce, and none of that holds its fence.
 
 The gate fails closed. If the reflector cannot be asked (unreachable, no `--reflector-admin`, or a
 reflector that predates the RPC and answers `Unimplemented`) or the NIC twins cannot be listed, the
@@ -400,62 +368,61 @@ Read it in this order:
    `NetworkFence` CR for the prefix. It should be `Unfenced`, waiting for `unfencing operation
    successful`.
 
-For a `RoutesStillAnnounced` entry:
+For a `RoutesStillAnnounced` entry, the remedy depends on the node it names.
 
-- **The node's kubelet is dead but its mesh-agent and flowplane run.** End the node's route-bus
-  session: stop `mesh-agent` on the host, or power the node off, or cut it from the fabric. The
-  reflector withdraws everything a node announced when its session ends, and its keepalive tears down
-  a session that stops answering within seconds. The next recheck releases the fence.
-- **The kubelet is alive, and the entry names a NIC whose workload moved.** The CNI DEL that should
-  have detached the interface was lost, and flowplane still holds it. Restarting `mesh-agent` does not
-  help: it announces the interface again. Detach it from flowplane on that node, through the
-  dataplane API on `127.0.0.1:1337`:
+If the node's kubelet is dead but its agent and flowplane still run, the guest may still be running
+there. First make sure it is not: power the node off, or confirm on the host that no qemu process of
+the moved VM remains. Only then end the node's route-bus session by stopping the agent. When a
+session ends, the reflector withdraws everything that node announced, and its keepalive (a 2-second
+ping with a 3-second timeout) ends a session that stops answering. The next recheck then finds
+nothing held and releases both fences, including the Ceph blocklist. Stopping the agent alone removes
+the evidence the gate reads without stopping the guest, and cutting the node from the overlay does
+not cut its path to Ceph.
 
-    ```sh
-    grpcurl -plaintext -import-path api/proto/dataplane/v1 -proto dataplane.proto \
-      127.0.0.1:1337 dataplane.v1.DataplaneNode/ListInterfaces
-    grpcurl -plaintext -import-path api/proto/dataplane/v1 -proto dataplane.proto \
-      -d '{"interface_id": "<id>"}' 127.0.0.1:1337 dataplane.v1.DataplaneNode/DetachInterface
-    ```
+If the kubelet is alive and the entry names a NIC whose workload moved, the CNI DEL that should have
+detached the interface was lost, and flowplane still holds it. Restarting the agent does not help: it
+announces the interface again. Detach the interface from flowplane through the dataplane API, a
+root-only unix socket at `/run/flowplane/dataplane.sock` on the node. As root on the node:
 
-    The agent's next tick withdraws the route.
-- **The NIC is on a pool whose nodes really sit inside this prefix.** Two pools' underlay prefixes
-  overlap. That is a misconfiguration; each pool's `spec.underlayPrefix` and node /64s must be its
-  own. The gate cannot tell such a route from a stale one and holds until the overlap is fixed.
+```sh
+grpcurl -plaintext -import-path api/proto/dataplane/v1 -proto dataplane.proto \
+  unix:///run/flowplane/dataplane.sock dataplane.v1.DataplaneNode/ListInterfaces
+grpcurl -plaintext -import-path api/proto/dataplane/v1 -proto dataplane.proto \
+  -d '{"interface_id": "<id>"}' \
+  unix:///run/flowplane/dataplane.sock dataplane.v1.DataplaneNode/DetachInterface
+```
 
-!!! warning
-    Do not delete a `NetworkFence` to force a release: that leaves the Ceph blocklist entry in place.
-    Patch it to `Unfenced` instead; see
-    [Storage and VMs](storage-and-vms.md#the-storage-fence-csi-addons-networkfence).
+Find the interface id in the `ListInterfaces` output by the overlay IP. A Talos node has no shell.
+In the lab, where each Talos node is a container, run `grpcurl` as root on the lab host and reach
+the socket through the node container's root, as the live tests do:
+`unix:///proc/<pid>/root/run/flowplane/dataplane.sock`, where `<pid>` is the container's host PID
+(`docker inspect -f '{{.State.Pid}}' <container>`). The agent's next tick withdraws the route.
+
+If the NIC is on a pool whose nodes really sit inside this prefix, two pools' underlay prefixes
+overlap. That is a misconfiguration; each pool's `spec.underlayPrefix` and node /64s must be its own.
+The gate cannot tell such a route from a stale one and holds until the overlap is fixed.
+
+!!! warning "Do not force a release"
+    Deleting a `NetworkFence` leaves the Ceph blocklist entry in place. Patching it to `Unfenced`
+    while the pool still lists the prefix in `status.fencedPrefixes` lifts the blocklist past the
+    drain and route gates, and nothing re-fences a pool that is not lost. Fix what the checks above
+    name. For a blocklist entry that no pool tracks, see
+    [A stranded Ceph blocklist entry](../operations/runbook.md#a-stranded-ceph-blocklist-entry).
 
 ## Known gaps
 
 These are limits of the code as it stands, stated so that nobody relies on a guarantee it does not
 give.
 
-- **In aggregate mode, drain is reported immediately.** With `spec.underlayPrefix` set,
-  `fencedPrefixes` holds the aggregate, but the broker marks a prefix busy by matching each node's
-  /64. No node /64 equals the aggregate, so the aggregate is always reported `drained: true` as soon
-  as the pool is back. Only the route gate holds the release then. It catches a stale VM whose
-  interface is still announced, but not one whose node has lost its route-bus session.
-- **A reflector restart loses fences.** The reflector keeps its fence set, like its routes, in memory
-  only. While the pool is still lost, the next failover pass sets the network fence again (passes run
-  at least every 2 minutes). Once the pool is no longer lost, nothing re-applies it: a prefix held on
-  drain or routes stays storage-fenced but is no longer hidden at the reflector, and the reflector
-  stores again only what agents re-announce after reconnecting.
-- **Some retired twins are held forever.** `releaseFencedTwins` runs only for a pool that is lost
-  with complete coverage, and only in namespace `pool-<name>`. A twin of a pool whose `ClusterPool`
-  was deleted, a pool that never had a lease, a pool fenced with incomplete coverage, or a twin left
-  in a namespace outside that convention is never released. A VM moving off such a pool waits until
-  an operator releases the twin by hand; see
-  [Moving a VM between clusters](vm-moves.md#a-move-that-does-not-finish).
-- **A stale address placed on no other pool is re-advertised.** The route gate asks only about
-  addresses compiled for another pool. A VM deleted while its pool was lost, or a NIC whose twin is
-  gone or whose IPs changed, is re-advertised from what the reflector stored when the fence clears.
-- **Only VMs fail over.** The rebind collects `VirtualMachine`s. `Container`s bound to a lost pool stay
-  bound to it.
-- **Batch placement ignores existing load.** `ScheduleBatch` accumulates only the batch's own requests
-  and anti-affinity groups, not those of workloads already bound to the target pools.
+| Gap | Consequence |
+|---|---|
+| In aggregate mode, drain is reported immediately. With `spec.underlayPrefix` set, `fencedPrefixes` holds the aggregate, but the broker marks a prefix busy by matching each node's /64, and no node /64 equals the aggregate. | The aggregate reads `drained: true` as soon as the pool is back, so only the route gate holds the release. It catches a stale VM whose interface is still announced, not one whose node has lost its route-bus session. |
+| A reflector restart loses fences, which it keeps in memory only; see [HA and restarts](ha-and-restarts.md#reflector-restarts). | A lost pool is fenced again on the next failover pass; a recovered pool held on drain or routes stays storage-fenced but is no longer hidden at the reflector. |
+| `releaseFencedTwins` runs only for a pool that is lost, fenced with every fence confirmed and complete coverage, and only in namespace `pool-<name>`. | A retired twin is never released for a pool whose `ClusterPool` was deleted, a pool that never had a lease, a pool fenced with incomplete coverage, a pool whose fences never confirm (for example a dispatch-controller without `--reflector-admin`, or csi-addons not running), or a twin in a namespace outside that convention. A VM moving off such a pool waits for an operator; see [Moving a VM between clusters](vm-moves.md#a-move-that-does-not-finish). |
+| A fence that was never confirmed is not tracked. The first pass creates the `NetworkFence`; the prefix enters `status.fencedPrefixes` only on a later pass that sees it confirmed. | If the pool comes back within the roughly 2 minutes before that pass, the CR stays `Fenced`, csi-addons has likely blocklisted the prefix, and no `ClusterPool` lists it, so nothing releases it. See [A stranded Ceph blocklist entry](../operations/runbook.md#a-stranded-ceph-blocklist-entry). |
+| The route gate asks only about addresses compiled for another pool. | A stale address placed nowhere else (a VM deleted while its pool was lost, a NIC whose twin is gone or whose IPs changed) is re-advertised from what the reflector stored when the fence clears. |
+| The rebind collects only `VirtualMachine`s. | `Container`s bound to a lost pool stay bound to it. |
+| `ScheduleBatch` accumulates only the batch's own requests and anti-affinity groups. | Workloads already bound to a target pool are not counted, so failover can over-commit it. |
 
 ## Where this lives
 
