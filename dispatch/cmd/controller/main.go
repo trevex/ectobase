@@ -136,10 +136,10 @@ func main() {
 	// wired to the real reflector RouteBusAdmin only when -reflector-admin is set.
 	var storageF failover.PrefixFencer = fence.NewStorageFencer(mgr.GetClient(), *csiDriver, *csiClusterID, client.ObjectKey{Name: *csiSecretName, Namespace: *csiSecretNS})
 	var networkF failover.PrefixFencer = failover.DenyFencer{}
-	// Fence release also waits on route state: the reflector must hold no route of a VM failover
-	// moved off the pool from the /64 being released. Asked over the same admin client; with no
-	// reflector DenyFencer answers that too, so a release with a moved VM to check never happens
-	// (it could not anyway: DenyFencer refuses the release itself).
+	// Fence release also waits on route state: the reflector must hold, from the /64 being
+	// released, no overlay address placed on another pool. Asked over the same admin client; with
+	// no reflector DenyFencer answers that too, so a release with an address to check never
+	// happens (it could not anyway: DenyFencer refuses the release itself).
 	var routes failover.RouteHolder = failover.DenyFencer{}
 	if *reflectorAdmin != "" {
 		creds := insecure.NewCredentials()

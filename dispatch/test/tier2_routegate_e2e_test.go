@@ -6,6 +6,8 @@ package test
 import (
 	"context"
 	"net"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -37,8 +39,8 @@ import (
 //     vm1's /32 yet: the fence must hold, and the pool must say why.
 //   - The withdraw lands: the next pass releases the fence.
 //
-// Everything the gate reads (vm1's FailedOver conditions, its NIC twin) comes back through the
-// apiserver, as it would after a controller restart.
+// What the gate reads — where vm1's NIC twin is compiled — comes back through the apiserver, as it
+// would after a controller restart.
 func TestTier2_FenceReleaseWaitsForMovedVMRoute(t *testing.T) {
 	c, ctx := startNetEnv(t)
 	const (
@@ -108,8 +110,16 @@ func TestTier2_FenceReleaseWaitsForMovedVMRoute(t *testing.T) {
 	if cond == nil || cond.Status != metav1.ConditionTrue || cond.Reason != "RoutesStillAnnounced" {
 		t.Fatalf("want FenceReleaseBlocked=True/RoutesStillAnnounced, got %+v", cond)
 	}
+	if !strings.Contains(cond.Message, "pool-a-node") || !strings.Contains(cond.Message, sourceNH) {
+		t.Fatalf("the condition must name the node and nexthop holding the fence, got %q", cond.Message)
+	}
 	if res.RequeueAfter >= time.Minute {
 		t.Fatalf("a held release must be rechecked before the failover threshold, got %v", res.RequeueAfter)
+	}
+	// The fence is still up at the reflector: everyone is sent the new pool only. Released here,
+	// this would be [sourceNH targetNH], and nodes program the stale source first.
+	if got := rib.Advertised(100, vmRoute); !slices.Equal(got, []string{targetNH}) {
+		t.Fatalf("while held, vm1's route must be advertised via pool-b only, got %v", got)
 	}
 	t.Logf("held: %s", cond.Message)
 
@@ -125,8 +135,8 @@ func TestTier2_FenceReleaseWaitsForMovedVMRoute(t *testing.T) {
 	if cond := meta.FindStatusCondition(released.Status.Conditions, failover.ConditionFenceReleaseBlocked); cond == nil || cond.Status != metav1.ConditionFalse {
 		t.Fatalf("want FenceReleaseBlocked=False once released, got %+v", cond)
 	}
-	if !rib.HasRoute(100, vmRoute) {
-		t.Fatal("vm1's route from pool-b must be advertised")
+	if got := rib.Advertised(100, vmRoute); !slices.Equal(got, []string{targetNH}) {
+		t.Fatalf("after the release vm1's route must be advertised via pool-b only, got %v", got)
 	}
 }
 

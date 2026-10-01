@@ -69,8 +69,29 @@ func TestNetworkFencer_AnnouncedFromAsksTheReflector(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AnnouncedFrom: %v", err)
 	}
-	if len(held) != 1 || held[0] != (failover.RouteKey{VNI: 100, Prefix: "10.0.0.5/32"}) {
+	if want := (failover.RouteHolding{Key: failover.RouteKey{VNI: 100, Prefix: "10.0.0.5/32"}, Origin: "source", Nexthop: "2001:db8:0:1::a"}); len(held) != 1 || held[0] != want {
 		t.Fatalf("want only the fenced source's key, got %v", held)
+	}
+}
+
+// keysOnlyAdmin answers AnnouncedFrom with held keys but no holdings.
+type keysOnlyAdmin struct {
+	pb.UnimplementedRouteBusAdminServer
+}
+
+func (keysOnlyAdmin) AnnouncedFrom(_ context.Context, req *pb.AnnouncedFromRequest) (*pb.AnnouncedFromReply, error) {
+	return &pb.AnnouncedFromReply{Keys: req.GetKeys()}, nil
+}
+
+// A held key without a named holder still holds: it is reported with the origin left empty.
+func TestNetworkFencer_AnnouncedFromKeepsKeysWithoutHolders(t *testing.T) {
+	f := NewNetworkFencer(adminOver(t, keysOnlyAdmin{}))
+	held, err := f.AnnouncedFrom(context.Background(), "2001:db8:0:1::/64", []failover.RouteKey{{VNI: 100, Prefix: "10.0.0.5/32"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(held) != 1 || held[0] != (failover.RouteHolding{Key: failover.RouteKey{VNI: 100, Prefix: "10.0.0.5/32"}}) {
+		t.Fatalf("want the key held with no origin, got %v", held)
 	}
 }
 
