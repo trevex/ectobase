@@ -5,6 +5,7 @@ package broker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"strings"
@@ -96,7 +97,10 @@ func (b *Broker) SyncOnce(ctx context.Context) error {
 		return fmt.Errorf("list downstream: %w", err)
 	}
 
-	// Reconcile existing downstream objects: update drifted, delete extras.
+	// Reconcile existing downstream objects: update drifted, delete extras. A write that fails is
+	// collected, not returned: every other twin still gets its write, so one twin the downstream
+	// refuses does not hold back the rest — among them a retired VM a move is waiting on.
+	var errs []error
 	haveKeys := make(map[string]bool, len(have.Items))
 	for i := range have.Items {
 		cur := &have.Items[i]
@@ -105,7 +109,7 @@ func (b *Broker) SyncOnce(ctx context.Context) error {
 		if !ok {
 			// Not in desired set — GC it.
 			if err := b.Downstream.Delete(ctx, cur); err != nil && !apierrors.IsNotFound(err) {
-				return fmt.Errorf("gc %s: %w", key(cur), err)
+				errs = append(errs, fmt.Errorf("gc %s: %w", key(cur), err))
 			}
 			continue
 		}
@@ -115,7 +119,7 @@ func (b *Broker) SyncOnce(ctx context.Context) error {
 			cur.Spec = w.Spec
 			cur.Labels = maps.Clone(w.Labels)
 			if err := b.Downstream.Update(ctx, cur); err != nil {
-				return fmt.Errorf("update %s: %w", key(cur), err)
+				errs = append(errs, fmt.Errorf("update %s: %w", key(cur), err))
 			}
 		}
 	}
@@ -131,10 +135,10 @@ func (b *Broker) SyncOnce(ctx context.Context) error {
 		local.Spec = w.Spec
 		local.Labels = maps.Clone(w.Labels)
 		if err := b.Downstream.Create(ctx, local); err != nil {
-			return fmt.Errorf("create %s: %w", k, err)
+			errs = append(errs, fmt.Errorf("create %s: %w", k, err))
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // keyVM identifies a namespaced CompiledVM as "namespace/name".
@@ -166,6 +170,9 @@ func (b *Broker) SyncCompiledVMs(ctx context.Context) error {
 	if err := b.Downstream.List(ctx, have); err != nil {
 		return fmt.Errorf("list downstream vms: %w", err)
 	}
+	// Failed writes are collected, not returned, as in SyncOnce. Here it is what keeps a failing
+	// update of one VM from leaving a retired twin's VM running, which a move would wait on.
+	var errs []error
 	haveKeys := make(map[string]bool, len(have.Items))
 	for i := range have.Items {
 		cur := &have.Items[i]
@@ -173,7 +180,7 @@ func (b *Broker) SyncCompiledVMs(ctx context.Context) error {
 		w, ok := want[keyVM(cur)]
 		if !ok {
 			if err := b.Downstream.Delete(ctx, cur); err != nil && !apierrors.IsNotFound(err) {
-				return fmt.Errorf("gc vm %s: %w", keyVM(cur), err)
+				errs = append(errs, fmt.Errorf("gc vm %s: %w", keyVM(cur), err))
 			}
 			continue
 		}
@@ -181,7 +188,7 @@ func (b *Broker) SyncCompiledVMs(ctx context.Context) error {
 			cur.Spec = w.Spec
 			cur.Labels = maps.Clone(w.Labels)
 			if err := b.Downstream.Update(ctx, cur); err != nil {
-				return fmt.Errorf("update vm %s: %w", keyVM(cur), err)
+				errs = append(errs, fmt.Errorf("update vm %s: %w", keyVM(cur), err))
 			}
 		}
 	}
@@ -195,10 +202,10 @@ func (b *Broker) SyncCompiledVMs(ctx context.Context) error {
 		local.Spec = w.Spec
 		local.Labels = maps.Clone(w.Labels)
 		if err := b.Downstream.Create(ctx, local); err != nil {
-			return fmt.Errorf("create vm %s: %w", k, err)
+			errs = append(errs, fmt.Errorf("create vm %s: %w", k, err))
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // SyncCompiledVolumeAttachments is the CompiledVolumeAttachment twin of SyncOnce:
@@ -216,6 +223,8 @@ func (b *Broker) SyncCompiledVolumeAttachments(ctx context.Context) error {
 	if err := b.Downstream.List(ctx, have); err != nil {
 		return fmt.Errorf("list downstream attachments: %w", err)
 	}
+	// Failed writes are collected, not returned, as in SyncOnce.
+	var errs []error
 	haveKeys := make(map[string]bool, len(have.Items))
 	for i := range have.Items {
 		cur := &have.Items[i]
@@ -223,7 +232,7 @@ func (b *Broker) SyncCompiledVolumeAttachments(ctx context.Context) error {
 		w, ok := want[keyAtt(cur)]
 		if !ok {
 			if err := b.Downstream.Delete(ctx, cur); err != nil && !apierrors.IsNotFound(err) {
-				return fmt.Errorf("gc attachment %s: %w", keyAtt(cur), err)
+				errs = append(errs, fmt.Errorf("gc attachment %s: %w", keyAtt(cur), err))
 			}
 			continue
 		}
@@ -231,7 +240,7 @@ func (b *Broker) SyncCompiledVolumeAttachments(ctx context.Context) error {
 			cur.Spec = w.Spec
 			cur.Labels = maps.Clone(w.Labels)
 			if err := b.Downstream.Update(ctx, cur); err != nil {
-				return fmt.Errorf("update attachment %s: %w", keyAtt(cur), err)
+				errs = append(errs, fmt.Errorf("update attachment %s: %w", keyAtt(cur), err))
 			}
 		}
 	}
@@ -245,10 +254,10 @@ func (b *Broker) SyncCompiledVolumeAttachments(ctx context.Context) error {
 		local.Spec = w.Spec
 		local.Labels = maps.Clone(w.Labels)
 		if err := b.Downstream.Create(ctx, local); err != nil {
-			return fmt.Errorf("create attachment %s: %w", k, err)
+			errs = append(errs, fmt.Errorf("create attachment %s: %w", k, err))
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // SyncCompiledContainers is the CompiledContainer twin of SyncOnce: declarative
@@ -266,6 +275,8 @@ func (b *Broker) SyncCompiledContainers(ctx context.Context) error {
 	if err := b.Downstream.List(ctx, have); err != nil {
 		return fmt.Errorf("list downstream containers: %w", err)
 	}
+	// Failed writes are collected, not returned, as in SyncOnce.
+	var errs []error
 	haveKeys := make(map[string]bool, len(have.Items))
 	for i := range have.Items {
 		cur := &have.Items[i]
@@ -273,7 +284,7 @@ func (b *Broker) SyncCompiledContainers(ctx context.Context) error {
 		w, ok := want[keyCtr(cur)]
 		if !ok {
 			if err := b.Downstream.Delete(ctx, cur); err != nil && !apierrors.IsNotFound(err) {
-				return fmt.Errorf("gc container %s: %w", keyCtr(cur), err)
+				errs = append(errs, fmt.Errorf("gc container %s: %w", keyCtr(cur), err))
 			}
 			continue
 		}
@@ -281,7 +292,7 @@ func (b *Broker) SyncCompiledContainers(ctx context.Context) error {
 			cur.Spec = w.Spec
 			cur.Labels = maps.Clone(w.Labels)
 			if err := b.Downstream.Update(ctx, cur); err != nil {
-				return fmt.Errorf("update container %s: %w", keyCtr(cur), err)
+				errs = append(errs, fmt.Errorf("update container %s: %w", keyCtr(cur), err))
 			}
 		}
 	}
@@ -295,10 +306,10 @@ func (b *Broker) SyncCompiledContainers(ctx context.Context) error {
 		local.Spec = w.Spec
 		local.Labels = maps.Clone(w.Labels)
 		if err := b.Downstream.Create(ctx, local); err != nil {
-			return fmt.Errorf("create container %s: %w", k, err)
+			errs = append(errs, fmt.Errorf("create container %s: %w", k, err))
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // ReportStatus stamps this pool's fence coordinates + per-VM placement + drain status
