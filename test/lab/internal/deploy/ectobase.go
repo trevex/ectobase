@@ -647,7 +647,8 @@ spec:
 ---
 # Pre-created so this pool's route-bus access can be resourceNames-scoped: RBAC cannot scope
 # `+"`create`"+` by name, so the broker only ever get/updates its own RouteBusIdentity. The signer
-# leaves a stub with no spec.request alone until the broker fills in its CSR.
+# marks a stub with no spec.request Signed=False ("spec.poolName and spec.request are required")
+# and signs it once the broker files its CSR.
 apiVersion: platform.ectobase.dev/v1alpha1
 kind: RouteBusIdentity
 metadata:
