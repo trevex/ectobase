@@ -1,225 +1,214 @@
 # CRD interactions
 
-The generated per-field API pages describe each Custom Resource in isolation. This
-page describes how the resources relate, and how a user's declared intent becomes a
-compiled object and is finally executed on a node.
+The generated API pages describe each kind on its own. This page describes how the kinds relate:
+which ones users write, how the compiler turns them into compiled objects, which component acts
+on each compiled object, and where addresses and placement come from.
+
+All ectobase kinds are version `v1alpha1` in groups under `ectobase.dev`, and the
+**dispatch**'s aggregated apiserver (`dispatch-apiserver`) serves all of them
+(`dispatch/cmd/apiserver/main.go`).
 
 ## The five API groups
 
-ectobase splits its API surface into five groups, each with a distinct role in
-the lifecycle. All live under `*.ectobase.dev` and are served at version
-`v1alpha1`.
+The groups split the API by who writes it and when.
 
 | Group | Written by | Kinds |
 | --- | --- | --- |
-| [`net.ectobase.dev`](api/net.md) | users | VPC, Subnet, NetworkInterface, FirewallPolicy, LoadBalancer, IPPool, NATGateway, FloatingIP, VPCPeering, IPAllocation *(allocator-written)* |
-| [`compute.ectobase.dev`](api/compute.md) | users | VirtualMachine, Container |
-| [`storage.ectobase.dev`](api/storage.md) | users | Volume |
-| [`compiled.ectobase.dev`](api/compiled.md) | controllers | CompiledNIC, CompiledVM, CompiledContainer, CompiledVolumeAttachment |
-| [`platform.ectobase.dev`](api/platform.md) | dispatch controller | ClusterPool |
+| [`net.ectobase.dev`](api/net.md) | users, except `IPAllocation` | `VPC`, `Subnet`, `NetworkInterface`, `FirewallPolicy`, `LoadBalancer`, `IPPool`, `NATGateway`, `VPCPeering`, `FloatingIP`, `IPAllocation` |
+| [`compute.ectobase.dev`](api/compute.md) | users | `VirtualMachine`, `Container` |
+| [`storage.ectobase.dev`](api/storage.md) | users | `Volume` |
+| [`compiled.ectobase.dev`](api/compiled.md) | the compiler | `CompiledNIC`, `CompiledVM`, `CompiledContainer`, `CompiledVolumeAttachment` |
+| [`platform.ectobase.dev`](api/platform.md) | the operator at enrollment, then controllers and brokers on status | `ClusterPool`, `RouteBusIdentity` |
 
-The net, compute and storage groups are authored: a user (or a higher-level system)
-declares desired state in them. The compiled group is derived: the mesh compiler
-produces it, and no human writes it. The platform group is operational: it models the
-fleet of pool clusters that workloads can be scheduled onto.
+`net`, `compute` and `storage` hold intent: what the user wants. `compiled` is derived: the
+**compiler** (`mesh-controller`) produces it and nobody edits it by hand. `platform` describes the
+fleet itself.
 
-The one exception is `IPAllocation`, which sits in the authored net group but is written
-by the allocators rather than by a user: it is the record of one address being held out of
-one `IPPool`, and it lives beside the pool because that is the namespace its uniqueness is
-enforced in. See [Where addresses come from](#where-addresses-come-from-ippool-and-ipallocation).
+`IPAllocation` is the one `net` kind that users don't write. The allocators create one per
+address they hand out of an `IPPool`, and it lives beside the pool because its name is what
+enforces uniqueness there (see [Where addresses come from](#where-addresses-come-from)).
 
-## Intent, compiled, executed
+!!! note "Status: Planned"
+    `FloatingIP` is served but is a scaffold: its spec and status are empty, and nothing compiles
+    or reconciles it. The dataplane has a floating-IP DNAT path, but it is not driven from this
+    kind yet.
 
-Lowering runs in three stages. Users declare high-level intent; a compiler flattens
-the graph of related resources into a small, self-contained per-workload object; a
-per-pool broker ships that object to the cluster that owns the workload; and
-node-local executors turn it into real datapath and platform objects.
+The `compiled` kinds also exist as CRDs on every **pool**, because that is where the twins land.
+The pool chart installs the `net` CRDs too, but no pool component reads them: the agent, the CNI
+and the materializers read only compiled kinds.
+
+## From intent to a running workload
+
+Lowering runs in four steps. A user declares intent on the dispatch; the compiler flattens each
+workload's slice of it into small, self-contained compiled objects; the pool's **broker** copies
+those objects down to the pool; and executors on the pool turn them into pods, VMs, disks and
+datapath state.
 
 ```mermaid
 flowchart LR
-    subgraph intent["Intent (user-authored)"]
+    subgraph intent["Intent (on the dispatch)"]
         VM[VirtualMachine]
         CT[Container]
         NIC[NetworkInterface]
         VOL[Volume]
         FW[FirewallPolicy]
         LB[LoadBalancer]
+        NAT[NATGateway]
         PEER[VPCPeering]
         VPC[VPC]
-        SUBNET[Subnet]
-        POOL[IPPool]
-        NATGW[NATGateway]
     end
 
-    ALLOC["IPAllocation<br/>(one per address — the claim)"]
-
-    subgraph compiled["Compiled (controller-written)"]
+    subgraph compiled["Compiled twins (pool-&lt;name&gt; on the dispatch)"]
         CNIC[CompiledNIC]
         CVM[CompiledVM]
         CCT[CompiledContainer]
         CVA[CompiledVolumeAttachment]
     end
 
-    subgraph exec["Executed (per pool / per node)"]
-        POD[Pod]
-        KVM[KubeVirt VirtualMachine]
+    subgraph exec["On the pool"]
         DP[flowplane datapath]
+        KVM[KubeVirt VirtualMachine]
+        POD[Pod]
+        DV[CDI DataVolume]
     end
 
-    VM & CT -->|owns placement| NIC
-    SUBNET -->|allocate overlay IPs| NIC
-    POOL -->|allocate LB address| LB
-    POOL -->|allocate public NAT addresses| NATGW
-    LB -->|claims it, and owns it| ALLOC
-    NATGW -->|claims them, and owns them| ALLOC
-    NIC & FW & LB & PEER & VPC --> CNIC
+    NIC & FW & LB & NAT & PEER & VPC --> CNIC
     VM --> CVM
     CT --> CCT
-    VOL --> CVA
+    VM & VOL --> CVA
 
-    CNIC -->|broker sync| DP
-    CVM -->|broker sync| KVM
-    CCT -->|broker sync| POD
-    CVA -->|broker sync| KVM
+    CNIC -->|broker, then mesh-agent| DP
+    CVM -->|broker, then vm-materializer| KVM
+    CCT -->|broker, then pod-materializer| POD
+    CVA -->|broker, then vm-materializer| DV
 ```
 
-### 1. Workloads own placement; NICs derive it
+### Workloads own placement
 
-A workload, a Container or VirtualMachine, is the placement authority. It declares
-where it runs (which pool). Its NetworkInterfaces, named in the workload's
-`spec.interfaceRefs`, inherit placement from the workload that owns them rather than
-deciding it. This keeps a workload and all of its NICs co-located on the same node
-and pool without the user having to restate placement per interface.
+A `VirtualMachine` or `Container` decides where it runs; its `NetworkInterface`s, named in
+`spec.interfaceRefs`, follow it. A workload with an empty `spec.clusterName` is bound to a pool by
+the `dispatch-controller`'s scheduler, which writes `spec.clusterName`. The node inside the pool
+is chosen later by the pool's own kube-scheduler. Because NICs inherit placement, a workload and
+all its interfaces always land on the same pool without the user restating it per interface. A
+NIC without an owning workload takes its own `spec.clusterName`, or the compiler's default.
 
-### 2. The compiler lowers the intent graph
+### The compiler lowers intent
 
-The mesh compiler (the `mesh-controller`) watches the authored groups and
-flattens each workload's slice of the graph into a single compiled object:
+The compiler watches the intent groups and writes one compiled object per source object.
 
-- NetworkInterface + FirewallPolicy + LoadBalancer + VPCPeering → CompiledNIC.
-  The compiler resolves the interface's VPC membership, folds in the firewall
-  rules that apply to it, the load-balancer backends it participates in, and the
-  peer route imports from any VPCPeering — producing one self-contained policy
-  object per NIC. The agent reads only this; it never reads the raw net-group
-  resources. Address allocation is resolved centrally and lands here too: overlay
-  IPs from the interface's VPC-scoped Subnet, LB addresses from the IPPool the
-  LoadBalancer names, NAT from NATGateway, and public addresses from FloatingIP.
-- VirtualMachine → CompiledVM. Boot / interface / placement facts flattened
-  for the VM materializer.
-- Container → CompiledContainer. The same, for containers, consumed by the
-  pod materializer.
-- Volume → CompiledVolumeAttachment. The storage attachment a workload needs.
+| Intent | Compiled | What it carries |
+| --- | --- | --- |
+| `NetworkInterface`, plus the `VPC`, `FirewallPolicy`s, `LoadBalancer`s, `NATGateway` and `VPCPeering`s that apply to it | `CompiledNIC` | VNI, overlay addresses, MAC, firewall rules, NAT sources, load-balancer memberships, peer route imports, QoS |
+| `VirtualMachine` | `CompiledVM` | boot and interface facts for `vm-materializer` |
+| `Container` | `CompiledContainer` | the same, for `pod-materializer` |
+| `VirtualMachine` and each `Volume` it references | `CompiledVolumeAttachment` | one per entry in `spec.volumeRefs`: the disk to provision or adopt |
 
-Central IPAM gates compilation. The compiler emits a CompiledNIC only once the
-interface's addresses are finalized: `NetworkInterface.status.state` is `Allocated`,
-`status.observedGeneration` matches the spec generation, and `status.allocatedIPs`
-is populated (CompiledNIC's overlay IPs are sourced from `status.allocatedIPs`, never
-`spec.ips`). It carries a LoadBalancer's membership only once that LB reaches
-`Allocated` with an assigned `status.allocatedIP`. A resource that regresses out of
-`Allocated` suppresses re-emission but keeps its last compiled object.
+A `CompiledNIC` is complete on its own: the agent on the node never reads the intent kinds.
 
-The same is true of L2: the IPAM reconciler allocates a MAC in the same status write, and
-`CompiledNIC.spec.mac` is sourced from `status.allocatedMAC` — a stable, VPC-unique,
-locally-administered address — falling back to `spec.mac` only for a NIC not yet
-MAC-allocated. A pinned `spec.mac` is still honoured, but by route of the allocator: it is
-validated for format and VPC-uniqueness and adopted into `status.allocatedMAC` (an invalid or
-already-taken pin makes the NIC `Invalid`, and nothing compiles).
+Central IPAM gates the `CompiledNIC`. The compiler emits one only when the NIC's
+`status.state` is `Allocated`, `status.observedGeneration` matches its generation, and
+`status.allocatedIPs` is filled. The overlay addresses come from `status.allocatedIPs`, never
+from `spec.ips`, and the MAC from `status.allocatedMAC`. A load balancer joins a NIC's
+memberships only once it is `Allocated` with a `status.allocatedIP`. A source that drops out of
+`Allocated` stops new compiles but keeps its last compiled object (see
+[IPAM migration](../operations/ipam-migration.md#keep-last-good-a-bad-edit-does-not-tear-down-a-workload)).
 
-The compiler writes the `compiled.ectobase.dev` objects with a `spec.clusterName`
-identifying the pool that owns the workload, into that pool's `pool-<clusterName>` namespace
-on the dispatch, named `<sourceNamespace>-<sourceName>` after the object they were compiled
-from.
+Each compiled object goes into the namespace `pool-<clusterName>` on the dispatch, named
+`<sourceNamespace>-<sourceName>`, and carries the pool in `spec.clusterName`. A finalizer on the
+source object tears its twin down. Owner references cannot do it, because Kubernetes forbids an
+owner in one namespace from owning an object in another. A periodic orphan sweep in the compiler
+removes twins whose source vanished anyway, for example after someone force-removed a finalizer.
 
-### 3. The broker syncs compiled objects to the owning pool
+### The broker syncs twins to the pool
 
-Each pool cluster runs a dispatch-broker (a kubelet-analog). It watches the compiled objects
-in its own `pool-<clusterName>` namespace on the dispatch apiserver — the only namespace its
-RBAC authorizes — and set-reconciles them onto the pool cluster's local apiserver, back into
-each object's source namespace. This is the seam that keeps the dispatch authoritative while
-giving each pool a local, node-reachable copy of exactly the compiled objects it owns.
+Each pool runs one `dispatch-broker`. It watches the compiled objects in its own `pool-<name>`
+namespace on the dispatch, which is the only namespace its RBAC allows, and reconciles them as a
+set onto the pool's own apiserver, back into each object's source namespace. Upward, it reports
+the pool's lease, node prefixes, drain state, each VM's placement and each provisioned disk's
+identity. It writes only status subresources, so it cannot change what the dispatch asked for.
 
-### 4. Executors realize the compiled objects
+### Executors on the pool
 
-Inside the pool, node-local executors turn compiled objects into real state:
+| Compiled | Executor | Produces |
+| --- | --- | --- |
+| `CompiledNIC` | `mesh-agent`, one per node | datapath state in `flowplane` (interfaces, firewall, NAT, load balancing, routes) and route announcements on the [route bus](../architecture/route-bus.md) |
+| `CompiledContainer` | `pod-materializer` | a `Pod` attached to the overlay through Multus and `flowplane-cni` |
+| `CompiledVM` | `vm-materializer` | a KubeVirt `VirtualMachine` |
+| `CompiledVolumeAttachment` | `vm-materializer` | a CDI `DataVolume`: an RBD-backed PVC, imported from a boot image or blank |
 
-- mesh agent consumes CompiledNIC and programs the node's flowplane
-  datapath (firewall, NAT, LB, VNI, peer route imports) — one agent per node.
-- pod-materializer turns CompiledContainer into a `v1.Pod` attached to the
-  flowplane overlay.
-- vm-materializer turns CompiledVM (and CompiledVolumeAttachment) into a
-  KubeVirt `VirtualMachine`.
+The agent stamps each node's underlay /64 onto its `Node`, which is how the broker learns the
+pool's node prefixes. Placement and disk identity travel the other way: the broker writes them
+onto the twins' status, and controllers in the compiler mirror them onto the source
+`VirtualMachine` and `Volume`.
 
-## Intent → compiled → executor summary
+## Where addresses come from
 
-| Intent kind(s) | Compiled kind | Executor | Produces |
-| --- | --- | --- | --- |
-| NetworkInterface + FirewallPolicy + LoadBalancer + VPCPeering (+ VPC, Subnet, IPPool, NATGateway, FloatingIP) | CompiledNIC | mesh agent (per node) | flowplane datapath programming (firewall / NAT / LB / VNI / peer routes) |
-| VirtualMachine | CompiledVM | vm-materializer (per pool) | KubeVirt VirtualMachine |
-| Container | CompiledContainer | pod-materializer (per pool) | Pod on the flowplane overlay |
-| Volume | CompiledVolumeAttachment | vm-materializer (per pool) | volume attachment on the VM |
+Three allocators in the compiler assign addresses, each from the scope the address means
+something in.
 
-## Where addresses come from: IPPool and IPAllocation
+| Address | Comes from | Recorded in |
+| --- | --- | --- |
+| Overlay IP of a NIC | a `Subnet` of the NIC's VPC (`spec.subnetRef`, or the VPC's only `Subnet`) | `NetworkInterface.status.allocatedIPs` |
+| MAC of a NIC | derived from the NIC's UID, or its pinned `spec.mac`, unique in the VPC | `NetworkInterface.status.allocatedMAC` |
+| Load-balancer address | the `IPPool` in `LoadBalancer.spec.poolRef` | one `IPAllocation`, and `LoadBalancer.status.allocatedIP` |
+| NAT gateway public addresses | the `IPPool` in `NATGateway.spec.poolRef`, or the literal `spec.publicIPs` when no pool is set | one `IPAllocation` per address, and `NATGateway.status.allocations` |
 
-Overlay IPs come from a `Subnet`, which is VPC-scoped because an overlay address only
-means anything inside its VPC. Every other address — a load-balancer address today, a NAT
-gateway's public addresses next — comes from an `IPPool`, which belongs to no VPC because
-the ranges it hands out are fabric- or internet-wide.
+A `Subnet` belongs to a VPC because an overlay address only means something inside its VPC. An
+`IPPool` belongs to no VPC, because the ranges it hands out are fabric- or internet-wide.
 
-An `IPPool` is **typed**. `spec.type` is `public` (internet-routable: LB addresses, NAT
-addresses) or `internal` (a range that never leaves the fabric), and a consumer states the
-type it needs and is refused a pool of any other type. A `LoadBalancer` pointed at an
-`internal` pool goes `Invalid` rather than `Pending`, because an LB address handed out of
-an internal range would be advertised to the WAN and be unreachable — that is the intent
-being wrong, not a wait. The type is what stops one operator's internal range from being
-spent as somebody else's public address.
+An `IPPool` is typed. `spec.type` is `public` (reachable from outside the fabric) or `internal`
+(never leaves the fabric), and a consumer is refused a pool of the wrong type. A `LoadBalancer`
+pointed at an `internal` pool goes `Invalid` rather than `Pending`: an internal range advertised
+to the WAN would be unreachable, so the intent is wrong, not early.
 
-Allocation is recorded as an object: **one `IPAllocation` per address**, named
-`<pool>-<encoded address>` (`192.0.2.1` in pool `demo-pool` becomes
-`demo-pool-192-0-2-1`; IPv6 is expanded, never compressed, so the name splits
-unambiguously). The name is the point. Object names are unique within a namespace, so
-creating one is a compare-and-swap: two allocators racing for the last free address cannot
-both win, and neither has to assume it is the only writer. That is what lets a NAT gateway
-and a load balancer draw from the same pool without either knowing the other exists — the
-previous design scanned other `LoadBalancer` statuses for a used-set, which is only correct
-while exactly one controller allocates.
+Each allocated address is one `IPAllocation` named `<pool>-<encoded address>`. `192.0.2.1` in pool
+`demo-pool` becomes `demo-pool-192-0-2-1`; IPv6 addresses are written out in full, never
+compressed, so the name splits back into pool and address one way only. The name is the claim.
+Object names are unique in a namespace, so creating one is a compare-and-swap: two allocators
+racing for the last free address cannot both win, and neither needs to know the other exists.
+That is what lets load balancers and NAT gateways draw from the same pool.
 
-Two consequences are worth stating rather than discovering:
+Two consequences follow from that choice:
 
-- **It is one API object per address.** A fully-allocated `/16` is roughly 65,000
-  `IPAllocation` objects in one namespace. That is acceptable at the address counts in
-  play — a public pool is a handful of prefixes, not a datacenter's worth of RFC1918 — but
-  it is a real property of the choice, and it is why `Subnet` does *not* work this way.
-- **Reclamation is asynchronous.** An `IPAllocation` carries an ownerReference to its
-  consumer, so deleting the `LoadBalancer` frees the address through ordinary Kubernetes
-  garbage collection; nothing has to run a sweeper. But the collector runs on its own
-  schedule, so between the consumer's deletion and the collection there is a window in
-  which the address still counts as used, and a pool at capacity will refuse a new consumer
-  during it. The refused consumer parks in `Exhausted` and a delete-only watch on
-  `IPAllocation` re-enqueues it the moment the claim actually disappears, so the window
-  costs a retry, not an outage. Deleting an allocation whose owner merely *looks* gone
-  would be a second allocator racing the collector, so nothing does it.
+- It costs one API object per address. A fully allocated /16 is about 65,000 objects in one
+  namespace. Public pools are a handful of prefixes, so that is acceptable there, and it is why
+  `Subnet` does not work this way.
+- Reclaiming is asynchronous. An `IPAllocation` has its consumer as controller owner, so deleting
+  the `LoadBalancer` frees the address through ordinary garbage collection, with no sweeper.
+  Until the collector runs, the address still counts as used, and a full pool refuses a new
+  consumer. That consumer parks in `Exhausted`, and the deletion of an `IPAllocation` re-enqueues
+  it, so the window costs a retry, not an outage.
 
-`IPPool.status` reports `state` (`Pending`, `Ready`, `Invalid`, or `Conflict` when two
-pools in a namespace overlap), `total`, and `allocated`. The last is a convenience for
-operators, derived on each sync — no allocator reads it back, because a counter cannot say
-*which* addresses are free and a stale one would be a licence to double-allocate.
+`IPPool.status` reports `state` (`Ready`, `Invalid`, or `Conflict` for the later of two pools
+whose prefixes overlap in one namespace), `total` and `allocated`. `allocated` is for operators
+only. No allocator reads it back: a counter cannot say which addresses are free, and a stale one
+would invite a double allocation.
 
 ## Where placement lives: ClusterPool
 
-ClusterPool (`platform.ectobase.dev`) is the fleet inventory: one object per
-pool cluster. The dispatch controller reconciles it (seeding a new pool's lifecycle
-phase), and its name is what the compiler stamps onto compiled objects as
-`spec.clusterName` and what names the `pool-<clusterName>` namespace each pool's broker is
-scoped to. It is validated as a DNS-1123 label of at most 58 characters so that derived
-namespace is itself legal (`api/validate/clustername.go`). It is the anchor that ties a
-workload's placement decision to a concrete cluster.
+A `ClusterPool` is the fleet's inventory entry for one pool cluster. Its name is what the
+scheduler writes into `spec.clusterName` and what names the pool's `pool-<name>` namespace, so it
+must be a DNS-1123 label of at most 58 characters, leaving `pool-<name>` a legal namespace name
+(`api/validate/clustername.go`).
 
-## See also
+The spec is set by the operator at enrollment: `region`, `endpoint`, and optionally
+`underlayPrefix`, the aggregate that contains every node's underlay address. Declaring it lets
+failover fence the whole pool by one prefix instead of the node /64s it has seen. The status is
+written by others. The broker reports `lease`, `allocatable`, `nodePrefixes` and `nodeDrain`; the
+`dispatch-controller` derives `phase` (`Pending`, `Ready` or `Unknown`) from the lease and records
+`fencedPrefixes` when it fences the pool.
 
-- [net API reference](api/net.md)
-- [compute API reference](api/compute.md)
-- [storage API reference](api/storage.md)
-- [compiled API reference](api/compiled.md)
-- [platform API reference](api/platform.md)
-- [Components](components.md) — the binaries that implement each stage
-- [Generated artifacts](generated-artifacts.md) — how the CRDs and RBAC stay DRY
+A `RouteBusIdentity`, named after its pool, carries that pool's intermediate-CA request
+(`spec.request`) and the signed certificate (`status.certificate`). The `dispatch-controller`
+signs it, name-constrained to `spec.permittedUnderlayCIDRs`. The WAN edge fleet has one too,
+named `edge`.
+
+## Where to go next
+
+- [From intent to a running workload](../concepts/intent-to-running.md): the same pipeline,
+  told as a story.
+- [Multi-cluster orchestration](../architecture/multi-cluster.md): the broker, per-pool RBAC
+  and the release handshake.
+- [Components](components.md): the binaries behind each step.
+- [IPAM migration](../operations/ipam-migration.md): adopting existing addresses into the
+  allocators.

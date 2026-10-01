@@ -1,90 +1,126 @@
-# BPF maps and state model
+# Maps and state
 
-`flowplane` is a map-driven dataplane: the eBPF programs make no distributed
-decisions, they only read (and, for connection state, write) BPF maps. All policy lives
-in those maps, written by the userspace control plane. This chapter documents the real
-maps declared in `flowplane-ebpf/src/maps.rs`, what each holds, and who writes it.
+flowplane keeps all of its forwarding state in BPF maps. The eBPF programs read policy and
+configuration from them and write only connection state; userspace writes everything else. This page
+lists every map declared in `flowplane/flowplane-ebpf/src/maps.rs`: its type and capacity, its key
+and value, and who writes it. The key and value types are `#[repr(C)]` structs in `flowplane-common`,
+shared byte for byte by the eBPF programs and userspace, with layout tests.
 
 ## Who writes what
 
-There are three writers:
+| Writer | What it writes |
+|---|---|
+| The control core (`flowplane-control`, through the daemon's aya map writer) | All policy and configuration: interfaces, routes, firewall, NAT, load balancers, meters' rates, DHCP settings. Driven by `DataplaneNode` gRPC calls. |
+| The loader (`flowplane`) | Node identity (`LOCAL`), the Geneve device's ifindex, the tail-call program arrays. |
+| The eBPF programs | Connection state: `CONNTRACK`, `CONNTRACK6`, `NAT_CT6`, `DSR`, `DSR6`, meter state in `METER`, and the guest MAC learned from DHCPv4. |
+| The userspace sweepers | Conntrack aging (every 10 s), and the offload manager when enabled. |
 
-- the loader (`flowplane`) — fixes map capacities at load time and, on a graceful
-  restart, re-opens the pinned maps and reseeds bookkeeping.
-- the control plane (`flowplane`'s `DataplaneNode` gRPC / CLI) — writes the
-  policy/config maps (interfaces, routes, firewall, NAT, LB, LB address, meter, DHCP, underlay,
-  neighbor-NAT) in response to control-plane calls.
-- the datapath itself — writes only the connection-state maps: `CONNTRACK` (flow
-  entries) and `METER` (token-bucket state).
+Almost every map is pinned under the pin directory (`/sys/fs/bpf/flowplane` by default), so the maps
+and the flows in them survive a restart of the daemon. See [HA and restarts](../ha-and-restarts.md).
 
-Most policy maps are pinned to bpffs (default `/sys/fs/bpf/flowplane`) so they — and
-the flow state in them — survive a control-plane restart. See
-[HA & graceful restart](../ha-graceful-restart.md).
+## Interfaces and node identity
 
-## Policy and config maps: control-plane written
-
-| Map | Type | Key → Value | Holds |
+| Map | Type (capacity) | Key → value | Holds |
 |---|---|---|---|
-| `INTERFACES` | HashMap (1024) | `IfaceKey` → `IfaceValue` | per-interface overlay identity (VNI + IPs → tap ifindex, underlay endpoint). |
-| `IFACE_META` | HashMap (1024) | `IfaceMetaKey` → `IfaceMetaVal` | restart journal — `interface_id → (vni, v4/v6, device, underlay, tap)`. Written on attach, removed on detach, scanned on restart to rebuild in-memory bookkeeping and re-attach guest programs. Never read by the datapath. |
-| `ROUTES` | LPM trie (65536) | `(VNI ++ IPv4, prefix)` → `RouteValue` | per-VNI IPv4 overlay routes → next-hop underlay `/128`. Queried at prefix_len 64 (32 VNI + 32 host). |
-| `ROUTES6` | LPM trie (65536) | `(VNI ++ IPv6, prefix)` → `RouteValue` | per-VNI IPv6 overlay routes. Queried at prefix_len 160 (32 VNI + 128 host). |
-| `UNDERLAY` | HashMap (4096) | underlay `/128` → `UnderlayValue` | residual node-identity markers — **not** the local-delivery path (that is `INTERFACES`/`INTERFACES6`, keyed on `(VNI, overlay IP)`). Under `collect_md` the datapath never sees an outer dst, and a plain interface writes nothing here (the node VTEP is shared, so writing it would clobber the edge sentinel). `serve` has two writers left: `Control::attach_edge` (the local-deliver sentinel, keyed under the edge's own `LOCAL.underlay_ipv6`) and `create_lb` for an overlay-relay LB address (`vni != 0` only); the only reader is the edge-sentinel check in `uplink_rx`. `tap_ifindex = UNDERLAY_LOCAL_DELIVER` marks a WAN-edge local-deliver underlay; `tap_ifindex = 0` marks a VNI-only entry (e.g. a NAT-gateway node with no local interface). |
-| `CONFIG` | Array (1) | `[0]` → `Config` | server-wide datapath config. |
-| `LOCAL` | Array (1) | `[0]` → `Local` | this host's identity: `uplink_ifindex` (the redirect target for every uplink-bound verdict), `uplink_mac` (the inner-Ethernet dst the WAN-edge local-deliver rewrites to), and `underlay_ipv6` — this node's VTEP, used for the LB local-vs-remote test (`backend.node_vtep == local.underlay_ipv6`) and to key the edge local-deliver sentinel lookup. `gateway_mac` is now the geneve device's own link address, not an outer-Ethernet dst — the kernel builds outer frames, so the datapath no longer reads the field. |
-| `PORT_META` | HashMap (1024) | ifindex → `PortMeta` | per-interface datapath metadata (overlay gateway v4/v6, guest v6, underlay identity). |
-| `FLOATING_IPS` | HashMap (1024) | `FloatingIPKey` → `[u8;4]` | 1:1 LB address mapping. `(vni,G)→V` for egress SNAT, `(vni,V)→G` for ingress DNAT. |
-| `NAT` | HashMap (1024) | `NatKey` → `NatValue` | network-NAT config per `(vni, guest-ipv4)`: `nat_ip` + port range. |
-| `NAT_IPS` | HashMap (1024) | `FloatingIPKey` → `u8` | marks a `(vni, nat_ip)` as a NAT IP so ingress can answer ICMP echo to it in-datapath. |
-| `LB` | HashMap (1024) | `LbKey` → `LbValue` | load-balancer service definition (LB address+port+proto → Maglev table handle). |
-| `MAGLEV` | HashMap (65536) | `MaglevKey` → `LbBackend` | Maglev lookup table: hashed slot → the selected backend (underlay VTEP /128 + overlay IP + VNI + family). |
-| `FW_BIND` | HashMap (1024) | ifindex → `FwBind` | the interface's firewall scopes: one per direction (0 = no rules). Absence ⇒ deny (deny-by-default). One write moves an interface to new rules. |
-| `FW_CLASS` / `FW_CLASS6` | HashOfMaps (4096) | scope id → LPM trie (peer prefix → class) | a scope's peer classes, per family. Pinned by name from the loader. |
-| `FW_POLICY` / `FW_POLICY6` | HashOfMaps (4096) | scope id → LPM trie (`FwPolKey` → precedence) | a scope's `[class, proto, port]` policy entries, per family. |
-| `FW_EPOCH` | Array (1) | `[0]` → `u32` | the node's firewall epoch, bumped after every `FW_BIND` change; conntrack entries record it so established flows meet a new policy. |
-| `NAT_OWNERS` / `NAT_OWNERS6` | LPM trie (65536) | `NatOwnerKey` (`[nat_ip ++ port]` prefix) → `NatOwner` | the owner (underlay, VNI) of each NAT port block another node owns, as port prefixes; the value carries the block so adopt can rebuild it. |
-| `DHCP_CONFIG` | Array (1) | `[0]` → `DhcpConfig` | server-wide DHCP: MTU + DNS server lists (v4/v6). |
-| `DHCP_META` | HashMap (1024) | ifindex → `DhcpMeta` | per-interface DHCP: hostname + PXE. |
+| `INTERFACES` | hash (1024) | `(VNI, IPv4)` → `IfaceValue` | The local-delivery table. Value: device ifindex, `is_local`, the node VTEP, guest MAC, and `peer_capable` (may use `bpf_redirect_peer`). |
+| `INTERFACES6` | hash (1024) | `(VNI, IPv6)` → `IfaceValue` | The IPv6 counterpart. |
+| `PORT_META` | hash (1024) | device ifindex → `PortMeta` | Per-device data `tc_guest_tx` needs: VNI, guest IPv4 and IPv6, gateways, guest MAC, VTEP, the `l3` flag (netkit L3 edge) and the `offloaded` flag (SR-IOV representor). |
+| `IFACE_META` | hash (1024) | interface id → `IfaceMetaVal` | The restart journal: VNI, addresses, device, VTEP and `l3` flag of every attached interface. Written on attach, removed on detach, read on restart. The datapath never reads it. |
+| `LOCAL` | array (1) | 0 → `Local` | This node: the primary uplink's ifindex and MAC, and the VTEP. `gateway_mac` is no longer read by the datapath. |
+| `GENEVE_IFINDEX` | array (1) | 0 → ifindex | The `fp-geneve0` device every encapsulating redirect targets. |
+| `UNDERLAY` | hash (4096) | underlay `/128` → `UnderlayValue` | Not the delivery table (that is `INTERFACES`). Two writers remain: the WAN edge's local-deliver sentinel, keyed by the edge's own VTEP with `tap_ifindex = u32::MAX`, and an overlay-relay load balancer (`vni != 0`). `uplink_rx` reads it only to check for the edge sentinel. |
 
-## Connection-state maps: datapath written
+## Routing
 
-| Map | Type | Key → Value | Holds |
+| Map | Type (capacity) | Key → value | Holds |
 |---|---|---|---|
-| `CONNTRACK` | LRU HashMap (1,048,576) | `CtKey` → `CtEntry` | the unified stateful conntrack table (NAT/NAT64/firewall flows). Each entry records the firewall epoch it was last evaluated under; pre-seeded reply entries carry `CT_F_REPLY` and are never re-evaluated. LRU pre-allocated (~80–100 MB, memcg-accounted); sized to dpservice's `DP_FLOW_TABLE_MAX` order. Capacity is fixed at load time and overridable via `--conntrack-max` / `FLOWPLANE_CONNTRACK_MAX`. |
-| `METER` | HashMap (1024) | ifindex → `MeterState` | per-interface egress srTCM token-bucket state. Read and refilled by the datapath meter; the cap is programmed by the control plane. |
+| `ROUTES` | LPM trie (65536) | `VNI ++ IPv4`, prefix length 32 + route length → `RouteValue` | Per-VNI IPv4 routes. Looked up with prefix length 64 (the whole VNI and address), so the longest matching route in the VNI wins. |
+| `ROUTES6` | LPM trie (65536) | `VNI ++ IPv6`, prefix length 32 + route length → `RouteValue` | Per-VNI IPv6 routes, looked up with prefix length 160. |
 
-## Redirect / devmap helpers: loader written
+`RouteValue` is the nexthop VTEP (`nexthop_ipv6`), the VNI to deliver under (`nexthop_vni`, see
+[the delivery VNI](../overlay.md#the-sender-stamps-the-delivery-vni)), and `is_external`, which marks
+a route whose traffic is NAT-translated. Every local interface has a self-route here pointing at the
+node's own VTEP. The control core keeps a shadow of each trie so a self-route can hold its key while a
+mesh route waits behind it (see [held keys](../route-bus.md#local-host-keys-and-held-keys)).
 
-XDP `bpf_redirect` into a veth only delivers if the veth peer has an XDP program
-attached — a constraint that bites in the containerlab veth harness (but not on real
-NICs). These devmaps route redirects through `bpf_redirect_map` instead, which does not
-carry the peer-program requirement:
+## Firewall
 
-| Map | Type | Purpose |
+The firewall is a two-stage classifier per scope, where a scope is one interface's rules in one
+direction. See [the firewall](../../features/firewall.md).
+
+| Map | Type (capacity) | Key → value | Holds |
+|---|---|---|---|
+| `FW_BIND` | hash (1024) | device ifindex → `FwBind` | The interface's ingress and egress scope ids. A missing entry or scope 0 denies. Rebinding is one write. |
+| `FW_CLASS`, `FW_CLASS6` | hash of maps (4096 scopes) | scope id → LPM trie (up to 4096 entries) | Stage 1: the peer address prefix → a class local to the scope. |
+| `FW_POLICY`, `FW_POLICY6` | hash of maps (4096 scopes) | scope id → LPM trie (up to 16384 entries) | Stage 2: `[class, protocol, port]` → a precedence. |
+| `FW_EPOCH` | array (1) | 0 → `u32` | The node's firewall epoch, bumped after every `FW_BIND` change. A conntrack entry records the epoch it was checked under, so an established flow meets a changed policy again. |
+
+The four map-of-maps are BTF-defined, which aya cannot mark as pinned, so the loader pins them by
+name.
+
+## Connection state
+
+| Map | Type (capacity) | Key → value | Holds |
+|---|---|---|---|
+| `CONNTRACK` | LRU hash (1,048,576) | `CtKey` (VNI, 5-tuple) → `CtEntry` | IPv4 flows: last seen, NAT translation, flags, TCP state, firewall epoch. Pre-allocated; `--conntrack-max` or `FLOWPLANE_CONNTRACK_MAX` changes the size at load. |
+| `CONNTRACK6` | LRU hash (1,048,576) | `CtKey6` → `CtEntry` | IPv6 flows for the firewall. |
+| `NAT_CT6` | LRU hash (1,048,576) | `CtKey6` → `CtEntry6` | NAT66 flows, which need an IPv6 translation address. |
+| `DSR`, `DSR6` | LRU hash (65536) | reply 5-tuple → `DsrLbIP` | The load-balancer address noted by `uplink_dsr_note`, used to rewrite the reply's source. A separate map because adding it to `CtEntry` pushed `uplink_rx` over its stack budget. |
+| `METER` | hash (1024) | device ifindex → `MeterState` | Three QoS lanes: egress total (EDT pacing cursor), egress public and ingress (token buckets). The control core sets the rates; the datapath updates the state. |
+
+Userspace ages `CONNTRACK` entries: 30 s idle for most flows, 24 hours for established TCP. The other
+LRU maps evict under pressure.
+
+## NAT and floating IPs
+
+| Map | Type (capacity) | Key → value | Holds |
+|---|---|---|---|
+| `NAT` | hash (1024) | `(VNI, guest IPv4)` → `NatValue` | A local source's NAT address and port block. |
+| `NAT6` | hash (1024) | `(VNI, guest IPv6)` → `NatValue6` | The NAT66 counterpart. |
+| `NAT_IPS`, `NAT_IPS6` | hash (1024) | `(VNI, NAT address)` → 1 | Marks an address as a NAT address, so ingress looks up the return entry. |
+| `NAT_OWNERS`, `NAT_OWNERS6` | LPM trie (65536) | `NAT address ++ port` prefix → `NatOwner` | Blocks owned by other nodes, stored as port prefixes; the value is the owner's VTEP, VNI and block. Read by `wan_rx` to relay returns. |
+| `FLOATING_IPS` | hash (1024) | `(VNI, address)` → IPv4 | 1:1 floating IPs, both directions: guest → floating for egress, floating → guest for ingress. |
+
+See [NAT](../../features/nat.md).
+
+## Load balancing
+
+| Map | Type (capacity) | Key → value | Holds |
+|---|---|---|---|
+| `LB`, `LB6` | hash (1024) | `(VNI, address, port, protocol)` → `LbValue` | A load-balancer service and its Maglev table id and size. VNI 0 is the WAN edge's service space. |
+| `MAGLEV` | hash (65536) | `(table id, slot)` → `LbBackend` | The Maglev lookup tables of both families: each slot names a backend's VTEP, overlay address and VNI. |
+
+See [load balancing](../../features/loadbalancer.md).
+
+## DHCP
+
+| Map | Type (capacity) | Key → value | Holds |
+|---|---|---|---|
+| `DHCP_CONFIG` | array (1) | 0 → `DhcpConfig` | The node's guest MTU and DNS servers (IPv4 and IPv6). |
+| `DHCP_META` | hash (1024) | device ifindex → `DhcpMeta` | Per-interface host name and PXE boot settings. |
+
+## Program arrays and debugging
+
+| Map | Type (capacity) | Holds |
 |---|---|---|
-| `UPLINK_DEV` | DevMap (1) | single-slot fabric uplink ifindex, used by the edge `wan_rx` → fabric encap redirect. |
-| `GUEST_DEV` | DevMapHash (1024) | per-guest-tap ifindex → itself, used by `uplink_rx`'s guest-delivery redirect. |
-| `GUEST_PROGS_TC` | ProgramArray (8) | tc tail-call targets for the guest-edge split. Slot `GUEST_PROG_DHCP` holds `tc_guest_dhcp`; other slots hold `tc_guest_nat64`. tc classifiers can only tail-call other tc programs, hence a dedicated array. |
+| `GUEST_PROGS_TC` | program array (8) | Guest-side tail calls: slot 0 `tc_guest_dhcp`, slot 2 `tc_guest_nat64`, slot 3 `tc_guest_egress_v6`. Slot 1 is reserved. |
+| `UPLINK_PROGS` | program array (4) | Uplink-side tail calls: slot 0 `xdp_uplink_v6`. |
+| `INSPECT` | array (1) | The packet capture `xdp_inspect` writes. Not pinned. |
+| `CONFIG` | array (1) | Declared and pinned but read and written by nothing; left over from an early single-peer prototype. |
 
-## Debug maps
+There are no device maps (`DEVMAP`): every delivery is a `bpf_redirect` or `bpf_redirect_peer` on the
+skb.
 
-| Map | Type | Purpose |
-|---|---|---|
-| `INSPECT` | Array (1) | first-packet capture written by `xdp_inspect`. |
+## Access through the Maps trait
 
-## Relationship to the pure-core `Maps` trait
-
-The datapath never touches these globals directly — it reads them through the
-[`Maps` trait](pure-core.md), whose production impl (`GlobalMaps`) is a set of zero-cost
-wrappers over exactly these statics (`route4_get` → `ROUTES`, `fw_bind` → `FW_BIND`,
-`conntrack_get`/`_insert` → `CONNTRACK`, and so on). The simulator's `MemMaps` backs the
-same trait with `HashMap`s, which is why the same core logic runs in both. The
-`#[repr(C)]` key/value structs (`RouteValue`, `CtEntry`, `FwRule`, `NatValue`, …) live in
-`flowplane-common` with layout tests, shared byte-for-byte between eBPF and userspace.
+The core logic never names these maps. It calls the [`Maps` trait](pure-core.md), whose kernel
+implementation (`GlobalMaps` in `coreimpl.rs`) is a set of thin wrappers over exactly these maps
+(`route4_get` → `ROUTES`, `fw_bind` → `FW_BIND`, `conntrack_insert` → `CONNTRACK`, and so on). The
+simulator implements the same trait with `HashMap`s.
 
 ## Where to go next
 
-- [The pure-core seam](pure-core.md) — how the datapath reads these maps abstractly.
-- [Datapath programs](programs.md) — which program touches which map.
-- [Distributed firewall](../../features/firewall.md), [NAT gateway](../../features/nat.md),
-  [Load balancing](../../features/loadbalancer.md) — the features these maps encode.
+- [Programs and hooks](programs.md): which program reads and writes which map.
+- [The pure core](pure-core.md): the `Maps` trait over these maps.
+- [The route bus](../route-bus.md): where `ROUTES` entries come from.
+- [HA and restarts](../ha-and-restarts.md): how pinned maps are adopted after a restart.

@@ -1,112 +1,147 @@
-# The pure-core seam: the Pkt and Maps traits
+# The pure core
 
-The datapath logic is written once, in `flowplane-core`, and runs in three places: the
-real eBPF programs, the in-process simulator, and unit tests. This is the pure-core seam.
+flowplane's packet logic is written once, in `flowplane-core`, and runs in three places: the eBPF
+programs in the kernel, the native simulator, and plain unit tests. This page explains the seam that
+makes that possible, the `Pkt` and `Maps` traits, the rule that keeps production and tests running
+the same code, and what each test level can and cannot prove.
 
-`flowplane-core` is a `no_std` crate whose functions are generic over two traits —
-`Pkt` (byte access to a packet) and `Maps` (typed access to the datapath maps). It never
-depends on aya, the kernel, or `std`. Every concrete environment supplies its own trait
-impls and calls the same functions.
+## The seam
+
+`flowplane-core` is a `no_std` crate with no dependency on aya, the kernel or `std`. Its functions are
+generic over two traits, and each environment supplies its own implementations.
 
 ```mermaid
-flowchart TD
-    core["flowplane-core (no_std)<br/>parse · encap · decap · nat · nat64 · lb ·<br/>firewall · conntrack · meter · arp_nd · dhcp ·<br/>egress-route · uplink-deliver<br/>— all generic over Pkt + Maps —"]
-
-    subgraph prod["production (kernel)"]
-        ctxpkt["TcPkt / RawPkt<br/>(XDP/tc context)"]
-        gmaps["GlobalMaps<br/>(#[map] statics)"]
+flowchart TB
+    core["flowplane-core (no_std)<br/>parse · firewall · conntrack · nat · nat64 · lb · dsr ·<br/>dhcp · arp_nd · meter · encap · decap · egress<br/>datapath/ orchestrators"]
+    subgraph kernel["flowplane-ebpf (kernel)"]
+        tcpkt["TcPkt / RawPkt"]
+        gmaps["GlobalMaps"]
     end
-    subgraph sim["simulator (native)"]
-        vecpkt["VecPkt<br/>(Vec&lt;u8&gt;)"]
-        memmaps["MemMaps<br/>(HashMaps)"]
+    subgraph native["flowplane-sim (native)"]
+        vecpkt["VecPkt"]
+        memmaps["MemMaps"]
     end
-
-    core --> ctxpkt
-    core --> gmaps
-    core --> vecpkt
-    core --> memmaps
-    ctxpkt & gmaps -.-> ebpf["flowplane-ebpf<br/>real XDP/tc programs"]
-    vecpkt & memmaps -.-> simnode["flowplane-sim<br/>SimNode / Fabric"]
+    core --> tcpkt & gmaps
+    core --> vecpkt & memmaps
+    tcpkt & gmaps -.-> progs["eBPF programs"]
+    vecpkt & memmaps -.-> sim["SimNode · Fabric"]
 ```
 
-## The two traits
+### Pkt: byte access to a packet
 
-`Pkt` — bounds-checked byte access to a frame. It is deliberately a trait, not a
-`&mut [u8]`: the eBPF verifier requires raw-pointer access with manual bounds checks, so
-forcing a slice through the eBPF path would not verify. Typed reads/writes are
-fixed-size (const-generic `N`) so the eBPF impl lowers each to a single fixed-width
-load/store instead of a byte loop — keeping large in-place rewriters (SNAT, encap) inside
-the verifier's single-function budget. `grow_head`/`shrink_head` model
-`bpf_xdp_adjust_head`; the overlay no longer resizes frames — the kernel owns outer-header
-add/strip — so their remaining user is the NAT64 header swap (`grow_head(20)` on the v4→v6
-ingress translation, `shrink_head(20)` on the v6→v4 egress one). `logical_len()` returns the
-wire length (`skb->len` on tc), which on a non-linear skb exceeds the linear head.
+`Pkt` (`flowplane-core/src/pkt.rs`) is bounds-checked access to a frame. It is a trait rather than a
+`&mut [u8]` because the verifier only accepts raw-pointer access with explicit bounds checks against
+the packet end; a slice would not verify.
 
-`Maps` — one method per logical map operation the core needs (`local`, `underlay_get`,
-`route4_get`/`route6_get`, `fw_meta`/`fw_rule`, `conntrack_get`/`conntrack_insert`,
-`lb_get`/`maglev_get`, `nat_get`, `dhcp_config`/`dhcp_meta`, `meter_get`/`meter_update`,
-…). It is monomorphized (generics, not `dyn`) so the eBPF impl compiles down to zero-cost
-wrappers over the map globals and stays verifier-friendly.
+- `read_array::<N>` and `write_array::<N>` take the length as a const generic, so the eBPF
+  implementation turns each into one fixed-width load or store instead of a byte loop. That keeps the
+  larger rewriters, such as SNAT, inside the verifier's limits.
+- `len` is the bytes in the linear head; `logical_len` is the full packet length (`skb->len`), which
+  is larger for a non-linear skb.
+- `grow_head` and `shrink_head` add or remove bytes after the Ethernet header. In the kernel they call
+  `bpf_skb_adjust_room`. The overlay never resizes packets, since the kernel adds and strips the outer
+  header; NAT64 is the remaining user (shrink by 20 bytes from IPv6 to IPv4, grow by 20 on the way
+  back).
+- `set_tail` resizes at the tail. Only the simulator's `VecPkt` implements it; in the kernel the
+  glue resizes with `bpf_skb_change_tail` and wraps the result in a new `RawPkt`.
 
-## The two impls
+The core returns an `Action` for the glue to carry out: `Pass`, `Drop`, `Redirect(ifindex)`,
+`RedirectPeer(ifindex)` or `PassToStack` (hand to the local stack as `PACKET_HOST`), plus, where it
+applies, a tunnel-key decision (`TunnelEncap`: VNI and remote VTEP).
 
-| Impl | Crate | Backs `Pkt` with | Backs `Maps` with |
+### Maps: typed access to the state
+
+`Maps` (`flowplane-core/src/maps.rs`) has one method per lookup or update the core needs:
+`local`, `route4_get` and `route6_get`, `ifaces_get` and `ifaces6_get`, `fw_bind`, `fw_class4`,
+`fw_policy4` and their IPv6 versions, `fw_epoch`, `conntrack_get` and `conntrack_insert`, `dsr_get`,
+`lb_get`, `maglev_get`, `nat_get`, `nat_owner`, `dhcp_config`, `meter_get`, `meter_update`, and so
+on. It is used through generics, never `dyn`, so the kernel implementation compiles down to direct map
+calls.
+
+### The implementations
+
+| | Crate | `Pkt` | `Maps` |
 |---|---|---|---|
-| Production | `flowplane-ebpf` (`coreimpl.rs`) | `TcPkt` over a tc context (raw ptr + bounds checks against `data_end`), and `RawPkt` over a `(data, data_end)` window for tc | `GlobalMaps` — zero-cost wrappers over the `#[map]` statics |
-| Sim | `flowplane-sim` | `VecPkt` over a `Vec<u8>` | `MemMaps` — `HashMap`-backed stand-ins |
+| Kernel | `flowplane-ebpf` (`coreimpl.rs`) | `TcPkt` over the tc context; `RawPkt` over a `(data, data_end)` window | `GlobalMaps`, thin wrappers over the `#[map]` statics |
+| Native | `flowplane-sim` | `VecPkt` over a `Vec<u8>` | `MemMaps`, `HashMap`-backed |
 
-Because both impls satisfy the same traits, `flowplane_core::firewall::fw_classify`,
-`encap::tunnel_encap`, `decap::decap_and_rewrite`, and every other core function
-execute identical logic whether they run in the kernel or in a native test.
+The control side has the same shape. `flowplane-control`'s `ControlCore<W: MapWriter>` decides every
+map write for an interface, route, NAT block, load balancer or firewall rule set. The daemon passes a
+writer backed by aya and the pinned maps; tests pass `MemMapWriter`.
 
-## The hard rule: call the core, never fork it
+## The orchestrators
 
-> Production eBPF must call the extracted core function. It may never keep a
-> parallel copy of datapath logic that the tests then exercise separately.
+`flowplane-core/src/datapath/` holds one orchestrator per hook: a function that calls the individual
+core steps in the same order and with the same gates as the program.
 
-The point of the seam is that the same code runs under test as in production. If the
-eBPF program reimplemented, say, firewall evaluation inline and a test exercised a
-separate `flowplane-core` copy, the test would be validating code the kernel never runs —
-worthless. So the discipline is strict:
+| Orchestrator | Program | How the program uses it |
+|---|---|---|
+| `process_uplink_rx`, `process_uplink_v6` | `uplink_rx`, `xdp_uplink_v6` | calls it directly |
+| `process_wan_rx` | `wan_rx` | calls it directly |
+| `process_guest_tx`, `process_guest_tx_v6`, `process_guest_tx_nat64` | `tc_guest_tx`, `tc_guest_egress_v6`, `tc_guest_nat64` | runs the same core steps in its own sequence |
+| `process_guest_arp_nd`, `process_guest_dhcp4` | the responders in `tc_guest_tx` and `tc_guest_dhcp` | calls the same responder functions directly |
 
-- The eBPF wrappers shrink to glue: build `TcPkt`/`GlobalMaps`, call the core fn, act on
-  the returned `Action`/`Deliver`/verdict. See the guest-egress route decision
-  (`egress::forward_decision_v4` calls `flowplane_core::egress::route4` + `deliver`), the
-  uplink tail (`flowplane_core::decap::decap_and_rewrite`), and the firewall
-  (`flowplane_core::firewall::fw_classify`), all invoked directly from `flowplane-ebpf`.
-- If the eBPF verifier cannot accept the seam for some path (e.g. a variable-offset
-  parse that blows the stack), the resolution is to move the test to a level that can
-  exercise the real program (a `BPF_PROG_TEST_RUN` anchor or a live e2e) — not to keep
-  a parallel core guarded only by a byte-parity check. A parallel core means the test
-  suite runs code production doesn't.
+On the ingress side the program builds `TcPkt` and `GlobalMaps`, calls the orchestrator and executes
+the result. On the guest side the stack budget forces the program to run its steps as separate
+out-of-line calls (`forward_decision_v4` in `flowplane-ebpf/src/egress.rs`), so the program and the
+orchestrator are two sequences over the same core functions: `route4`, `deliver`, `fw_classify`,
+`snat_egress`, the conntrack functions. The orchestrator is what the simulator runs, and it has to
+follow the program's order.
 
-## Fidelity: byte-parity anchors
+The simulator's `SimNode` calls the orchestrators over `VecPkt` and `MemMaps`, and `Fabric` wires
+several `SimNode`s together to run multi-node scenarios.
 
-The seam guarantees the sim runs the same source as production, but the eBPF toolchain
-still compiles that source to bytecode. To prove the compiled bytecode has not drifted,
-each ported path carries a `BPF_PROG_TEST_RUN` byte-parity anchor: it loads the real
-compiled program, populates the real maps from the same fixture, runs the same crafted
-packet through both the kernel program and the native `SimNode`, and asserts the output
-bytes are identical. Anchors are privileged (they load real bytecode) and kept few —
-one per representative path — but every ported feature adds one. See
-[The in-process sim](../../testing/sim.md) and the
-[conformance coverage map](../../testing/conformance-map.md).
+## The rule: call the core, never fork it
+
+> Production eBPF calls the core function. It never keeps its own copy of datapath logic that the
+> tests then exercise separately.
+
+The whole point of the seam is that the code under test is the code in production. If a program
+reimplemented, say, firewall evaluation inline and the tests exercised the core's version, the tests
+would validate code the kernel never runs.
+
+When the verifier will not accept a path through the seam, the answer is to restructure it (an
+out-of-line helper, a separate tail-called program) or to test the real program another way, not to
+keep a parallel copy guarded by a parity check.
+
+Two pieces of eBPF-side logic sit outside the core today:
+
+- Egress floating-IP rewrites (`flowplane-ebpf/src/floatingip.rs`) run in `tc_guest_tx` on raw
+  pointers, and the simulator does not model them. The ingress side is in the core.
+- The DHCPv6 responder is in the eBPF crate, because its reply has options at offsets only known at
+  run time, which the fixed-size `Pkt` accessors cannot express. DHCPv4 is in the core.
+
+## What each test level proves
+
+| Level | Command | Root | Proves |
+|---|---|---|---|
+| Core and simulator | `make sim` | no | The logic, over every case a scenario sets up, on one node or a multi-node fabric |
+| Verifier | `make verifier` | yes | Every program loads: stack budget, instruction limits, bounds |
+| Byte-parity anchors | `make sim-anchor` | yes | The compiled bytecode, run through `BPF_PROG_TEST_RUN`, matches the simulator byte for byte |
+
+Anchors have a hard limit on the ingress side. A test skb from `BPF_PROG_TEST_RUN` carries no tunnel
+metadata, and `uplink_rx` reads its VNI from that metadata before anything else. So the uplink anchors
+(`anchor_uplink`, `anchor_lb`, `anchor_dnat`) only prove the real program fails safe: it passes the
+packet unchanged. Delivery, load balancing and NAT return on the ingress side are proved by the
+simulator alone, which is why the simulator has to cover every case there.
+
+Anchored today: the guest egress encap with the firewall classifier and conntrack epoch, the `wan_rx`
+NAT relay, and the DHCPv4 offer. Not anchored: DHCPv6, the DHCP fallback MTU, the ARP and ND replies,
+and NAT64 translation.
 
 ## Adding a datapath feature
 
-The seam dictates the workflow for every new datapath capability:
-
-1. Port the function into `flowplane-core`, generic over `Pkt`/`Maps`; add any new
-   accessor to the `Maps` trait.
-2. Wire the eBPF side: call the new fn from `flowplane-ebpf` via the existing
-   `TcPkt`/`GlobalMaps` impls in `coreimpl.rs`. (Do not reimplement it inline.)
-3. Implement the `MemMaps` accessor in `flowplane-sim`.
-4. Add a sim test: a `SimNode`- or `Fabric`-based scenario asserting behavior.
-5. Add a `BPF_PROG_TEST_RUN` anchor case asserting native-core output equals real
-   bytecode output.
+1. Write the logic in `flowplane-core`, generic over `Pkt` and `Maps`, adding any new `Maps` method.
+2. Implement the new method in `GlobalMaps` and in `MemMaps`.
+3. Call the core from the eBPF program; do not reimplement it there.
+4. Add simulator tests with `SimNode` or `Fabric` covering every case, including the ingress cases an
+   anchor cannot reach.
+5. Add a `BPF_PROG_TEST_RUN` anchor where the path can be anchored.
+6. Run `make verifier`.
 
 ## Where to go next
 
-- [Datapath programs](programs.md) — the glue wrappers that call the core.
-- [BPF maps & state model](maps.md) — the maps the `Maps` trait abstracts.
-- [Testing strategy](../../testing/strategy.md) — the levels the seam enables.
+- [Programs and hooks](programs.md): the glue around each orchestrator.
+- [Maps and state](maps.md): the maps behind the `Maps` trait.
+- [The simulator](../../contributing/testing/sim.md): writing simulator scenarios.
+- [Testing strategy](../../contributing/testing/strategy.md): how these levels fit with the live tests.

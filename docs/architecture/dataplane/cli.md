@@ -1,103 +1,127 @@
 # The flowplane CLI
 
-`flowplane` is a single binary that both runs the production datapath daemon and
-provides static/debug bring-up modes for the labs. All modes load the embedded eBPF
-bytecode; they differ in how the maps get populated (gRPC vs. flags) and which programs
-get attached. This chapter documents the subcommands in `flowplane/flowplane/src/main.rs`.
+`flowplane` is one binary. `serve` is the production daemon; the other subcommands are lab and
+debugging tools. Every mode loads the eBPF bytecode embedded in the binary; they differ in what they
+attach and how the maps get filled. This page documents the subcommands in
+`flowplane/flowplane/src/main.rs` and `flowplane/flowplane/src/cli/`.
 
-```mermaid
-flowchart TD
-    serve["serve<br/>production daemon<br/>(DataplaneNode gRPC drives the maps)"]
-    bringup["bringup<br/>static flag-driven full datapath<br/>(netns lab, no gRPC)"]
-    tcbringup["tc-bringup<br/>minimal tc guest edge (one tap)"]
-    load["load / inspect<br/>attach one program and idle"]
-    infer["infer-underlay<br/>print inferred /64 and exit"]
-```
+| Subcommand | Use | Fills the maps from |
+|---|---|---|
+| `serve` | production daemon, one per node and per WAN edge | `DataplaneNode` gRPC calls |
+| `bringup` | legacy static lab datapath | command-line flags |
+| `tc-bringup` | one guest device, for DHCP and tap tests | command-line flags |
+| `load` | attach `uplink_rx` to one interface | nothing |
+| `inspect` | dump packets with `xdp_inspect` | nothing |
+| `infer-underlay` | print the inferred underlay `/64` | nothing |
 
-## `serve` — the production daemon
+## serve
 
-The only mode used in a real deployment. It attaches the forwarding programs (`uplink_rx`
-on the geneve `collect_md` device, the guest edge per interface), serves the
-`DataplaneNode` gRPC, and attaches/detaches the guest edge as gRPC calls (from the node
-agent and the CNI plugin) drive it. All map state comes from gRPC; there are no datapath
-flags.
+`serve` runs the datapath for real. On start it:
 
-`--addr` selects the listen socket. A `unix://` path binds a Unix domain socket at that
-path with mode 0600 (the deployed form: the dataplane gRPC is node-local and
-root-equivalent, so a 0600 socket restricts it to root on the node); any other value is
-parsed as a TCP `SocketAddr`. The `127.0.0.1:1337` in the flag's help text is an example of
-the TCP form, not the default.
+1. resolves the node's VTEP;
+2. creates or confirms `fp-geneve0` and attaches `uplink_dsr_note` and `uplink_rx` to it, or adopts
+   the pinned maps and links of a previous run;
+3. derives the guest MTU;
+4. on an edge, attaches `wan_rx` to the WAN uplink and writes the local-deliver sentinel;
+5. starts conntrack aging and, with `--offload`, the offload manager;
+6. serves `DataplaneNode` and the gRPC health service.
 
-Key flags:
+All map state then comes from gRPC: the CNI plugin attaches interfaces, and the mesh agent programs
+routes, NAT, load balancers, firewalls and QoS. See [the dataplane overview](index.md).
 
 | Flag | Meaning |
 |---|---|
-| `--addr` | listen socket. A `unix://` path binds a 0600 Unix socket; anything else (e.g. `127.0.0.1:1337`) binds TCP. |
-| `--role node\|edge` | `node` (default) is a hypervisor; `edge` additionally attaches `wan_rx` and registers a local-deliver edge underlay (shares VyOS's netns). |
-| `--uplink` / `--extra-uplink` | the primary fabric uplink drives EDT egress shaping and the MTU/jumbo probe; `uplink_rx` itself attaches to the geneve `collect_md` device, which demuxes decap for every uplink, so `--extra-uplink` is a no-op under the geneve model and kept only for compatibility. |
-| `--wan-uplink` | the WAN-facing uplink (`wan_rx` attaches to its tcx ingress); required for `--role edge`. |
-| `--local-underlay` | this host's underlay IPv6, the node VTEP — outer src on encap, and the underlay every interface on this node is programmed with (no per-endpoint `/128` is allocated). Optional — otherwise resolved from the kubelet node IP (`HOST_IP`/`NODE_IP`) or inferred from a `lo`/`dummy*` fabric loopback. |
-| `--gateway-mac` | the MAC stamped on the `collect_md` geneve device. That device carries INNER Ethernet (TEB), so an edge's kernel local-deliver needs the inner dst MAC to equal it or `eth_type_trans` drops the frame `PACKET_OTHERHOST`. The kernel builds the outer Ethernet itself, from the fabric neighbor table — this is not an outer-eth dst. |
-| `--gateway` / `--gateway6` | overlay IPv4/IPv6 gateway the datapath answers ARP/ND for. |
-| `--pin-dir` | bpffs pin directory (default `/sys/fs/bpf/flowplane`) — pins programs + maps so a restart re-adopts. |
-| `--pin-links` | pin program links so a same-image restart is a zero-forwarding-gap re-point (default on; disable for a guaranteed fresh re-attach). |
-| `--conntrack-max` | override the `CONNTRACK` capacity (also `FLOWPLANE_CONNTRACK_MAX`). |
-| `--dhcp-*` | server-wide DHCP options. |
+| `--addr` | Required. A `unix://` path binds a Unix socket with mode `0600` (the deployed form: `unix:///run/flowplane/dataplane.sock`); anything else is parsed as a TCP address. |
+| `--uplink` | Required. The primary fabric uplink: its MAC and ifindex go into `LOCAL`, it gets the `fq` qdisc for EDT pacing, and its MTU feeds the guest MTU. `uplink_rx` does not attach here; it attaches to `fp-geneve0`. |
+| `--extra-uplink` | More fabric uplinks (repeatable). They count toward the guest MTU. Decapsulation needs no per-uplink attach, because `fp-geneve0` receives from every uplink. |
+| `--role node\|edge` | `node` (default) or `edge`. An edge also attaches `wan_rx` and writes the local-deliver sentinel into `UNDERLAY`. |
+| `--wan-uplink` | The WAN-facing interface `wan_rx` attaches to. Required with `--role edge`. |
+| `--local-underlay` | The node's VTEP. Overrides every other source. |
+| `--underlay-within` | The expected node underlay aggregate, for example `fd00:cafe::/32`. The VTEP is the host address inside it. Takes precedence over `HOST_IP`/`NODE_IP` and interface inference. |
+| `--gateway-mac` | Required. The MAC set on `fp-geneve0`. The device carries inner Ethernet, so this must equal the destination MAC of frames handed to the local stack on an edge. It is not an outer Ethernet address; the kernel builds that from the fabric's neighbour table. |
+| `--gateway` | Required. The overlay IPv4 gateway the datapath answers ARP for (`169.254.0.1` in the pool chart). |
+| `--gateway6` | The overlay IPv6 gateway the datapath answers ND and RS for. |
+| `--guest-mtu` | Override the derived guest MTU. `--dhcp-mtu` is a deprecated alias. |
+| `--dhcp-dns`, `--dhcpv6-dns` | DNS servers the DHCP responders offer (repeatable). |
+| `--pin-dir` | The bpffs pin directory. Default `/sys/fs/bpf/flowplane`. If it already holds pinned maps, `serve` adopts them. |
+| `--pin-links` | Pin program links too, so a restart re-points them with no gap in forwarding. Default on; also `FLOWPLANE_PIN_LINKS`. Turn it off to force a fresh attach. |
+| `--conntrack-max` | `CONNTRACK` capacity in entries. Also `FLOWPLANE_CONNTRACK_MAX`. |
+| `--offload` | Run the SR-IOV flow-offload manager. Off by default (see [attaching workloads](../attaching-workloads.md#sr-iov-vf-offload)). |
 
-The graceful-restart machinery (map pinning, `IFACE_META` journal replay, atomic
-`bpf_link_update`) is described in [HA & graceful restart](../ha-graceful-restart.md).
+### The VTEP
 
-## `bringup` — static, flag-driven datapath
+Without `--local-underlay`, `serve` resolves the VTEP in this order: the host address inside
+`--underlay-within`; the kubelet node IP in `HOST_IP` or `NODE_IP` (set from `status.hostIP`); the
+address on a `lo` or `dummy*` fabric loopback. It fails if none applies.
 
-Brings up the full map-driven datapath from command-line flags (no gRPC), then idles.
-This is how the netns lab configures a node without the Kubernetes control plane. Every
-map is populated from repeatable flags, each encoding one control-plane object:
+### The guest MTU
+
+The guest MTU is the smallest MTU across `--uplink` and `--extra-uplink`, minus 80, floored at 576.
+Jumbo values are only handed out when `FLOWPLANE_SKB_MODE` is set or every uplink advertises XDP
+scatter-gather; otherwise the uplink counts as 1500. The name `FLOWPLANE_SKB_MODE` is historical: it
+is the jumbo gate and changes nothing about how programs attach. The lab sets it because its veth
+uplinks advertise no XDP features. See [the overlay](../overlay.md#the-mtu-budget).
+
+### Checksum offload
+
+When the uplink has no `/sys/class/net/<uplink>/device` link, as with a veth in the lab, `serve`
+turns off transmit checksum offload on guest devices at attach. A software veth never finalizes a
+partial checksum, so an encapsulated guest packet would reach the wire with a wrong inner checksum. On
+a real NIC offload stays on.
+
+### Shutdown
+
+On `SIGTERM` or `SIGINT`, `serve` stops the gRPC server and exits without unpinning anything, so the
+next process adopts the datapath. See [HA and restarts](../ha-and-restarts.md).
+
+## bringup
+
+!!! warning "Legacy"
+    `bringup` predates the move to Geneve and was only kept compiling. It does not create
+    `fp-geneve0`, attaches `uplink_rx` straight to `--uplink`, and uses the old addressing model, in
+    which each guest has its own underlay `/128` and an `UNDERLAY` entry. It cannot carry overlay
+    traffic between nodes. Some older scripts under `test/` still call it.
+
+`bringup` loads the datapath, fills every map from repeatable flags, and idles. It needs no gRPC and
+no Kubernetes.
 
 | Flag | Programs |
 |---|---|
-| `--guest ifname=ip4=mac=underlay=vni` | a local guest interface (`INTERFACES`, `UNDERLAY`, tc guest edge on `ifname`). |
-| `--remote ip4=nexthop=vni` | a remote overlay route (`ROUTES`). |
-| `--guest6` / `--remote6` | dual-stack v6 counterparts (`PortMeta.gateway_ipv6`, `ROUTES6`). |
-| `--floating-ip iface_ip=floating_ip` | a 1:1 floating-IP mapping (both `FLOATING_IPS` directions: egress SNAT, ingress DNAT). |
-| `--lb ip:port:proto:lb_underlay` + `--lb-target …=backend_underlay` | an LB service + backends (allocates the Maglev table). |
-| `--nat guest_ip=nat_ip:min:max` | a NAT source block (`NAT`). |
-| `--neigh-nat nat_ip:min:max@owner@vni` | a distributed-NAT return entry, half-open `[min, max)` (`NAT_OWNERS`). |
-| `--underlay-vni ipv6:vni` | a VNI-only underlay marker for a NAT node with no local interface. |
-| `--fw ifname:dir:action:proto:src:dst:dport` | a firewall rule; each interface's rules, in order, are compiled into its classifier scopes (`FW_BIND` + `FW_CLASS`/`FW_POLICY`). |
-| `--meter ifname=total_mbps:public_mbps` | a per-interface egress rate cap (`METER`). |
-| `--external ip4` | mark a remote route NAT-eligible. |
+| `--guest <ifname>=<ipv4>=<mac>=<underlay>=<vni>` | a local guest: `PORT_META`, `INTERFACES`, `UNDERLAY`, and `tc_guest_tx` on the device |
+| `--guest6 <ifname>=<ipv6>=<underlay>=<vni>` | the guest's IPv6 side |
+| `--remote <ipv4>=<nexthop>=<vni>`, `--remote6` | routes in `ROUTES`, `ROUTES6` |
+| `--external <ipv4>` | mark a remote route external (NAT applies) |
+| `--floating-ip <guest>=<floating>` | both `FLOATING_IPS` directions |
+| `--lb <ip>:<port>:<proto>:<underlay>`, `--lb-target <lb>=<backend underlay>` | a load-balancer service and its backends |
+| `--nat <guest>=<nat ip>:<min>:<max>` | a local NAT source |
+| `--neigh-nat <nat ip>:<min>:<max>@<owner>@<vni>` | another node's NAT block in `NAT_OWNERS`, half-open `[min, max)` |
+| `--underlay-marker <ipv6>:<vni>` | a VNI-only `UNDERLAY` entry |
+| `--fw-rule <ifname>:<in\|eg>:<accept\|drop>:<proto>:<src>:<dst>:<dport\|*>` | a firewall rule; each interface's rules are compiled into its classifier scopes |
+| `--meter <ifname>=<total>:<public>` | egress rates in `METER` |
+| `--pin-dir`, `--adopt` | pin the maps; with `--adopt`, reopen a pinned conntrack and resume aging instead of loading |
 
-`bringup` also honors `--pin-dir` and an `--adopt` flag (re-open a pinned datapath after a
-restart without re-loading), mirroring `serve`'s HA options for the lab.
+## tc-bringup
 
-## `tc-bringup` — minimal guest edge
+`tc-bringup` attaches `tc_guest_tx` to one device (`--tap`) and programs that device's `PORT_META`,
+the DHCP settings and, optionally, `LOCAL` (`--uplink`) and routes (`--remote`, `--remote6`). It
+exercises the guest edge on its own: the DHCP and ND responders and the egress decision. It does not
+create `fp-geneve0`. The tap and DHCP smoke scripts under `test/` use it.
 
-Attaches `tc_guest_tx` to a single tap's clsact/tcx ingress and programs `PORT_META` +
-DHCP/route config for it, then idles. Used to exercise the guest edge (DHCP responder,
-egress encap) in isolation — a single-interface subset of `bringup`. It accepts a focused
-flag set: `--uplink`, `--local-underlay`, `--gateway-mac`, per-guest v4/v6 identity, and
-`--remote`/`--remote6` routes.
+## load and inspect
 
-## `load` / `inspect` — single-program debug helpers
+- `load --uplink <iface>` attaches `uplink_rx` to `<iface>`'s tcx ingress and idles. `serve` never
+  does this: it attaches `uplink_rx` to `fp-geneve0`.
+- `inspect --iface <iface>` attaches `xdp_inspect` in native mode, falling back to generic mode, and
+  prints the first bytes of the latest packet every 500 ms.
 
-Each attaches one program to an interface and idles. There is no `pass` subcommand: the
-overlay pipeline is entirely tcx, so the `xdp_pass` shim that native-XDP-redirect-into-veth
-once required is gone.
+## infer-underlay
 
-| Subcommand | Program | Use |
-|---|---|---|
-| `load --uplink <iface>` | `uplink_rx` | attach `uplink_rx` as a clsact/tcx ingress classifier directly on `<iface>` and idle. This is a debug helper; `serve` attaches `uplink_rx` to the geneve `collect_md` device instead. |
-| `inspect --iface <iface>` | `xdp_inspect` | attach the XDP inspector (native, falling back to SKB mode) and print the first packet bytes periodically. |
-
-## `infer-underlay` — resolve the underlay `/64`
-
-Prints this host's inferred underlay `/64` (preferring a `lo`/`dummy*` fabric loopback)
-and exits. It needs no root and touches no datapath; it just reads `ip -6 -o addr`. The containerlab
-IPv6-fabric e2e uses it to assert the inferred `/64` matches the fabric-announced `dummy0`.
+`infer-underlay` prints the `/64` of the host's underlay address, preferring a `lo` or `dummy*` fabric
+loopback, and exits. It reads `ip -6 -o addr`, needs no root and touches no datapath.
 
 ## Where to go next
 
-- [Datapath programs](programs.md) — the programs these commands attach.
-- [BPF maps & state model](maps.md) — the maps `bringup` flags populate.
-- [The clab + Talos fabric](../../tutorials/local-fabric.md) — where `serve` runs in integration.
-- [Getting started](../../tutorials/getting-started.md) — the `make` targets that wrap these.
+- [The dataplane overview](index.md): what `serve` runs and how it is called.
+- [Programs and hooks](programs.md): the programs these commands attach.
+- [Maps and state](maps.md): the maps the flags fill.
+- [The lab](../../guides/lab.md): where `serve` runs in the test environment.

@@ -1,71 +1,58 @@
-# QoS: EDT shaping & policing
+# QoS: shaping and policing
 
-!!! warning "Status: Partial"
-    Policing (drop) and the EDT stamping/wiring are implemented and validated in the lab. True FQ
-    pacing (loss-free shaping) can only be measured on real fabric/VMs — nested netns + veth do
-    not provide real FQ, so the clab run validates policing and "tstamp is set", not the pacing.
+Per-interface QoS caps a workload's bandwidth in three independent lanes: total egress, external egress and ingress. Total egress is shaped, meaning packets are delayed to the configured rate rather than dropped, using the kernel's earliest-departure-time (EDT) model with the `fq` qdisc. The other two lanes are policed with a token bucket, which drops what exceeds the rate.
 
-Per-interface QoS gives each guest three independent traffic-control lanes: EDT-shaped total
-egress, policed external egress, and policed ingress. The central capability is true shaping:
-pacing traffic to a rate with no packet loss, using the kernel's Earliest-Departure-Time model
-(EDT + the FQ qdisc), the same design Cilium's Bandwidth Manager adopted after moving off TBF
-policing.
+## The API: NetworkInterface `spec.qos`
 
-## The unified tcx guest edge
+QoS is a field of the `NetworkInterface`; unset means unlimited.
 
-Shaping requires the guest egress path to traverse an egress qdisc, which is only possible on the
-tc/skb path: an XDP `bpf_redirect`/devmap transmit uses `ndo_xdp_xmit`, which bypasses the qdisc
-entirely, making shaping structurally impossible on an XDP fast path. That is why the guest edge was
-unified on a single tc datapath (`tc_guest_tx`) for both container veth/netkit and VM tap — one guest
-program, one attach path. The rest of the forwarding path has since followed: `uplink_rx`, `wan_rx`,
-and `uplink_dsr_note` are tcx classifiers as well (see
-[Datapath programs](../architecture/dataplane/programs.md)), so every program in the path works on an
-skb and the departure timestamp it stamps survives to the transmit path.
-
-The qdisc side is explicit: the loader puts an `fq` root qdisc on each physical uplink
-(`ensure_fq_qdisc`, called for the primary uplink, every `--extra-uplink`, and the edge's WAN
-uplink), so overlay egress leaving via that NIC is paced against the stamp.
-
-tcx works cleanly under vhost-net: guest→host traverses `netif_receive_skb` → tcx ingress, and
-host→guest traverses the tap qdisc → tcx egress.
-
-## Shape vs police
-
-Shaping and policing differ in both mechanism and over-rate behaviour:
-
-| | Shape | Police |
+| Field | Lane | Mechanism |
 |---|---|---|
-| Mechanism | EDT: stamp a departure time, FQ delays the packet | Token bucket: drop when the bucket is empty |
-| Over-rate behaviour | delay (no loss), smoothed to the rate | drop |
-| Where | egress total lane | external-egress (public) lane, ingress lane |
+| `spec.qos.egress.rateMbps` | Total egress | EDT shaping at the uplink `fq` qdisc |
+| `spec.qos.egress.publicMbps` | External egress (traffic on an external route) | Token-bucket policing |
+| `spec.qos.ingress.rateMbps` | Ingress | Token-bucket policing |
+| `spec.qos.egress.burstKB`, `spec.qos.ingress.burstKB` | — | Reserved; not programmed |
 
-Shaping paces without loss and is the right model for a bandwidth cap; policing drops and is used
-where a hard sub-cap or an inbound cap is wanted.
+A rate of 0 means unlimited.
 
-## The three lanes
+```yaml
+apiVersion: net.ectobase.dev/v1alpha1
+kind: NetworkInterface
+metadata: {name: web-0, namespace: tenant-a}
+spec:
+  vpcRef: {name: blue}
+  qos:
+    egress: {rateMbps: 500, publicMbps: 100}
+    ingress: {rateMbps: 200}
+```
 
-All lanes are keyed by interface ifindex and live in one QoS map entry per interface
-(`MeterState`). No entry for an ifindex ⇒ all lanes unlimited (pass / send immediately).
+See [`InterfaceQoS`](../reference/api/net.md#interfaceqos) in the API reference.
 
-| Lane | Direction | Mechanism | Where |
-|---|---|---|---|
-| Egress total | VM → out | EDT shaping (smoothed) | stamp in `tc_guest_tx`, pace at uplink FQ |
-| Egress public | VM → external | token-bucket police | `tc_guest_tx`, on `is_external` |
-| Ingress | out → VM | token-bucket police | `uplink_rx`, after resolving the dest tap |
+## How a cap reaches the datapath
 
-### Egress shaping with EDT
+QoS follows the same compiled path as the firewall and NAT, so it follows the workload across pools and reschedules.
 
-In `tc_guest_tx`, once the forward decision resolves the source VM's egress rate, a pure-core
-function computes the packet's departure time and the datapath stamps it on the skb via
-`bpf_skb_set_tstamp(skb, tstamp, BPF_SKB_TSTAMP_DELIVERY_MONO)`. The stamp goes on before the encap
-decision is executed — a tunnel-key stamp (`bpf_skb_set_tunnel_key`) plus a `bpf_redirect` to the
-kernel geneve `collect_md` device, neither of which touches `tstamp` — so the encapped frame reaches
-the uplink's FQ still carrying its departure time, and FQ holds it until then.
+```mermaid
+flowchart TD
+    nic["NetworkInterface.spec.qos"] -->|compiler| cq["CompiledNIC.spec.qos<br/>{egressMbps, publicMbps, ingressMbps}"]
+    cq -->|broker| agent["agent on the interface's node"]
+    agent -->|"ConfigureQoS(interface, 3 rates)"| meter["METER[ifindex]<br/>(MeterState)"]
+    meter --> tx["tc_guest_tx:<br/>EDT stamp (total) · police (external)"]
+    meter --> rx["uplink_rx:<br/>police (ingress)"]
+    tx --> fq["fq qdisc on the uplink<br/>holds each packet until its stamp"]
+```
 
-The scheduling math lives in `flowplane-core/src/meter.rs` as `edt_departure` — the shaping analog
-of the policing `take`, sharing the same verifier-friendly discipline (saturating math, no 128-bit
-ops, clock passed in as a parameter so eBPF passes `bpf_ktime_get_ns()` and the sim passes a
-controlled clock):
+The compiler flattens `spec.qos` into `CompiledNIC.spec.qos`, dropping the burst fields. The agent's QoS reconciler selects the `CompiledNIC`s whose interface is attached locally, diffs the desired caps against what it has applied, and calls `ConfigureQoS`. When the spec drops a lane, or the interface goes away, the reconciler sets that lane back to unlimited.
+
+All three lanes live in one `METER` entry per interface, keyed by ifindex. No entry means every lane is unlimited.
+
+## Shaping with EDT
+
+Shaping needs the egress path to go through a qdisc, so it requires the tc/skb datapath; an XDP redirect transmits through `ndo_xdp_xmit` and bypasses the qdisc. That is one reason the whole forwarding path runs as tcx programs on skbs (see [datapath programs](../architecture/dataplane/programs.md)).
+
+In `tc_guest_tx`, once a packet is headed for the wire, `edt_egress` computes its departure time from the interface's egress rate and the packet's wire length, including the Geneve overhead. The datapath stamps it with `bpf_skb_set_tstamp(..., BPF_SKB_TSTAMP_DELIVERY_MONO)`. Setting the tunnel key and redirecting to the Geneve device do not touch the timestamp, so the encapsulated frame reaches the uplink's `fq` qdisc still carrying it, and `fq` holds the frame until then.
+
+The scheduling function is pure and lives in `flowplane-core/src/meter.rs`:
 
 ```rust
 /// The packet may leave no earlier than max(t_last, now); the schedule cursor then advances by
@@ -80,89 +67,31 @@ pub fn edt_departure(rate_bps: u64, wire_len: u64, t_last: u64, now: u64) -> (u6
 }
 ```
 
-`edt_egress` reads `METER[ifindex]`, advances the schedule cursor (`total_last_ns`) via
-`edt_departure` on the egress rate, writes it back, and returns the departure timestamp — `None`
-means no shaping is configured (no entry, or rate 0) and the caller sends immediately.
+The clock is a parameter, so eBPF passes `bpf_ktime_get_ns()` and the simulator passes a controlled clock.
 
-FQ hashes the encapped uplink traffic by the outer (per-dest-node) header, so per-flow fairness
-degrades to per-dest-node buckets — but EDT pacing honours `tstamp` regardless of the flow bucket,
-which is what shaping needs.
+flowplane installs the qdisc itself: `ensure_fq_qdisc` runs `tc qdisc replace dev <if> root fq` on the primary uplink, every `--extra-uplink`, and an edge's WAN uplink. If `tc` fails, flowplane logs that egress shaping is disabled and carries on.
 
-### External-egress and ingress policing
+`fq` classifies the encapsulated traffic by its outer header, so its per-flow fairness becomes per-destination-node fairness. EDT pacing honours the timestamp regardless of which bucket a packet lands in, which is all shaping needs.
 
-Both reuse the token bucket `take` unchanged:
+## Policing
 
-- `public_pass` runs in `tc_guest_tx` on `is_external` only — an additional drop cap on external
-  egress, layered on top of the EDT total shaping.
-- `ingress_pass` runs in `uplink_rx` once the (already-decapped) frame's delivery target resolves to
-  a local tap, keyed by that tap. Policing needs no qdisc — it is a drop decision taken inside the
-  program — so it is hook-agnostic; ingress is policed only.
+The two policed lanes reuse one token-bucket function, `take`, which refills at the configured rate (refill capped at one second's worth) and drops a packet when the bucket holds fewer tokens than its length.
 
-```rust
-pub fn take(bps: u64, burst: u64, tokens: u64, last_ns: u64, now: u64, len: u64) -> (bool, u64) {
-    if bps == 0 { return (true, tokens); }           // unlimited
-    let elapsed = now.saturating_sub(last_ns);
-    let elapsed_capped = elapsed.min(1_000_000_000);  // cap refill to 1s worth, keep within u64
-    let refill = elapsed_capped / 1_000_000_000 * bps
-        + (elapsed_capped % 1_000_000_000) * bps / 1_000_000_000;
-    let mut t = tokens.saturating_add(refill);
-    if t > burst { t = burst; }
-    if t >= len { (true, t - len) } else { (false, t) }
-}
-```
+- `public_pass` runs in `tc_guest_tx` on traffic whose route is external, as a drop cap layered on top of the shaped total.
+- `ingress_pass` runs in `uplink_rx` once the decapsulated frame has resolved to a local tap, keyed by that tap. Policing is a drop decision inside the program and needs no qdisc.
 
-### Same-node delivery is never shaped
+## Limits
 
-Same-node VM→VM (the `Deliver::Local` fast path) redirects tap→tap directly, bypassing the uplink
-FQ, so it is not egress-shaped. Cross-node egress (encap → uplink) and all external egress
-are shaped.
+- Same-node traffic is never shaped. A packet to another interface on the same node takes the local fast path, redirecting tap to tap without crossing the uplink `fq`.
+- Ingress is policed only; there is no ingress shaping.
+- `burstKB` is reserved and not programmed in either direction.
+- The qdisc is a single root `fq`. On a multi-queue NIC an `mq` root with per-queue `fq` leaves would scale better; that is not built.
+- QoS is L4-agnostic: there is no DSCP marking, priority or L7 classification.
+- The lab test (`TestQoSGuestToGuest`) programs the caps directly over gRPC and checks the qualitative contrast across clusters: with an egress cap the received rate lands near the cap with under 40% loss, with an ingress cap near the cap with over 40% loss. It does not measure pacing precision, and the intent path from `spec.qos` is covered by unit tests.
+- tcx links need kernel 6.6 or later.
 
-## The `InterfaceQoS` API
+## Where to go next
 
-QoS is expressed per interface (`api/net/v1alpha1`, `NetworkInterfaceSpec.QoS`); nil means unlimited.
-The agent lowers it into the one dataplane QoS map entry via `DataplaneNode/ConfigureQoS`:
-
-```go
-type InterfaceQoS struct {
-    Egress  *EgressQoS `json:"egress,omitempty"`  // EDT-shaped at the uplink fq qdisc
-    Ingress *RateLimit `json:"ingress,omitempty"` // token-bucket policed
-}
-type EgressQoS struct {
-    RateMbps   uint32 `json:"rateMbps,omitempty"`   // EDT-shaped total egress; 0 = unlimited
-    BurstKB    uint32 `json:"burstKB,omitempty"`    // optional; EDT ignores it in v1
-    PublicMbps uint32 `json:"publicMbps,omitempty"` // external sub-cap (policed); 0 = unlimited
-}
-type RateLimit struct {
-    RateMbps uint32 `json:"rateMbps,omitempty"`
-    BurstKB  uint32 `json:"burstKB,omitempty"`
-}
-```
-
-`EgressQoS.RateMbps` → the EDT total lane, `EgressQoS.PublicMbps` → the public police lane,
-`Ingress.RateMbps` → the ingress police lane.
-
-Like the firewall, NAT, and load-balancer policy, QoS rides the compiled path rather than the
-raw `NetworkInterface`: the compiler flattens `NetworkInterfaceSpec.QoS` into
-`CompiledNIC.spec.qos` (a `CompiledQoS{egressMbps, publicMbps, ingressMbps}` — burst is not
-programmed), the broker syncs the `CompiledNIC` to the workload's pool, and the node agent programs
-QoS from the `CompiledNIC` — selecting it, like all the agent's policy, by the NIC's interface being
-locally attached (matched by the unique `(VNI, overlay IP)` key), not by a declared node. So QoS
-follows the workload across pools and reschedules, and the agent reads no raw `NetworkInterface` at
-all. The agent's QoS reconciler diffs the desired caps against what it has applied and idempotently
-clears a lane to unlimited when the spec drops it or the NIC is deleted. The uplink loader ensures an
-`fq` root qdisc (`tc qdisc replace dev <if> root fq`) so the EDT stamps actually pace. On a real
-multi-queue NIC an `mq` root with per-queue `fq` leaves would be preferable; that is not implemented
-yet, and `root fq` is correct for the single-queue/veth case and a safe default elsewhere.
-
-## Validating shaping
-
-A containerlab run cannot validate precise pacing. Nested netns + veth means no real FQ pacing
-(the same reason Cilium disables its Bandwidth Manager in Kind). So in clab, the egress/ingress
-policing and the "tstamp is set" wiring validate; true FQ shaping validates only on real
-fabric/VMs. The EDT computation is covered by `flowplane-core/src/meter.rs` unit tests plus an
-in-process sim departure-spacing test over a controlled clock, but a claim that shaping paces
-requires a real-hardware measurement.
-
-Kernel floor: tcx links need ≥ 6.6; `bpf_skb_set_tstamp` delivery-mono needs a recent kernel.
-QoS is L4-agnostic — there is no L7 / DSCP / priority QoS, and no ingress shaping (ingress is policed
-only).
+- [Datapath programs](../architecture/dataplane/programs.md)
+- [BPF maps](../architecture/dataplane/maps.md)
+- [Simulator tests](../contributing/testing/sim.md)

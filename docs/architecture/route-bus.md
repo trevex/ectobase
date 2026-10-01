@@ -1,303 +1,332 @@
-# Control/data split & the route bus
+# The route bus
 
-ectobase runs a dumb datapath, smart control plane. `flowplane` on each node
-makes no distributed decisions — every forwarding action is a per-flow-keyed BPF
-map lookup. All the state those maps hold is decided elsewhere and pushed down. The
-mechanism that distributes the dynamic part of that state — which overlay prefix
-lives behind which underlay node — is a custom route bus: a centralized reflector
-(running on the dispatch) and per-node agents exchanging routes over a bidirectional gRPC stream.
+The **route bus** is how every node learns which node holds each overlay address. It is a typed
+publish/subscribe protocol over gRPC: one **reflector** hub on the dispatch, and an **agent** on every
+node and WAN edge. This page covers the protocol, how the reflector authorizes and fences what nodes
+say, and how the agent turns what it learns into flowplane routes and keeps them there across
+restarts and failures.
 
-This is a [metalbond](https://github.com/ironcore-dev/metalbond)-style typed
-pub/sub, not BGP in the hot path. BGP appears only at the WAN edge, to announce
-the platform's public prefixes to the upstream internet — never for overlay
-distribution between nodes.
+Two facts frame everything below. flowplane makes no distributed decisions; every forwarding choice
+is a map lookup, and the route bus fills the `ROUTES` maps. And the agent always stands between the
+bus and the datapath: the reflector never talks to flowplane.
 
-## The three moving parts
+## The moving parts
 
 ```mermaid
 flowchart LR
     subgraph dispatch["dispatch"]
-        reflector["reflector<br/>(in-memory RIB + NAT/public tables)"]
+        reflector["reflector<br/>RIB · NAT table · public table · fences"]
+        dc["dispatch-controller<br/>(failover)"]
     end
     subgraph nodeA["node A"]
-        agentA["agent A"]
-        fpA["flowplane A"]
+        agentA["mesh-agent"]
+        fpA["flowplane"]
     end
-    subgraph nodeB["node B"]
-        agentB["agent B"]
-        fpB["flowplane B"]
+    subgraph edge["WAN edge"]
+        agentE["mesh-agent --edge-loopback"]
+        fpE["flowplane --role edge"]
     end
-    agentA <-->|RouteBus.Session<br/>routebus.v1| reflector
-    agentB <-->|RouteBus.Session<br/>routebus.v1| reflector
-    agentA -->|AddRoute / …<br/>DataplaneNode gRPC| fpA
-    agentB -->|AddRoute / …<br/>DataplaneNode gRPC| fpB
+    agentA <-->|"RouteBus.Session :1338<br/>mTLS"| reflector
+    agentE <-->|"RouteBus.Session :1338<br/>mTLS"| reflector
+    dc -->|"RouteBusAdmin :1339<br/>SetFence · ClearFence · AnnouncedFrom"| reflector
+    agentA -->|"DataplaneNode gRPC<br/>unix:///run/flowplane/dataplane.sock"| fpA
+    agentE -->|"DataplaneNode gRPC"| fpE
 ```
 
-- agent (`mesh/agent`, per node) — a route-bus client. It reconciles the
-  node's `NetworkInterface`s into a desired set of announcements, subscribes to
-  the VNIs it cares about, and programs every route it learns onto the local
-  datapath over the `DataplaneNode` gRPC (`127.0.0.1:1337`).
-- reflector (`mesh/reflector`, on the dispatch) — a route broker. It holds an
-  in-memory RIB (`rib.go`) plus a global NAT table (`nattable.go`) and public-prefix
-  table (`publictable.go`), and reflects records between the agents' streams
-  (`server.go`).
-- DataplaneNode — the node-local gRPC surface (`api/proto/dataplane/v1`) that the
-  agent drives: `AddRoute`/`WithdrawRoute`, the NAT-source and neighbor-NAT calls,
-  firewall/LB/QoS programming. The route bus never talks to the datapath directly;
-  the agent is always the intermediary.
+| Component | Code | Role |
+|---|---|---|
+| reflector | `mesh/reflector`, `mesh/cmd/reflector` | An in-memory route table (the RIB) plus the global NAT and public tables. It fans records out between agent sessions. |
+| agent | `mesh/agent`, `mesh/cmd/agent` | Announces this node's routes, subscribes to the VNIs it needs, and programs what it learns into flowplane. |
+| flowplane | `flowplane/` | Holds the routes in its `ROUTES` maps. Reached over a root-only Unix socket. |
 
-## The routebus.v1 stream
+The protocol is `api/proto/routebus/v1/routebus.proto`. The reflector serves `RouteBus` on the
+agent-facing port (default `:1338`) and `RouteBusAdmin` on a separate listener (`:1339` in the
+dispatch chart).
 
-Each agent opens exactly one long-lived `RouteBus.Session` bidi stream. The protocol
-is a small tagged union in each direction (`api/proto/routebus/v1/routebus.proto`):
+## The session
 
-| Client → reflector | Reflector → client |
+Each agent holds one long-lived bidirectional stream, `RouteBus.Session`. Each direction carries a
+small tagged union.
+
+| Agent to reflector | Reflector to agent |
 |---|---|
-| `Hello` (node id + underlay IPv6 + `global_feed`) | `RouteUpdate` (add/withdraw per VNI) |
-| `Subscribe` / `Unsubscribe` (by VNI) | `EndOfRIB` (snapshot-complete / prune marker) |
-| `Announce` / `Withdraw` (route) | |
-| `AnnounceNat` / `WithdrawNat` (SNAT port-block) | `EndOfGlobal` (global-snapshot-complete marker) |
-| `AnnouncePublic` / `WithdrawPublic` (edge identity, public prefix) | |
+| `Hello` (node id, VTEP, global feed choice), first and only once | `RouteUpdate` (ADD or WITHDRAW of one route in one VNI) |
+| `Subscribe` / `Unsubscribe` (a VNI) | `EndOfRIB` (a VNI's replay is complete) |
+| `Announce` / `Withdraw` (a route) | `NatUpdate`, `PublicUpdate` (global records) |
+| `AnnounceNat` / `WithdrawNat` (an SNAT port block) | `EndOfGlobal` (the global replay is complete) |
+| `AnnouncePublic` / `WithdrawPublic` (an edge identity or load-balancer address) | |
 | `KeepAlive` | |
 
-The first message on a session must be `Hello`; it carries the node id, which becomes the
-origin tag on everything the node announces (`server.go`), plus `global_feed` — whether
-this session takes the GLOBAL channel described below. On `Hello` the reflector registers
-the session for NAT/public fanout only if `global_feed` asks for it (`GLOBAL_FEED_ALL`,
-the default); a session that opts out (`GLOBAL_FEED_NONE`) is never added to that fanout
-and instead gets an immediate `EndOfGlobal{record_count: 0}`, which still closes its
-snapshot so convergence latches. A compute agent sends `GLOBAL_FEED_NONE` — it neither
-relays NAT returns nor runs Maglev, so the global records were work for nothing — and a
-WAN edge sends `GLOBAL_FEED_ALL`. The default being `ALL` keeps an older agent, which
-never sets the field, receiving everything exactly as before.
+### Hello and origins
 
-Claiming a node id is exclusive to one session at a time: `Hello` claims it and the
-session holds a token for as long as it lives (`RIB.ClaimOrigin`/`ReleaseOrigin`).
-Claiming drops whatever the previous session left — the agent re-announces its whole
-desired set on reconnect but never withdraws what it no longer wants, so a route it has
-since dropped would otherwise linger for good — and a session's own cleanup tears its
-state down only if it still holds the token, so a predecessor still timing out its
-keepalive window after a fast reconnect can never touch its successor's state.
+The first message must be `Hello`. Its node id becomes the **origin** of everything the session
+announces. A node id belongs to one session at a time: `Hello` claims it (`RIB.ClaimOrigin`), and if
+an earlier session still holds it (a reconnect that beat the old session's keepalive timeout), the
+reflector drops everything that session announced in the same step. The old session's own cleanup
+later checks its token and touches nothing, so it cannot wipe its successor's state.
 
-### Per-VNI routes vs global records
+When a session ends, by a clean close, an error or a missed keepalive, the reflector withdraws every
+route, NAT block and public record its origin announced and drops its subscriptions. The keepalive
+is aggressive (a ping every 2 s, a 3 s timeout) and stands in for BFD, so a dead node's routes leave
+the fabric within seconds.
 
-Routes are fanned out per VNI. When an agent `Subscribe`s to a VNI, the reflector
-replays the current table for that VNI in deterministic prefix order, then sends an
-`EndOfRIB(vni)` marker (`RIB.Subscribe`). Subsequent `Announce`/`Withdraw` from any
-origin fan out only to that VNI's subscribers (`RIB.fanout`), and never back to the
-origin that sent them.
+### Per-VNI routes
 
-NAT port-blocks and public/edge-identity records, by contrast, broadcast to every session
-that takes the GLOBAL feed — a WAN edge needs the return path for a NAT block, or the
-identity of an edge, no matter which VNI it subscribed to; a compute node needs neither
-and opts out. Registration on `Hello` (`RegisterSink`) also replays the current NAT/public
-snapshot to a freshly connected peer that takes the feed.
+Routes are scoped by VNI. `Subscribe(vni)` makes the reflector replay that VNI's current table in
+prefix order and close it with `EndOfRIB{vni, record_count}`. After that, every change to the VNI's
+table reaches every subscriber except the origin that caused it. Subscribing again to a VNI the
+session already holds does nothing; a client that wants a fresh replay unsubscribes first.
 
-At that snapshot's `EndOfGlobal` marker, an edge applies everything it collected as one
-declarative call: `ReplaceNeighborNats` makes its neighbor-NAT blocks exactly that
-snapshot's set, leaving an unchanged block alone and removing one that left — including a
-block a restarted dataplane adopted that no agent remembers installing. A lossy snapshot
-(fewer records arrived than the marker's count) programs what did arrive and prunes
-nothing, since pruning against an incomplete picture would drop live state; live NAT
-records after the marker are still applied incrementally, one at a time. An older
-dataplane that answers `Unimplemented` falls back to the same per-block programming plus a
-diff against what the agent previously installed.
+A key can have several origins. HA WAN edges all announce the same default route, and several
+backends announce the same load-balancer address. The RIB stores each origin's nexthops separately
+and advertises the sorted union. A second origin announcing an identical route changes nothing for
+subscribers, and the route is withdrawn only when its last origin drops it. Agents program the first
+nexthop of the advertised set.
 
-## Reference-counted, anycast-safe routes
+### The global feed
 
-A single `(vni, prefix)` route can be announced by several origins at once — HA
-anycast edges all advertise the same `0.0.0.0/0` toward the anycast edge underlay.
-The RIB therefore reference-counts each route by origin (`routeEntry.origins` maps
-origin → the nexthops it announced):
+NAT port blocks and public records (edge identities, load-balancer addresses) are not per-VNI. They
+go to every session that asked for the **global feed** in `Hello`, which is only the WAN edges: an
+edge needs every NAT block to relay returns to their owners, and every load-balancer address to run
+Maglev. A compute node sends `GLOBAL_FEED_NONE`, is never added to that fanout, and gets a bare
+`EndOfGlobal{record_count: 0}` so its convergence check still completes. See
+[NAT](../features/nat.md) and [the WAN edge](../features/ns-edge.md).
 
-- The effective advertised nexthop set is the deduped, sorted union of every
-  origin's nexthops (`mergeNexthops`), so fan-out is deterministic.
-- A route is withdrawn only when its last origin drops it. A second anycast
-  origin announcing an identical route causes no subscriber churn — fan-out fires
-  only when the merged nexthop set actually changes (`Announce` / `withdrawRouteOrigin`).
+### Slow consumers
 
-## Liveness and fast-withdraw
+The reflector never blocks on a session. Each session has its own outbound queue, drained by one
+goroutine. A replay is queued whole, always, so a session can always converge. Live updates are
+dropped once 1024 are waiting; the session converges on its next reconnect, and the reflector logs
+each drop episode.
 
-The reflector runs an aggressive gRPC keepalive (`cmd/reflector/main.go`: 2s
-ping / 3s timeout) as a v1 stand-in for BFD. When a session ends — clean close, error,
-or keepalive timeout — the reflector calls `DropOrigin`, which withdraws every
-route, NAT block, and public record that node originated and clears its
-subscriptions, so a dead node's state is torn down fabric-wide within a bounded
-budget. On `SIGTERM`/`SIGINT` the reflector `GracefulStop`s, so agents observe clean
-stream closes and fast-withdraw rather than a hard kill.
+## What an agent announces
 
-Slow consumers never block the RIB: each session has an ordered outbound queue
-(`sessionQueue`) drained by its own goroutine. A snapshot — the global replay on
-`Hello`, a VNI's replay on `Subscribe`, each with its end marker — is always queued
-whole, so a session always converges. Live deltas are dropped once 1024 are queued
-and not yet taken by the drain; such a consumer converges on its next reconnect,
-and the reflector logs each time a session starts falling behind and the total
-dropped when the session ends.
+Every reconcile tick (5 s by default) the agent computes its complete desired state from the local
+dataplane and the `Compiled*` objects in its pool:
 
-## Incremental convergence: `diffDesired`
+- a host route (`/32` or `/128`) for each overlay address attached on this node, with the node's VTEP
+  as the nexthop;
+- an anycast route for each load-balancer address a local interface backs;
+- an SNAT port block for each local NAT source, owned by the node's VTEP;
+- on a WAN edge, the defaults `0.0.0.0/0`, `::/0` and `64:ff9b::/96` in the public VNI (VNI 0), and
+  the edge's public records;
+- subscriptions: every VNI with a local interface, every peer VNI it imports from, and the public VNI.
 
-The agent does not announce once and forget. Every reconcile tick it recomputes the
-complete `DesiredState` from the Kubernetes objects — the VNIs to subscribe to,
-the routes/NAT/public records to announce, plus egress-VNI and peering-import
-configuration (`agent/desired.go`, `cmd/agent/main.go`). It then diffs that against
-what is currently applied on the live stream (`diffDesired`) and emits only the
-deltas:
+The agent knows which interfaces are local by asking flowplane (`ListInterfaces`), not from any node
+field in the API, so the routes follow the interface wherever the CNI attached it.
 
-```mermaid
-flowchart TB
-    tick["reconcile tick"] --> desired["compute full DesiredState<br/>from K8s objects"]
-    desired --> diff["diffDesired(applied, next)"]
-    applied["applied<br/>(what's live on this session)"] --> diff
-    diff --> delta["busDelta:<br/>subscribe/unsubscribe<br/>announce/withdraw R/NAT/Public"]
-    delta --> stream["push deltas onto the stream"]
-    stream --> applied
-```
+It diffs that set against what it has already sent on this session (`diffDesired` in
+`mesh/agent/desired.go`) and sends only the difference: subscribes and announces first, then
+withdraws and unsubscribes. A changed value is simply announced again; the reflector replaces by key.
+On a new session the "already sent" set starts empty, so a reconnect re-announces everything.
 
-Semantics per record type (`diffDesired`):
+## Origin authorization
 
-- present in `next` but not `applied` → announce;
-- key in both but the value changed → re-announce (the reflector upserts by key,
-  so no withdraw is needed);
-- key in `applied` but gone from `next` → withdraw.
+The route bus is the fabric's record of where every overlay address lives, so it must stop one node
+from announcing another's. Sessions are mutually authenticated with TLS, and each agent's leaf
+certificate carries its node name as the CN and its VTEP as the only IP SAN.
 
-On reconnect, `applied` resets to empty, so the whole desired set is re-sent. This is
-what makes the agent continuously converge: a `NetworkInterface` descheduled from a
-still-connected node is withdrawn fabric-wide on the next tick, and a CRD change is
-applied without waiting for the session to happen to drop.
+On every session the reflector builds an **underlay guard** (`underlayGuard` in
+`mesh/reflector/underlayauthz.go`) from the verified certificate's IP SANs. It rejects any `Announce`
+whose nexthop, and any `AnnounceNat` or `AnnouncePublic` whose owner, is not exactly one of those
+addresses. A rejected announce is logged and dropped; the session stays up.
 
-### Prune-on-EndOfRIB
+The match is exact, not a prefix match, for two reasons:
 
-Because the datapath outlives any single session, the agent keeps the routes it has
-learned across sessions, plus a per-session `seen[vni]` set of the prefixes received
-since it subscribed (reset at each session open). When the reflector's snapshot for a
-VNI completes with `EndOfRIB(vni)`, any learned route not in `seen` is stale — it left
-the RIB while the agent was disconnected — so the agent forgets it and withdraws what it
-fed from the datapath (`agent/bus.go`). This closes the gap that a plain re-announce
-cannot: routes that vanished during a disconnect. The public VNI is pruned the same way,
-which drops a stale default from the egress VNIs it was imported into.
+- A node has one VTEP and every announcement it makes carries it, so nothing legitimate needs a
+  range.
+- Nodes in a cluster can share a `/64`; the lab gives every node in a cluster a `/128` from one
+  cluster `/64`. A `/64` match would let any node announce a neighbour's VTEP and draw its traffic.
 
-### Programming learned routes
+A speaker that legitimately announces an owner other than its datapath address, a WAN edge pairing
+its anycast VTEP with its own loopback, carries both addresses as IP SANs.
 
-What `flowplane` should hold for any `(vni, prefix)` follows from the learned routes,
-the peering and egress configuration and the local interfaces alone (`desiredRoute`):
-a route on the VNI's own table wins, then a peer import, then the public default in an
-egress VNI. Each `RouteUpdate` programs the keys it feeds as it arrives. Every reconcile
-tick then converges the rest against what the agent last programmed, so a failed
-`AddRoute` or `WithdrawRoute` is retried, and a peering or egress change takes effect
-without a replay. A converged tick makes no dataplane calls. A route the dataplane keeps
-refusing is retried with exponential backoff, up to five minutes apart, and logged when
-it starts failing rather than on every retry. The routes of a VNI the agent has stopped
-subscribing to for three ticks in a row are forgotten and withdrawn; the delay keeps a
-guest pod restart from withdrawing and re-learning a VNI's routes.
+Withdraws are guarded too. A route `Withdraw` only ever removes the session's own origin from the
+key. `WithdrawNat` and `WithdrawPublic` succeed only if this session's origin announced the stored
+record and its certificate covers the stored owner; the node id in `Hello` is self-asserted, so the
+origin check alone is not enough.
 
-A restarted `flowplane` rebuilds its routes from its pinned maps, but not a mesh route
-that a local self-route was holding back. The kernel never had that route. Its
-`ListInterfaces` reports an instance id that changes with every process start. When it
-changes, or when the dataplane answers again after an outage, the agent re-sends every
-route it has learned, held local host keys first. A dataplane that predates the id gets
-the same re-send every five minutes. A tick makes at most 256 dataplane calls and a
-re-send continues over the ticks that follow: the tick runs on the goroutine that drains
-the route-bus stream, and a stream backed up long enough makes the reflector drop live
-updates.
+If a session is not mutually authenticated the guard allows everything. That is a fallback in the
+reflector binary for development; both charts enable the PKI (`pki.enabled`) and require it.
 
-## Securing the bus: per-node mTLS + underlay authz
-
-The route bus is the fabric's source of truth for where every overlay prefix lives.
-Without authentication, any workload that can reach the reflector could announce a
-nexthop for another node's underlay and silently blackhole or hijack that traffic.
-The mutual-TLS PKI closes this: it binds each session to a node identity and
-cryptographically constrains what that node may announce. Private keys never cross a
-cluster or node boundary — only a CSR and signed certificates do.
+### Where the certificates come from
 
 ```mermaid
 flowchart TB
-    root["ectobase root CA (ectobase-ca)<br/>(cert-manager self-signed, dispatch-controller ns)"]
-    subgraph signer["dispatch-controller"]
-        sign["RouteBusIdentity signer<br/>(pki)"]
-    end
-    subgraph pool["pool (per compute cluster)"]
-        broker["broker"]
-        issuer["cert-manager CA Issuer<br/>(ectobase-pool-ca)"]
-        agent["agent (per node)"]
-    end
-    root --> sign
-    broker -->|"CSR (RouteBusIdentity)<br/>only the CSR crosses"| sign
-    sign -->|"signed intermediate<br/>name-constrained to pool /48 + DNS"| broker
-    broker -->|"{intermediate, pool key, root}"| issuer
-    issuer -->|"per-node leaf<br/>CN=node, IP SAN=node /128"| agent
-    agent -->|"presents leaf→intermediate<br/>(validates root-anchored)"| reflector["reflector<br/>(trusts only the root)"]
+    root["root CA ectobase-ca<br/>(dispatch, cert-manager)"]
+    signer["dispatch-controller pki signer"]
+    broker["pool broker"]
+    issuer["pool Issuer ectobase-pool-ca"]
+    agent["mesh-agent leaf<br/>CN = node, IP SAN = VTEP /128"]
+    reflector["reflector<br/>(trusts the root)"]
+    root --> signer
+    broker -->|"CSR via RouteBusIdentity"| signer
+    signer -->|"intermediate, path length 0,<br/>name-constrained to the pool"| broker
+    broker --> issuer
+    issuer --> agent
+    agent -->|"leaf + intermediate"| reflector
 ```
 
-The trust chain has three levels:
+Each pool's broker generates an intermediate key locally and sends only a CSR to the dispatch. The
+signer (`dispatch/pkg/pki`) returns a CA certificate that cannot sign further CAs and is
+name-constrained to the pool's DNS domain and its underlay ranges (`pki.underlayCIDRs` in the pool
+chart). Go's TLS verification enforces those constraints, so one pool's intermediate cannot mint a
+valid leaf for another pool's addresses. Each agent then mints its own leaf from the pool's
+cert-manager `Issuer` (`mesh/agent/nodecert.go`). A WAN edge has no cert-manager; its agent mints its
+leaf in-process from an edge CA directory (`--routebus-intermediate`).
 
-1. Root CA (`ectobase-ca`) — the platform-wide cert-manager self-signed CA held on the
-   dispatch (in the dispatch-controller's namespace, so the signer can mount its key).
-   The reflector trusts only this root, and so does the aggregated apiserver.
-2. Per-pool intermediate — each pool's broker generates an intermediate keypair
-   locally and submits a CSR into its pre-created `RouteBusIdentity` (platform group)
-   on dispatch — pre-created because RBAC cannot scope `create` by name.
-   The `pki` signer (`dispatch/pkg/pki`) signs a path-len-0 intermediate
-   that is name-constrained to the pool's DNS domain and its underlay IP ranges
-   (its `/48`). The broker writes `{tls.crt=intermediate, tls.key=pool key, ca.crt=root}`
-   into a Secret that backs a pool cert-manager CA Issuer. Because Go's TLS chain
-   verification enforces `NameConstraints`, one pool's intermediate cannot mint a
-   leaf whose identity belongs to another pool — cross-pool isolation for free.
-3. Per-node leaf — each agent self-mints its own cert-manager `Certificate`
-   (`CN=node`, `IP SAN = its underlay /128`) from the pool Issuer at startup
-   (`mesh/agent/nodecert.go`), and presents `leaf → intermediate` so the reflector can
-   build the path back to the root it trusts.
+## Fences
 
-### Reflector nexthop authorization
+A **fence** hides a lost node's routes from the rest of the fleet during failover. Failover sets one
+through `RouteBusAdmin.SetFence(prefix)`, where the prefix is a node's `/64` (or a pool's underlay
+aggregate), and removes it with `ClearFence`. The route fence is one half; failover also fences the
+same prefix in Ceph. See [failover](failover.md).
 
-mTLS authenticates who a session is; the reflector then enforces what it may say.
-On each session it binds the verified client cert's IP SANs and rejects any
-`Announce`/`AnnounceNat`/`AnnouncePublic` whose underlay is not *exactly* one of them
-(`mesh/reflector/underlayauthz.go`). An exact match is sufficient because a node has a
-single VTEP and every announce it makes carries it — route nexthops, NAT-block owners and
-LB_IP owners all resolve to that one address. (The check masked to `/64` while each
-endpoint held its own underlay `/128` carved from the node's prefix; Geneve retired that
-model. The `/64` is still the fence coordinate, just not an announce-authz unit.) A speaker
-that legitimately announces an owner different from its datapath address — the WAN edge,
-whose `EDGE_UNDERLAY` record pairs its anycast underlay with its control loopback — carries
-both as IP SANs on its leaf. When a session is not mutually authenticated (mTLS off / dev
-mode) enforcement is disabled and every announcement is allowed — a reflector-binary
-fallback the charts never take, since `pki.enabled` is mandatory. The admin (fence) API
-is additionally CN-gated to the
-`dispatch-controller` identity and split onto its own listener, so a session-cert
-holder can never drive fencing.
+A fence is a filter on advertised nexthops, not a deletion:
 
-Withdraw gets a symmetric guard. `WithdrawNat` and `WithdrawPublic` apply a record only
-if it was announced by THIS session's origin AND the owner underlay it names is one the
-session's certificate speaks for — checked against the STORED record, since the withdraw
-messages themselves carry no owner. Both checks matter: `Hello.node_id` is self-asserted,
-so the origin check alone falls to anyone who claims a node's id, while the certificate is
-what actually binds a record to the node that holds its address. A refused withdraw
-changes nothing, reaches no other session, and is logged by the reflector; withdrawing a
-record that is already gone is not a refusal and passes silently.
+- State is kept. The RIB keeps storing every origin's nexthops. A fenced nexthop is simply left
+  out of what subscribers are told, and an announce from inside a fenced prefix is stored but not
+  advertised.
+- Changes fan out. `SetFence` recomputes every route: a key with nothing left becomes a WITHDRAW,
+  and a key another origin still announces becomes an ADD with the remaining nexthops (an anycast
+  route, or a VM now running on another pool). `ClearFence` re-advertises from what the RIB stored.
+- A key's own origins are skipped. The fence fanout goes to every subscriber except the key's
+  origins. The origin knows its own route, and an ADD for its own guest's `/32` would overwrite the
+  guest's local self-route.
 
-### Enabling it
+The reason for keeping state: an agent on a live session never re-announces a route it already sent.
+If the fence deleted routes, a recovered node would stay unreachable until its next reconnect.
 
-`pki.enabled` is `true` by default and mandatory on both charts (they issue from one trust
-anchor). The dispatch chart owns the root CA + a CA-type `ClusterIssuer`; because a
-CA `ClusterIssuer` reads its CA secret from cert-manager's
-`--cluster-resource-namespace`, cert-manager on the dispatch cluster must be installed
-with that flag pointed at the namespace holding the root secret (`system`). Each pool
-sets `pki.underlayCIDRs` to its underlay `/48` (the intermediate's IP
-name-constraint). cert-manager is required in every participating cluster.
+Fences are keyed by the canonical network, so two spellings of one `/64` are one fence. The admin
+API is on its own listener and only accepts the client certificate CN `dispatch-controller`
+(`--admin-client-cn`), so an agent with a valid session certificate cannot fence anything.
 
-## Why not BGP for the overlay?
+!!! note
+    The RIB and the fence set live in the reflector's memory. A restarted reflector starts empty;
+    agents re-announce when they reconnect.
 
-Overlay discovery is high-churn, typed (routes vs NAT blocks vs edge identities), and
-needs central policy hooks (VNI scoping, anycast reference-counting, per-node
-fast-withdraw). A custom typed pub/sub expresses that directly and cheaply. BGP is
-reserved for the one place it is the right tool: announcing the platform's public
-prefixes from the WAN edge to the upstream internet. See
-[North-South WAN edge](../features/ns-edge.md) for how edge identities
-(`EDGE_UNDERLAY` public records) and the egress default route ride this same bus.
+### AnnouncedFrom: the release gate
 
-## See also
+Clearing a fence re-advertises whatever the fenced prefix still announces, stale or not. If a VM
+failed over to another pool while its old node is still alive and announcing the VM's `/32`, releasing
+the fence would bring back a stale nexthop beside the new one, and agents program only the first of
+the sorted set.
 
-- [The CRD API](../reference/crd-interactions.md) — the intent the agent compiles into announcements.
-- [Compilers: CompiledNIC](./compile-sync-materialize.md) — how static per-NIC state is lowered.
-- [NAT gateway](../features/nat.md) — the distributed SNAT the NAT records drive.
-- [VPC peering](../features/vpc-peering.md) — cross-VNI route imports over the bus.
+`RouteBusAdmin.AnnouncedFrom(prefix, keys)` answers the question failover needs before it releases:
+which of these `(VNI, prefix)` keys does some origin still announce with a nexthop inside this prefix?
+It reads what the RIB stores, so a key the fence hides still counts, and it names the origin and
+nexthop of each holding. A key matches in its own spelling or in canonical form.
+
+Failover asks it about the addresses of every workload now placed on another pool, and keeps both
+fences while any of them is still announced from the fenced prefix. The pool then shows a
+`FenceReleaseBlocked` condition naming the holder. The question is deliberately narrow: a recovered
+pool legitimately shares keys with other origins, such as its east/west load-balancer anycast
+addresses, and those must not hold its fence. See [failover](failover.md).
+
+## From the bus into flowplane
+
+The agent programs learned routes into flowplane in two halves. Each `RouteUpdate` is applied as it
+arrives (event-driven), and every reconcile tick converges whatever is left (level-triggered). The
+level-triggered half is what makes the system robust: a failed call, a flowplane restart, or a
+peering change with no route update at all are all caught on the next tick.
+
+### Desired versus programmed
+
+The agent keeps two views (`mesh/agent/bus.go`):
+
+- learned: the routes the bus has taught it, per VNI with their full nexthop sets, plus the public
+  defaults;
+- programmed: what it last told flowplane for each key. This persists across route-bus
+  reconnects, because flowplane's maps outlive a session.
+
+For each key, `desiredRoute` decides what flowplane should hold, in priority order:
+
+1. a route learned on the VNI's own table (delivery VNI = that VNI);
+2. else a route imported from a peered VNI that covers the prefix (delivery VNI = the peer's VNI, see
+   [the overlay](overlay.md#the-sender-stamps-the-delivery-vni));
+3. else, in a VNI that needs egress, the public default, marked external so NAT applies.
+
+Each tick, a key gets an `AddRoute` or `WithdrawRoute` only if its desired route differs from what is
+programmed, so a converged tick makes no calls. A failed call leaves the key marked "unknown", which
+differs from every desired route, so the next tick sends it again.
+
+### Pruning on EndOfRIB
+
+At the start of each session the agent resets a per-VNI "seen" set. When `EndOfRIB(vni)` arrives, any
+learned route in that VNI that was not seen in the replay left the RIB while the agent was
+disconnected; the agent forgets it and the resync withdraws it. The agent prunes only if it counted
+exactly `record_count` routes in the replay. Pruning against an incomplete replay would withdraw live
+routes, which is worse than keeping a stale one. The public VNI and the global feed prune the same way.
+
+### Restarts: the instance id
+
+flowplane rebuilds its routes from its pinned maps when it restarts, with one exception covered
+below. To catch everything else, `ListInterfaces` returns an `instance_id` that is new every time the
+flowplane process starts. The agent reads it every tick. When it changes, or when flowplane answers
+again after being unreachable, the agent queues a full re-send of every key it has learned, with held
+local host keys first because those are what a restart loses. A flowplane too old to report an id
+gets a full re-send every 5 minutes instead.
+
+### Budget and backoff
+
+A tick runs on the same goroutine that drains the route-bus stream, so it must not stall it. Each tick
+makes at most 256 dataplane calls; a full re-send of N routes takes N/256 ticks.
+
+- Unreachable flowplane: the tick stops at the first call that cannot connect and resumes next
+  tick. These failures are not backed off, so routes go out as soon as flowplane is back.
+- Refused route: a key whose call fails for any other reason is retried 1, 2, 4, ... ticks later,
+  up to 60 ticks (5 minutes) apart. It is logged once when it starts failing, and a summary of failing
+  keys is logged about once a minute.
+- Withdraws never wait. A backoff applies only while the key still wants the exact route that
+  failed. A key that now wants nothing, or a different route, goes out at once, so a cross-VPC route
+  never outlives its peering by a backoff.
+
+### Unsubscribe hysteresis
+
+When a VNI leaves the agent's desired subscriptions, the `Unsubscribe` goes out with the next diff,
+but the agent keeps the VNI's learned routes until the VNI has been absent for 3 successful reconciles
+in a row (about 15 s). Then it forgets them and the resync withdraws them, along with anything
+imported from them. A guest pod that restarts detaches and re-attaches within a tick or two, and
+dropping its VNI's routes in between would blackhole traffic until a re-subscribe replayed them.
+
+## Local host keys and held keys
+
+A node can hear a bus route for an address that is also attached locally. The common case is a VM
+moving onto this node while the fabric still carries its old node's `/32`. Two mechanisms keep local
+delivery correct.
+
+In flowplane, a self-route holds its key. Attaching an interface writes a self-route for its
+`/32` and `/128` into `ROUTES`, pointing at the node's own VTEP. While the interface lives, that
+self-route owns the kernel entry. A mesh `AddRoute` or `WithdrawRoute` for the same key changes only
+flowplane's shadow copy (`flowplane-control/src/routes.rs`). When the interface detaches, flowplane
+puts the shadowed mesh route back into the kernel map, or removes the key if there is none.
+
+In the agent, a local host key never points at itself. The agent reads the local host prefixes
+from `ListInterfaces` every tick. For such a key it programs the first nexthop that is not one of the
+node's own VTEPs, or nothing if none is left, so flowplane's shadow never holds a route from the node
+to itself. When an interface leaves, the agent drops its own VTEP from the learned nexthops and
+re-sends the key, in case flowplane lost its shadow across a restart.
+
+That last case is the exception mentioned above. After a restart flowplane rebuilds its shadow from
+the pinned `ROUTES` maps (`adopt_routes`), but a mesh route that a self-route was holding back was
+never in the kernel, so it is lost. The instance-id re-send restores it within one agent tick.
+
+!!! warning "Rollout order"
+    The agent relies on flowplane holding local keys. Deploy flowplane before the mesh agent on a
+    pool. Against an older flowplane, a passed-through `AddRoute` for a local key replaces the
+    self-route with an encapsulation, and a `WithdrawRoute` deletes it.
+
+## Why not BGP for the overlay
+
+Overlay routes change often, come in several types (routes, NAT blocks, edge identities), and need
+policy hooks that BGP does not have: per-VNI scoping, anycast reference counting, fast withdraw on
+session loss, certificate-bound origins and fences. A small typed protocol expresses all of that
+directly. BGP stays where it fits: the lab's fabric routes the VTEP `/128`s with it, and the WAN edges
+announce the platform's public prefixes over it.
+
+## Where to go next
+
+- [The overlay network](overlay.md): what the routes are used for once programmed.
+- [Failover](failover.md): when fences are set and released.
+- [HA and restarts](ha-and-restarts.md): how flowplane survives a restart with its maps intact.
+- [VPC peering](../features/vpc-peering.md): the route imports from the user's side.

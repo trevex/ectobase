@@ -1,92 +1,110 @@
 # IPAM migration
 
-Before this change, `NetworkInterface.Spec.IPs` and `LoadBalancer.Spec.LB address` were
-free-form and unallocated. Migration is non-disruptive and requires no renumbering:
+Central IPAM moved address assignment from the user into the dispatch: overlay addresses come
+from a `Subnet`, public addresses from an `IPPool`, and MACs are allocated alongside. This page
+covers two one-time migrations for objects created before that, and the rule for what happens
+when an allocation goes bad on a live object.
 
-1. For each VPC, create `Subnet` object(s) whose prefixes cover the overlay IPs
-   already in use by that VPC's NICs. Create `IPPool` object(s) of `type: public`
-   covering existing LB addresses.
-2. Set `NetworkInterface.Spec.SubnetRef` (skip if the VPC has exactly one Subnet)
-   and `LoadBalancer.Spec.PoolRef`.
-3. On first reconcile, the allocator adopts each existing `Spec.IPs` / `Spec.LB address`
-   as a pinned reservation (validated for membership + uniqueness) and writes it to
-   `Status.AllocatedIPs` / `Status.AllocatedIP`. Compilation is gated on that
-   status, so a NIC whose IP falls outside every Subnet goes `Invalid` and stops
-   compiling until corrected; surface these via `kubectl get networkinterface`.
+Both migrations are non-disruptive and renumber nothing: the allocators adopt the addresses
+already in use. The objects live on the dispatch, so run the commands below against it. How
+allocation works in general is in [CRD interactions](../reference/crd-interactions.md#where-addresses-come-from).
 
-Rollout order: create Subnets/IPPools first (they go `Ready`), then patch the
-`Ref` fields. Watch for `State=Invalid`/`Conflict` before removing any legacy path.
+## From free-form addresses to Subnets and IPPools
 
-## MACs are allocated too
+Before central IPAM, `NetworkInterface.spec.ips` and `LoadBalancer.spec.ip` were taken as given,
+with nothing checking them. The allocators now treat them as pins: a requested address is
+validated and reserved, and an empty one is allocated.
 
-`NetworkInterface.Spec.MAC` follows the same request semantics as `Spec.IPs`. A
-pre-IPAM NIC that pinned a MAC keeps it: on first reconcile the allocator adopts
-`Spec.MAC` as a validated, VPC-unique reservation and republishes it to
-`Status.AllocatedMAC` (a format-invalid or clashing pin goes `Invalid`, like a bad
-IP). A NIC that left `Spec.MAC` empty is assigned a stable, VPC-unique,
-locally-administered (`02:`-prefixed) MAC derived from its identity — so no NIC
-renumbers its L2 address during migration. `CompiledNIC.Spec.MAC` and the KubeVirt
-guest are sourced from `Status.AllocatedMAC`, never `Spec.MAC` directly.
+1. For each VPC, create one or more `Subnet`s whose prefixes cover the overlay addresses its
+   NICs already use. For the load-balancer addresses in use, create an `IPPool` of
+   `type: public` covering them. Wait for each to report `status.state: Ready`.
+2. Set `NetworkInterface.spec.subnetRef` (you can skip this when the VPC has exactly one
+   `Subnet`) and `LoadBalancer.spec.poolRef`.
+3. On the next reconcile, each allocator adopts the existing pin. It checks that the address
+   lies in the prefix and that no other object holds it, then writes it to
+   `status.allocatedIPs` (NIC) or `status.allocatedIP` (load balancer) and sets `status.state`
+   to `Allocated`.
 
-## Retiring LBPool for IPPool
+Compilation waits on that status. The compiler emits a NIC's `CompiledNIC` only when the NIC is
+`Allocated` for its current generation, and sources the overlay addresses from
+`status.allocatedIPs`, never from `spec.ips`. A NIC whose pinned address falls outside every
+`Subnet` goes `Invalid` and does not compile. Watch `kubectl get networkinterfaces` and
+`kubectl get loadbalancers` for `Invalid`, `Pending` or `Exhausted` before you retire anything
+that relied on the old behaviour.
 
-`LBPool` is gone. It was LB-specific, and an address pool that only one consumer kind can
-draw from forces the next consumer — NAT, then internal LBs — to invent its own pool kind
-and its own allocator. `IPPool` replaces it: the same prefixes and `reservedIPs`, plus a
-required `spec.type` (`public` or `internal`) that a consumer must match. A `LoadBalancer`
-pointed at an `internal` pool is refused with `Invalid`, so an internal range can never be
-spent as a public address by accident.
+### MACs
 
-`LoadBalancer.spec.poolRef` is untouched — same field, same shape, it just resolves to an
-`IPPool` now — so no LoadBalancer needs editing. The pool objects themselves do have to be
-recreated, because an `LBPool` cannot become an `IPPool` in place and the new `type` has no
-sensible default to infer:
+`NetworkInterface.spec.mac` follows the same rules. A NIC that pinned a MAC keeps it: the
+allocator checks the format and that the MAC is unique in the VPC, then adopts it into
+`status.allocatedMAC`. A bad or clashing pin makes the NIC `Invalid`. A NIC with no pin gets a
+stable, VPC-unique, locally administered MAC derived from its UID. No NIC changes its L2 address
+during the migration. `CompiledNIC.spec.mac`, and so the KubeVirt guest's MAC, comes from
+`status.allocatedMAC`.
 
-1. For each `LBPool`, create an `IPPool` of the same name with the same `v4Prefix` /
-   `v6Prefix` / `reservedIPs` and `type: public` (every `LBPool` was a public range; that
-   was the assumption baked into the kind). Wait for `status.state: Ready`.
-2. Make each LoadBalancer reconcile. This does not happen by itself: the allocator
-   short-circuits an LB that already reports `Allocated` for its current generation, so an
-   address allocated under `LBPool` sits in `status.allocatedIP` with no `IPAllocation`
-   backing it, and to a later consumer of the same pool it looks free. Clear the status to
-   drop out of that short-circuit:
+## From LBPool to IPPool
 
-   ```sh
-   kubectl patch loadbalancer <name> --subresource=status --type=merge -p '{"status":{"state":""}}'
-   ```
+`LBPool` is gone. A pool only one consumer kind can draw from forces the next consumer to invent
+its own pool kind and allocator, and NAT gateways were next. `IPPool` replaces it with the same
+`v4Prefix`, `v6Prefix` and `reservedIPs`, plus a required `spec.type`, `public` or `internal`,
+that each consumer must match. A `LoadBalancer` pointed at an `internal` pool goes `Invalid`, so
+an internal range can't be handed out as a public address by accident.
 
-   The LB then re-adopts the address it already published — the allocator prefers the
-   current address over the lowest-free one — and records it as an `IPAllocation` named
-   `<pool>-<encoded address>`. Confirm with
-   `kubectl get ipallocation -l net.ectobase.dev/pool=<pool>` that there is exactly one
-   object per live LB address before going further.
+`LoadBalancer.spec.poolRef` is unchanged; it now resolves to an `IPPool`, so no load balancer
+needs editing. The pools themselves must be recreated, because an `LBPool` cannot become an
+`IPPool` in place and `type` has no safe default:
+
+1. For each `LBPool`, create an `IPPool` with the same name, the same prefixes and
+   `reservedIPs`, and `type: public`. Every `LBPool` was a public range. Wait for
+   `status.state: Ready`.
+2. Make each load balancer reconcile. It will not do so by itself: the allocator skips a load
+   balancer that already reports `Allocated` for its current generation, so an address allocated
+   under `LBPool` sits in `status.allocatedIP` with no `IPAllocation` behind it, and to the next
+   consumer of the pool it looks free. Clear the state to get past that check:
+
+    ```sh
+    kubectl patch loadbalancer <name> --subresource=status --type=merge \
+      -p '{"status":{"state":""}}'
+    ```
+
+    The load balancer then re-adopts the address it already published, because the allocator
+    prefers a consumer's current address over the lowest free one, and records it as an
+    `IPAllocation` named `<pool>-<encoded address>`. Check that there is exactly one
+    `IPAllocation` per live load-balancer address before going on:
+
+    ```sh
+    kubectl get ipallocations -l net.ectobase.dev/pool=<pool>
+    ```
+
 3. Delete the old `LBPool` objects.
 
-On a **live** cluster the CRD itself also has to go, explicitly:
+On the dispatch nothing else is needed: the aggregated apiserver serves the `net` group, and the
+kind stops being served once the new image rolls out. A pool cluster that still has the old CRD
+needs it removed by hand:
 
 ```sh
 kubectl delete crd lbpools.net.ectobase.dev
 ```
 
-Helm does not remove a CRD it has stopped templating out, so upgrading the
-`ectobase-pool` chart leaves `lbpools.net.ectobase.dev` registered and any surviving
-`LBPool` objects readable, with nothing reconciling them — the worst kind of stale: an
-object that still answers `kubectl get`. Deleting the CRD deletes every remaining `LBPool`
-with it, so do the three steps above first — once it is gone there is nothing left to read
-the old prefixes off. On the dispatch there is nothing to delete: the net group is served by the
-aggregated apiserver, not by CRDs, and the kind simply stops being served once the new
-apiserver image rolls.
+Helm does not remove a CRD it no longer renders, so after a pool chart upgrade the CRD and any
+`LBPool` objects stay readable with nothing reconciling them. Deleting the CRD deletes every
+remaining `LBPool` with it, so finish the three steps first.
 
-## De-gate semantics: keep-last-good
+## Keep-last-good: a bad edit does not tear down a workload
 
-Compilation is gated on `State=Allocated` for the current generation, but that gate
-only suppresses re-emission; it never deletes an already-compiled object. If a
-NIC or LB regresses out of `Allocated` (edited to a bad IP, its `Subnet`/`IPPool`
-deleted, or its `Generation` bumped mid-edit) it goes `Invalid`/`Pending`, yet its
-existing `CompiledNIC` is left in place: the running datapath keeps serving the
-last successfully-allocated IPs until re-allocation succeeds. This is intentional:
-in a PAM tool a transient bad edit must not tear down live connectivity.
+Compilation is gated on `Allocated` for the current generation, but the gate only stops a new
+compile; it never deletes a compiled object. If a NIC or load balancer drops out of `Allocated`
+(someone edits in a bad address, deletes its `Subnet` or `IPPool`, or bumps its generation
+mid-edit), it goes `Invalid` or `Pending` and its existing `CompiledNIC` stays. The datapath
+keeps serving the last good addresses until allocation succeeds again. A transient bad edit
+must not cut live connectivity.
 
-To actually revoke an allocation and remove it from the datapath, delete the
-`NetworkInterface` (or `LoadBalancer`); owner-ref GC then removes the compiled
-object. Editing a resource into an invalid state is not a teardown path.
+To actually revoke an allocation, delete the `NetworkInterface` or `LoadBalancer`. The source's
+finalizer then removes its compiled twin, and garbage collection removes the `IPAllocation`s it
+owns. Editing an object into an invalid state is not a way to tear it down.
+
+## Where to go next
+
+- [CRD interactions](../reference/crd-interactions.md): how `Subnet`, `IPPool` and
+  `IPAllocation` fit with the rest of the API.
+- [Routing and VNIs](../features/routing-vni.md): what the allocated addresses are used for.
+- [Load balancing](../features/loadbalancer.md): the consumer `IPPool` was built for first.

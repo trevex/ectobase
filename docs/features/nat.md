@@ -1,239 +1,127 @@
 # NAT gateway
 
-The NAT gateway provides distributed egress SNAT: workloads in a VPC reach the outside
-world through a shared pool of public IPv4 addresses, with the address translation
-performed on the source node itself, not funnelled through a central NAT box. The
-control plane hands each source a deterministic, non-overlapping `(public IP, port block)`,
-and the route bus ensures return traffic finds the node that owns that block.
+A `NATGateway` gives the workloads of a VPC outbound access to the internet through shared public addresses. Each source address gets its own fixed `(public IP, port block)`, and the node that hosts the workload performs the translation itself, so there is no central NAT box. Return traffic enters at any [WAN edge](ns-edge.md), which relays it to the node that owns the block.
 
-## Deterministic, drain-safe allocation
+## The API: NATGateway
 
-The core idea is that any node can compute a source's translation from a shared table
-without coordination. The `NATGatewayReconciler` owns that table:
+| Field | Meaning |
+|---|---|
+| `spec.vpcRef` | The VPC whose interfaces egress through this gateway. Every overlay address of every `NetworkInterface` in it becomes a source. |
+| `spec.poolRef` | The `IPPool` the public addresses come from. It must be of type `public`. |
+| `spec.publicIPs` | With `poolRef` set: addresses the gateway must hold inside the pool (pins). Without `poolRef`: a literal address list, kept so gateways written before pools keep working. |
+| `spec.portsPerSource` | Port-block size per source. Default 1024. |
+| `status.allocations` | The source → `(publicIP, portMin, portMax)` table. `portMax` is inclusive. |
+| `status.state` | `Ready`, `Exhausted`, `Pending` (pool not ready) or `Invalid`. |
 
-- A `NATGateway` selects a VPC (`Spec.VPCRef`) and draws its public addresses from an
-  [`IPPool`](../reference/crd-interactions.md) of `type: public` named by `Spec.PoolRef`, with a
-  `PortsPerSource` block size (default 1024). `Spec.PublicIPs` is no longer the pool itself: it
-  *pins* addresses inside `PoolRef`, the way `LoadBalancer.spec.ip` does. A gateway with no
-  `PoolRef` still treats `PublicIPs` as a literal list, so an older object keeps working.
-- Addresses are claimed on demand. The gateway starts with whatever it has pinned, and when a
-  source cannot be given a block because every address it holds is full, it claims **one more**
-  from the pool and lays the blocks out again. One per reconcile pass on purpose: a gateway that
-  suddenly gains hundreds of NICs must not drain a shared pool in a single tick — it grows again
-  on the next pass. When the pool has nothing left the gateway reports `Exhausted`, keeping every
-  block it had already handed out.
-- The address set never shrinks while the gateway lives. An address whose blocks a live source is
-  still using cannot be handed back without re-NATing that source mid-flow, so removing a pin from
-  `PublicIPs` does not release it either. The addresses go when the gateway does, collected with
-  the `IPAllocation` objects that hold them.
-- The reconciler lists every `NetworkInterface` in that VPC, collects each NIC's overlay
-  IPs as sources, and assigns each source a deterministic block from the pool.
-- The result is written to `NATGateway.Status.Allocations`, a
-  `[]NATAllocation{ Source, PublicIP, PortMin, PortMax }` table.
+```yaml
+apiVersion: net.ectobase.dev/v1alpha1
+kind: IPPool
+metadata: {name: public-v4, namespace: tenant-a}
+spec:
+  type: public
+  v4Prefix: 192.0.2.32/27
+---
+apiVersion: net.ectobase.dev/v1alpha1
+kind: NATGateway
+metadata: {name: egress, namespace: tenant-a}
+spec:
+  vpcRef: {name: blue}
+  poolRef: {name: public-v4}
+  portsPerSource: 1024
+```
 
-Determinism is what makes this drain-safe. Existing assignments are seeded from the
-persisted status (`Preassign`) so that adding or removing other sources never re-NATs a
-source's live flows; a source that is still present keeps its exact block. Any gateway node
-can recompute a source's block from the published table with no shared runtime state.
+`spec.edgeUnderlay` is deprecated and ignored; the edges advertise themselves. The schema is in the API reference: [`NATGateway`](../reference/api/net.md#natgateway), [`IPPool`](../reference/api/net.md#ippool).
 
-The block size follows the RFC 7422 / static-port-allocation style: each source owns a
-fixed contiguous port range on its public IP, so return traffic is unambiguously
-attributable to a source by `(nat IP, port)` alone.
+## How allocation works
 
-## The datapath: SNAT on egress
+The `NATGatewayReconciler` on the dispatch owns the allocation table. Its job is to give every source a block that never moves while the source exists, because moving a block re-NATs that source's live connections.
 
-Egress SNAT runs on the guest-egress path (`tc_guest_tx`), in shared pure-core code
-(`flowplane_core::nat::snat_egress`). When an external-bound packet leaves a guest whose
-`(vni, src)` has a NAT config:
+- Sources are the `status.allocatedIPs` of every `NetworkInterface` whose `vpcRef` matches the gateway.
+- Blocks start at port 1024 and are laid out back to back up to 65535, so a 1024-port block gives 63 blocks per public address.
+- Existing assignments are seeded from `status.allocations` before anything new is assigned, and are pinned by value. Adding or removing other sources, or adding an address, never moves a block a source already holds. Only new sources take the lowest free block.
+- Addresses are claimed on demand. A gateway starts with its pins; when a source cannot get a block because every address it holds is full, it claims one more address from the pool and lays the blocks out again. It claims at most one per reconcile, so a gateway that suddenly gains hundreds of interfaces cannot drain a shared pool in one pass.
+- The address set never shrinks while the gateway exists. Removing a pin does not release the address, because a live source may still use its blocks. The addresses are released when the gateway is deleted.
+- When the pool has nothing left the gateway reports `Exhausted` and keeps every block it already handed out. A pool problem (`Invalid`, `Pending`) leaves `status.allocations` untouched for the same reason.
+
+Each claimed address is an `IPAllocation` object named after the pool and address, so `create` is the compare-and-swap that keeps two consumers from taking the same address. The [CRD interactions](../reference/crd-interactions.md) page explains the IPPool and IPAllocation model.
+
+## From allocation to the datapath
+
+The compiler folds the allocation table into each interface's `CompiledNIC`, and the agent programs and announces NAT from there. The agent never reads a `NATGateway`.
 
 ```mermaid
 flowchart TD
-    p["guest egress packet<br/>(vni, src → external dst)"] --> cfg{"NAT config for<br/>(vni, src)?"}
+    gw["NATGateway<br/>status.allocations"] -->|compiler| cnic["CompiledNIC.spec.nat[]<br/>{sourceIP, natIP, portMin, portMax}"]
+    cnic -->|broker| agent["agent on the source's node"]
+    agent -->|"AddNatSource<br/>(portMax + 1)"| fp["flowplane NAT map"]
+    agent -->|"NatBlock, owner = this node's VTEP"| refl["reflector, global feed"]
+    refl -->|"edges only"| edge["edge agent"]
+    edge -->|"ReplaceNeighborNats /<br/>AddNeighborNat"| owners["NAT_OWNERS / NAT_OWNERS6<br/>on each edge"]
+```
+
+1. The compiler writes a `CompiledNATSource` into `CompiledNIC.spec.nat` for each of the interface's addresses that has an allocation.
+2. The agent on the node where the interface is attached calls `AddNatSource`, then announces a `NatBlock` on the route bus with the node's VTEP as owner. It skips the announcement when `AddNatSource` fails, so no edge learns a return route to a node without matching SNAT state.
+3. The status and the `CompiledNIC` carry an inclusive `portMax`; flowplane and the route bus use an exclusive upper bound. The agent is the one place the two meet and adds 1 there.
+
+The agent also needs a route out. A local interface with a NAT allocation (or a load-balancer membership) makes its VNI an egress VNI, and the agent imports the edges' default routes from the public VNI 0 into it, marked external. See [WAN edge](ns-edge.md#egress-defaults-in-the-public-vni).
+
+## Egress SNAT on the source node
+
+`tc_guest_tx` runs the SNAT in `flowplane_core::nat::snat_egress` when the matched route is external and the guest's `(VNI, source)` has a NAT entry.
+
+```mermaid
+flowchart TD
+    p["guest packet, route is external"] --> cfg{"NAT entry for<br/>(vni, src)?"}
     cfg -->|no| out["forward unchanged"]
-    cfg -->|yes| ct{"forward conntrack<br/>entry exists?"}
-    ct -->|yes| reuse["reuse allocated<br/>nat_port"]
-    ct -->|no| alloc["hash 5-tuple → start slot,<br/>linear-probe for a free<br/>reverse key, allocate nat_port"]
+    cfg -->|yes| ct{"forward conntrack<br/>entry?"}
+    ct -->|yes| reuse["reuse its nat_port"]
+    ct -->|no| alloc["hash the 5-tuple to a start slot in the block,<br/>probe up to 64 slots for a free reverse key"]
+    alloc -->|none free| drop["drop"]
     reuse --> rw
-    alloc --> rw["rewrite inner src IP → nat_ip,<br/>L4 sport / ICMP id → nat_port<br/>(+ incremental checksums)"]
+    alloc --> rw["rewrite src → nat_ip,<br/>sport / ICMP id → nat_port,<br/>fold checksums"]
     rw --> pin["pin forward + reverse<br/>conntrack entries"]
-    pin --> encap["encap + forward to WAN edge"]
+    pin --> encap["encap toward the edge"]
 ```
 
-- Port allocation. The flow's 5-tuple is hashed to a start slot inside the source's
-  `[port_min, port_max)` range; a short linear probe finds a free reverse key. The
-  reverse key is peer-independent — `(vni, 0, nat_ip, 0, nat_port)` — so an allocated
-  `nat_port` is globally unique per `nat_ip` (the dpservice model): two flows to
-  different destinations can never share a port, which is exactly what makes the return
-  path reversible from `(nat_ip, port)` alone.
-- Rewrite. The inner source IP is rewritten to `nat_ip` and the L4 source port (or ICMP
-  id) to `nat_port`, with incremental checksum updates for IPv4/TCP/UDP/ICMP.
-- Conntrack. Forward and reverse conntrack entries are pinned so subsequent packets of
-  the flow reuse the same port, and the return path can reverse the translation.
+The reverse key is `(vni, 0, nat_ip, 0, nat_port)`, independent of the peer, so an allocated port is unique per public address. That uniqueness is what lets any edge route a reply by `(nat_ip, port)` alone. When all probed slots are taken, the packet drops: forwarding it would leak the guest's overlay address, and reusing a port would misdirect another flow's replies.
 
-!!! warning "Fragmented datagrams do not traverse NAT"
+## Return traffic through the edge
 
-    Only the *first* fragment of an IPv4 datagram carries an L4 header, so a non-first
-    fragment has no source port to rewrite — and since the return path demuxes on
-    `(nat_ip, port)` alone, there is nothing to reverse it with either. Such a fragment is
-    **dropped** rather than forwarded un-SNATed, which would put the guest's overlay
-    source address on the wire. The same applies to load balancing: a fragment is never
-    Maglev-selected, because hashing it would scatter one datagram across backends.
+A reply from the internet reaches an edge's `wan_rx`, addressed to a public IP and port. The edge looks `(nat_ip, dport)` up in `NAT_OWNERS` (`NAT_OWNERS6` for IPv6), gets the owning node's VTEP and VNI, and re-encapsulates the packet toward it. On the owning node, `uplink_rx` matches the reverse conntrack key, reverses the translation and delivers to the guest. The edge holds no per-flow state, so the reply can enter at a different edge than the one the request left through.
 
-    Fragments of one datagram do share a single conntrack key (`(proto, 0, 0)`), so they
-    are at least consistent for firewall and conntrack purposes — but a port-specific
-    firewall rule will not match them. Supporting fragmented flows end-to-end needs a
-    fragment-tracking map keyed `(src, dst, proto, ip_id)` carrying the first fragment's
-    ports; that is deliberately not built.
+The return path has four properties that let it scale and survive restarts:
 
-## The return path: neighbor-NAT
+- Tries. Each block is stored as the fewest aligned port prefixes that cover it, keyed on the public address, so a lookup is one trie probe however many blocks exist. A default 1024-port block on a 1024 boundary is one prefix. Each trie holds 65,536 prefixes per family.
+- Edge-only feed. NAT blocks travel on the route bus's global channel, and only edges subscribe to it (`Hello.global_feed`). A compute node opts out and holds an empty table.
+- Lossless, declarative snapshots. The reflector sends each snapshot whole. While it replays, the edge agent collects blocks; at the `EndOfGlobal` marker, whose count must match what arrived, it calls `ReplaceNeighborNats` once with the complete set. flowplane keeps unchanged blocks and removes the rest, including blocks it re-adopted after its own restart that no agent remembers. A short snapshot programs what arrived and prunes nothing. Announcements after the marker apply one block at a time.
+- Ownership. The reflector applies a withdraw only from the origin that announced the block, and only when the session's certificate speaks for the block's owner. A takeover by another node moves the block to the new origin.
 
-Return traffic from the internet arrives at the [WAN edge](ns-edge.md) addressed to a
-public IP + port. The edge must forward it to the node that owns that
-`(nat_ip, port)` block; the neighbor-NAT lookup does this. The owning node announces its
-NAT block on the route bus with owner = that node's own VTEP, and the sessions that take
-the route bus's global feed — the WAN edges — learn it. A compute node opts out
-(`Hello.global_feed = GLOBAL_FEED_NONE`) and holds no neighbor-NAT blocks at all: the
-relay code below still runs there, just against a table that is always empty.
+flowplane refuses a block that overlaps another on the same public address (`ALREADY_EXISTS`) and a block that does not fit in the trie (`RESOURCE_EXHAUSTED`). The tries are pinned, so blocks survive a flowplane restart.
 
-The edge's `uplink_rx` / `wan_rx` path looks the return packet's `(nat_ip, dport)` up in
-the `NAT_OWNERS` trie (`NAT_OWNERS6` for IPv6), gets back the owning node's underlay
-`/128` and VNI, and encapsulates the return toward it. A NAT port block is stored as the
-fewest aligned port prefixes that cover it — a default 1024-port block starting on a
-1024-boundary is a single prefix — so lookup cost is one trie lookup regardless of how
-many blocks exist. On the owning node, the reverse conntrack key
-`(vni, 0, nat_ip, 0, nat_port)` matches, the translation is reversed, and the packet is
-delivered to the original guest. (A plain return from the internet carries no VNI, so
-the edge uses a VNI-agnostic lookup that returns both the underlay and the owner's VNI.
-Both families work the same way, over `NAT_OWNERS` / `NAT_OWNERS6`.)
+### ICMP errors and PMTUD
 
-The edge keeps this table in sync declaratively, not incrementally. While a snapshot
-replays, the agent only collects the blocks it sees; at that snapshot's exact-count
-`EndOfGlobal` marker it calls `ReplaceNeighborNats` once with the whole set, which makes
-the dataplane's blocks exactly that set — an unchanged block is left alone, and one that
-left is removed, including a block the dataplane adopted after its own restart that no
-agent remembers installing. A lossy snapshot (fewer records arrived than the marker
-claims) programs what did arrive and prunes nothing, since removing blocks against an
-incomplete picture would drop live routes. Live NAT announcements after the marker are
-still applied incrementally, one block at a time.
+An ICMP error, such as "fragmentation needed" or "packet too big", is addressed to the public IP but carries no port of its own. The port that names the flow is the source port of the packet the error quotes. Both the edge's relay and the owner's reverse lookup read the quoted packet, and trust it only when its source is the same public IP the error is addressed to.
 
-!!! note "Limits"
+Delivery then rewrites both copies of the public address, as [RFC 5508](https://www.rfc-editor.org/rfc/rfc5508) section 3.2 requires: the outer destination, so the frame reaches the guest, and the quoted source address and port, because the guest matches an ICMP error to a socket by the quoted tuple. All affected checksums are folded incrementally, including the ICMPv6 pseudo-header. This works for both IPv4 and IPv6.
 
-    Each trie holds up to 65,536 prefixes per family. A block that overlaps another
-    block on the same `nat_ip` — in any VNI — is refused as `AlreadyExists`; a full trie
-    is refused as `ResourceExhausted`. Blocks live in pinned maps, so they survive a
-    dataplane restart: adopt rebuilds the block list from the trie values (each prefix
-    carries its whole block) and re-writes any prefix a crash left missing. If the
-    dataplane and the agent both restarted while a block was withdrawn or reassigned,
-    the adopted block used to stay listed forever, misrouting that public IP's return
-    traffic and refusing any overlapping successor — CLOSED: the edge's next complete
-    snapshot replaces the whole block set declaratively, so the stranded block is removed
-    and its successor admitted in the same call.
+## NAT66 and NAT64
 
-    Upgrading a node from the old 64-slot neighbor-NAT table converts its blocks: adopt
-    reads the retired maps before the loader unpins them and installs what they held, so
-    an edge's already-announced remote NAT blocks keep relaying across the upgrade. Only
-    the slots below the old table's count are taken — it was rewritten in place and never
-    cleared above its count, so a slot above it is a withdrawn block, and reading it back
-    would relay that public IP to a node that no longer owns it. A table that cannot be
-    read is logged and skipped, which is no worse than before: those blocks come back on
-    the agent's next reflector replay. The conversion is one-shot, since the loader unpins
-    the old maps either way — so running the debug `flowplane bringup --pin-dir` against a
-    production pin directory before `serve` discards them.
+- NAT66. An IPv6 source with an IPv6 public address uses `snat_egress6` and `NAT_OWNERS6`, mirroring the IPv4 path. flowplane rejects a NAT entry whose source and public address are of different families.
+- NAT64. A guest packet to `64:ff9b::/96` is translated to IPv4 (header rewrite, checksum translation, ICMPv6 echo to ICMPv4 echo) and SNATed with the guest's IPv4 NAT entry. The edges originate `64:ff9b::/96` into the public VNI alongside the defaults. NAT64 therefore needs the interface to hold an IPv4 address with a NAT allocation.
 
-### ICMP errors
+## Limits
 
-An ICMP error — a PMTUD "fragmentation needed" / "packet too big", or any unreachable —
-breaks the assumption above: it is addressed to the `nat_ip` but carries **no port of its
-own**. The port that names the flow is the *source* port of the packet the error quotes,
-which is the guest's original packet as it left post-SNAT. So both the edge's relay lookup
-and the owner's reverse conntrack key are built from the quoted packet instead, and a quote
-is only trusted when its source is the very `nat_ip` the error is addressed to — an error
-quoting someone else's packet says nothing about this flow.
+!!! warning "Status: Partial"
+    NAT44 works end to end from intent: `TestNatFromIntent` applies a `NATGateway` and a `Container`, and a pod reaches a WAN server and back with no hand-driven dataplane call. NAT66 and the IPv6 return path are proven live at the dataplane tier (`TestNatEgressSmoke6`, `TestNatEgressReturn6`) with hand-programmed state. The guest NAT64 path is covered by the simulator only.
 
-Delivering it then requires rewriting **both** copies of the public address
-([RFC 5508](https://www.rfc-editor.org/rfc/rfc5508) §3.2): the outer destination, or the
-frame cannot reach the guest, and the quoted source and source port, because a guest
-matches an ICMP error to a socket by the quoted tuple and silently discards one still
-addressed to the public identity. Every affected checksum is folded incrementally,
-including the ICMP checksum, which covers the quoted packet — and for ICMPv6 also covers a
-pseudo-header containing the outer address being rewritten.
+- The allocator does not separate address families. It lays every source of the VPC, IPv4 and IPv6, over one address list, so a dual-stack VPC whose pool offers one family gets sources whose block is on the wrong family; flowplane rejects those entries and the agent retries them every reconcile. NAT66 from intent needs a gateway whose sources and addresses are all IPv6.
+- Fragmented datagrams do not traverse NAT. A non-first IPv4 fragment has no port to translate or to route the reply by, so it is dropped rather than forwarded with the guest's overlay source.
+- Up to 64 probes per new flow. A block whose ports are nearly all in use drops new flows that find no free slot in 64 tries.
+- Each edge's trie holds 65,536 port prefixes per family.
 
-## The agent derives NAT solely from CompiledNIC
+## Where to go next
 
-The node agent never reads `NATGateway`. The allocation
-table is folded into each NIC's `CompiledNIC` by the compiler, and the agent programs and
-announces NAT purely from there.
-
-- The `CompiledNICReconciler` gathers every `NATGateway` allocation in the namespace
-  indexed by source overlay IP, and for each of the NIC's overlay IPs with an allocation,
-  stamps a `CompiledNATSource{ SourceIP, NATIP, PortMin, PortMax }` onto `CompiledNIC.Spec.NAT`.
-- The agent, iterating its local `CompiledNIC`s, calls `AddNatSource` for each entry (which
-  programs the datapath `NAT` map) and announces a `NatBlock` on the route bus with
-  `OwnerUnderlay = this node's VTEP`.
-
-This keeps the agent's input surface small (only `CompiledNIC`) and makes the owner of a
-NAT block explicit and self-describing on the wire.
-
-## How it's wired
-
-```
-NATGateway { VPCRef, PoolRef -> IPPool(public), PublicIPs[] (pins), PortsPerSource }
-        │  NATGatewayReconciler
-        │    · list NICs in the VPC → sources (overlay IPs)
-        │    · deterministic (public IP, port block) per source (drain-safe)
-        ▼
-NATGateway.Status.Allocations[]  { Source, PublicIP, PortMin, PortMax }
-        │  CompiledNICReconciler — index by source IP, match NIC's overlay IPs
-        ▼
-CompiledNIC.Spec.NAT[]  CompiledNATSource{ SourceIP, NATIP, PortMin, PortMax }
-        │  agent.Desired() — for each local CompiledNIC.NAT entry
-        ├─ DataplaneNode gRPC: AddNatSource(vni, srcIP, natIP, portMin, portMax)
-        └─ route-bus announce: NatBlock{ …, OwnerUnderlay = node VTEP }
-        ▼
-datapath egress: snat_egress rewrites src → nat_ip : nat_port (+ conntrack)
-datapath return: neighbor-NAT lookup at the edge → encap toward owner VTEP → reverse
-```
-
-- CRD → allocator. `NATGatewayReconciler` turns pool + block size into a deterministic
-  per-source table in status. Any NIC add/remove re-syncs the gateway, but existing blocks
-  are preserved.
-- Allocator → compiler. `CompiledNICReconciler` folds the allocations into each NIC's
-  `CompiledNIC.Spec.NAT`. A NAT-gateway status change re-enqueues affected NICs.
-- Compiler → agent → dataplane. The agent programs the `NAT` map and announces the
-  block (owner = the node VTEP) on the route bus, so return traffic finds the owning node.
-
-!!! warning "The port block's upper bound changes meaning at the agent"
-
-    `NATGateway.Status.Allocations[].PortMax` and `CompiledNIC.Spec.NAT[].PortMax` are
-    **inclusive** — the allocator writes `portMin + size - 1`. The dataplane's `port_max`
-    and every route-bus `NatBlock` are **exclusive**. The agent is the single place the
-    two conventions meet and converts there (`portMaxExcl := src.PortMax + 1`). Passing
-    the inclusive bound straight through loses the block's top port, and turns a one-port
-    block into an empty range the dataplane refuses outright.
-
-## Live coverage
-
-`TestNatFromIntent` (`test/lab/livetest/natintent_test.go`) drives this whole chain from
-intent alone on the lab fabric: a `NATGateway` and a `Container` are the entire input, and
-a Pod on the overlay reaches an HTTP server in the WAN namespace and back. It issues no
-dataplane gRPC of its own — the CNI's attach, triggered by scheduling the Pod, is the only
-call into the dataplane anywhere in the flow.
-
-It asserts in stages so a failure localizes: the central allocation in
-`NATGateway.Status`, the compiled twin's `CompiledNIC.Spec.NAT` in the pool cluster, the
-block in **both** edges' `NAT_OWNERS` tries (decoded from the pinned map, so a
-half-programmed edge fails loudly rather than becoming an intermittent blackhole), and
-finally the bidirectional flow. The trie assertion is also what pins the inclusive →
-exclusive conversion above: it requires the exclusive bound in the edge's `NatOwner`.
-
-This complements `TestNatEgressSmoke{,6}` and `TestNatEgressReturn6`, which hand the
-dataplane exactly the arguments the agent would have produced and so isolate the datapath
-tier; everything above the gRPC boundary had no live coverage before.
-
-## Related
-
-- [North-South WAN edge](ns-edge.md) — where return traffic enters and neighbor-NAT runs.
-- [Routing & multi-VNI tenancy](routing-vni.md) — the node-VTEP-nexthop model NAT blocks
-  reuse.
-- [Compilers: CompiledNIC](../architecture/compile-sync-materialize.md)
-- NAT64 (`64:ff9b::/96`) reuses the same egress path for IPv6-only guests reaching IPv4.
+- [Guide: NAT egress](../guides/nat-egress.md)
+- [WAN edge](ns-edge.md)
+- [The route bus](../architecture/route-bus.md)
+- [HA and restarts](../architecture/ha-and-restarts.md)
