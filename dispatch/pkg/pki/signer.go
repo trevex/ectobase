@@ -34,6 +34,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -338,8 +339,18 @@ func (s *Signer) constraint(ctx context.Context, id *platformv1.RouteBusIdentity
 
 // overlap denies a pool prefix that overlaps one another identity is constrained to: another
 // ClusterPool's underlayPrefix, or a fleet identity's permittedUnderlayCIDRs. Either way two holders
-// could mint leaves for the same VTEPs. Between two pools the one enrolled later is denied (by
-// creation time, then name), so a mistake on a new pool cannot deny a running one at its renewal.
+// could mint leaves for the same VTEPs.
+//
+// Between two pools the INCUMBENT wins: a pool whose identity already holds a root-signed, unexpired
+// intermediate covering part of the other's prefix keeps it, and the pool whose prefix moved into that
+// range is denied. Otherwise an operator edit of an older pool's prefix into a newer pool's range
+// would take that range away the moment the edited pool is re-signed. Only when neither or both hold
+// such a certificate does enrollment order decide (creation time, then name).
+//
+// Two pools are never both signed for overlapping ranges, not even briefly: the signer reconciles one
+// identity at a time (MaxConcurrentReconciles 1, one leader), and reads ClusterPools and identities
+// uncached, so each decision sees the certificate the previous one wrote. A pool that loses is
+// denied and its certificate cleared before the next decision runs.
 func (s *Signer) overlap(ctx context.Context, reader client.Reader, pool *platformv1.ClusterPool, prefix netip.Prefix) (denial string, err error) {
 	var pools platformv1.ClusterPoolList
 	if err := reader.List(ctx, &pools); err != nil {
@@ -347,10 +358,25 @@ func (s *Signer) overlap(ctx context.Context, reader client.Reader, pool *platfo
 	}
 	for i := range pools.Items {
 		other := &pools.Items[i]
-		if other.Name == pool.Name || !enrolledBefore(other, pool) {
+		op, perr := netip.ParsePrefix(other.Spec.UnderlayPrefix)
+		if other.Name == pool.Name || perr != nil || !canonical(op).Overlaps(prefix) {
 			continue
 		}
-		if p, err := netip.ParsePrefix(other.Spec.UnderlayPrefix); err == nil && canonical(p).Overlaps(prefix) {
+		theirs, err := s.holdsOverlap(ctx, reader, other.Name, prefix)
+		if err != nil {
+			return "", err
+		}
+		ours, err := s.holdsOverlap(ctx, reader, pool.Name, canonical(op))
+		if err != nil {
+			return "", err
+		}
+		switch {
+		case theirs && !ours:
+			return fmt.Sprintf("ClusterPool %s spec.underlayPrefix %s overlaps ClusterPool %s's %s, which already holds "+
+				"a certificate for it", pool.Name, prefix, other.Name, other.Spec.UnderlayPrefix), nil
+		case ours && !theirs:
+			continue
+		case enrolledBefore(other, pool):
 			return fmt.Sprintf("ClusterPool %s spec.underlayPrefix %s overlaps ClusterPool %s's %s, enrolled earlier",
 				pool.Name, prefix, other.Name, other.Spec.UnderlayPrefix), nil
 		}
@@ -370,6 +396,36 @@ func (s *Signer) overlap(ctx context.Context, reader client.Reader, pool *platfo
 		}
 	}
 	return "", nil
+}
+
+// holdsOverlap reports whether identity name currently holds a root-signed, unexpired intermediate
+// whose permitted IP ranges overlap prefix.
+func (s *Signer) holdsOverlap(ctx context.Context, reader client.Reader, name string, prefix netip.Prefix) (bool, error) {
+	var id platformv1.RouteBusIdentity
+	if err := reader.Get(ctx, client.ObjectKey{Name: name}, &id); apierrors.IsNotFound(err) {
+		return false, nil
+	} else if err != nil {
+		return false, fmt.Errorf("get RouteBusIdentity %s: %w", name, err)
+	}
+	cb, _ := pem.Decode(id.Status.Certificate)
+	if cb == nil {
+		return false, nil
+	}
+	cert, err := x509.ParseCertificate(cb.Bytes)
+	if err != nil || cert.CheckSignatureFrom(s.Root.Cert) != nil || time.Now().After(cert.NotAfter) {
+		return false, nil
+	}
+	for _, r := range cert.PermittedIPRanges {
+		addr, ok := netip.AddrFromSlice(r.IP)
+		if !ok {
+			continue
+		}
+		ones, _ := r.Mask.Size()
+		if canonical(netip.PrefixFrom(addr, ones)).Overlaps(prefix) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // enrolledBefore orders ClusterPools by creation time, then by name.
@@ -487,9 +543,13 @@ func (s *Signer) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&platformv1.RouteBusIdentity{}, builder.WithPredicates(identitySpecChanged)).
 		// The constraint is the ClusterPool's spec.underlayPrefix, so declaring or changing it
-		// re-signs (or unblocks a denied) identity of the same name right away.
-		Watches(&platformv1.ClusterPool{}, handler.EnqueueRequestsFromMapFunc(identityForPool),
+		// re-signs (or unblocks a denied) identity right away, and every other pool's too, since an
+		// overlap is decided between two pools.
+		Watches(&platformv1.ClusterPool{}, handler.EnqueueRequestsFromMapFunc(s.identitiesForPool),
 			builder.WithPredicates(underlayPrefixChanged)).
+		// One decision at a time is what keeps two pools from being signed for overlapping ranges
+		// at once (see overlap). Pinned rather than left to the default.
+		WithOptions(controller.Options{MaxConcurrentReconciles: 1}).
 		Complete(s)
 }
 
@@ -504,10 +564,22 @@ var identitySpecChanged = predicate.Funcs{
 	},
 }
 
-// identityForPool maps a ClusterPool to the RouteBusIdentity of the same name (the signer only
-// signs an identity whose spec.poolName equals its name).
-func identityForPool(_ context.Context, o client.Object) []reconcile.Request {
-	return []reconcile.Request{{NamespacedName: types.NamespacedName{Name: o.GetName()}}}
+// identitiesForPool maps a ClusterPool event to the RouteBusIdentity of every pool (the signer only
+// signs an identity named after its pool), the changed one included even when it was just deleted.
+// An overlap is decided between two pools, so both sides are looked at again at once.
+func (s *Signer) identitiesForPool(ctx context.Context, o client.Object) []reconcile.Request {
+	reqs := []reconcile.Request{{NamespacedName: types.NamespacedName{Name: o.GetName()}}}
+	var pools platformv1.ClusterPoolList
+	if err := s.Client.List(ctx, &pools); err != nil {
+		log.FromContext(ctx).Error(err, "list ClusterPools to re-evaluate their identities; only the changed one is")
+		return reqs
+	}
+	for _, p := range pools.Items {
+		if p.Name != o.GetName() {
+			reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{Name: p.Name}})
+		}
+	}
+	return reqs
 }
 
 // underlayPrefixChanged admits ClusterPool events that can change an intermediate's constraint:

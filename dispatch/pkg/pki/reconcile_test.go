@@ -4,10 +4,12 @@
 package pki
 
 import (
+	"bytes"
 	"context"
 	"crypto/x509"
 	"encoding/pem"
 	"net"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -229,8 +231,17 @@ func TestSigner_DenialClearsAStaleCertificate(t *testing.T) {
 // Setting or changing underlayPrefix must reach the identity of the same name, so a denied pool is
 // signed as soon as the operator declares its range. Status-only churn (the lease heartbeat) must not.
 func TestSigner_ClusterPoolPrefixChangesWakeTheIdentity(t *testing.T) {
-	if got := identityForPool(context.Background(), clusterPool("k02", "")); len(got) != 1 || got[0].Name != "k02" {
-		t.Fatalf("identityForPool = %v, want [k02]", got)
+	s, _ := testSigner(t, clusterPool("k02", ""), clusterPool("k03", ""))
+	got := s.identitiesForPool(context.Background(), clusterPool("k02", ""))
+	var names []string
+	for _, r := range got {
+		names = append(names, r.Name)
+	}
+	slices.Sort(names)
+	// Every pool, not only the one that changed: an overlap is decided between two pools, so the
+	// other side has to be looked at again at once, not at its own requeue weeks later.
+	if !slices.Equal(names, []string{"k02", "k03"}) {
+		t.Fatalf("identitiesForPool = %v, want [k02 k03]", names)
 	}
 	old, upd := clusterPool("k02", ""), clusterPool("k02", poolPrefix)
 	if !underlayPrefixChanged.Update(event.UpdateEvent{ObjectOld: old, ObjectNew: upd}) {
@@ -272,6 +283,34 @@ func TestSigner_PoolPrefixOverlappingAnOlderPoolIsDenied(t *testing.T) {
 
 	requireDenied(t, reconcileIdentity(t, s, c, "k03"), "overlaps ClusterPool k02")
 	signedCert(t, reconcileIdentity(t, s, c, "k02"))
+}
+
+// The pool already holding a certificate for a range keeps it. An operator edit of k02's prefix into
+// k03's range must not take k03's range away (k02 being the older pool), and k03 must not wait for its
+// own requeue to find out: the edit is denied, and k03 keeps the certificate it has.
+func TestSigner_TheIncumbentKeepsItsRangeAgainstAnEdit(t *testing.T) {
+	now := time.Now()
+	k02 := poolAt("k02", "fd00:cafe:1914::/48", now.Add(-2*time.Hour)) // older
+	k03 := poolAt("k03", "fd00:cafe:2a3b::/48", now.Add(-time.Hour))
+	s, c := testSigner(t, k02, k03, identity(t, "k02"), identity(t, "k03"))
+	signedCert(t, reconcileIdentity(t, s, c, "k02"))
+	incumbent := signedCert(t, reconcileIdentity(t, s, c, "k03"))
+
+	var pool platformv1.ClusterPool
+	if err := c.Get(context.Background(), client.ObjectKey{Name: "k02"}, &pool); err != nil {
+		t.Fatal(err)
+	}
+	pool.Spec.UnderlayPrefix = "fd00:cafe:2a3b::/48"
+	if err := c.Update(context.Background(), &pool); err != nil {
+		t.Fatal(err)
+	}
+	// The ClusterPool event reaches both identities; reconcile them in either order.
+	requireDenied(t, reconcileIdentity(t, s, c, "k02"), "overlaps ClusterPool k03")
+	after := signedCert(t, reconcileIdentity(t, s, c, "k03"))
+	if !bytes.Equal(after.Raw, incumbent.Raw) {
+		t.Fatal("the incumbent's certificate was replaced")
+	}
+	requireDenied(t, reconcileIdentity(t, s, c, "k02"), "overlaps ClusterPool k03")
 }
 
 // The same creation time falls back to the name, so exactly one of the two is denied.
