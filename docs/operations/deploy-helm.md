@@ -203,6 +203,11 @@ per-pool grant exists, that certificate still acts as the pool. Do not give a ne
 name until the old broker certificate has expired, or unless every grant above was deleted first:
 a reused name re-creates the grant, and the old certificate then authenticates as the new pool.
 
+The same holds for the pool's underlay range. The old intermediate is constrained to it and stays
+valid for up to 90 days, so a new pool given the same `spec.underlayPrefix` (or one overlapping it)
+before then shares its VTEP range with a credential nobody controls. Wait out the old intermediate
+before reusing the range.
+
 ## Install the pool chart
 
 The pool chart does not manage its release namespace, so create it first:
@@ -404,6 +409,26 @@ rejected, and each pool is off the dispatch until it re-enrolls:
    the token.
 
 The lab does all of this on every `lab deploy`.
+
+### Rotating the two roots
+
+Both roots, `ectobase-ca` and `ectobase-dispatch-client-ca`, are cert-manager `Certificate`s with a
+ten-year lifetime and no `renewBefore`, so cert-manager renews each at about 6.7 years (two thirds
+of its life). A renewal with cert-manager's default `rotationPolicy: Always` gives the root a new
+key, and everything issued under the old one stops verifying:
+
+- `ectobase-ca`: every pool intermediate and every agent leaf under it, the edge fleet's
+  intermediate, and every pool's copy of the root in `dispatch-root-ca`. cert-manager reissues the
+  dispatch's own serving and client certificates.
+- `ectobase-dispatch-client-ca`: every broker's client certificate. Brokers get a 401 and enroll
+  again only if `broker-dispatch-bootstrap` holds a valid token.
+
+Plan the rotation before that date. On every pool, refresh `dispatch-root-ca` and write a fresh
+bootstrap token, then restart the broker: it enrolls again for a client certificate, and adopts the
+intermediate the signer re-signs under the new root (the signer replaces any certificate the current
+root did not sign). Reissue the agents' leaves as for an
+[intermediate without an IP constraint](../architecture/route-bus.md#where-the-certificates-come-from),
+and re-provision the edge fleet's CA directory.
 
 ## What happens to the pool CRDs
 

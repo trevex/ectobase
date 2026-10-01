@@ -123,7 +123,7 @@ func newRecoveredReconciler(t *testing.T, routes RouteHolder, pool *platformv1.C
 	c := fake.NewClientBuilder().WithScheme(testScheme(t)).
 		WithObjects(append(objs, pool, readyPoolObj("B"))...).WithStatusSubresource(pool).Build()
 	nf := &releaseCountingFencer{}
-	return &Reconciler{Client: c, StorageFencer: okFencer{}, NetworkFencer: nf, Routes: routes, FailoverThreshold: time.Minute}, c, nf
+	return &Reconciler{Client: c, StorageFencer: asStorage(okFencer{}, pool.Name, pool.Status.FencedPrefixes...), NetworkFencer: nf, Routes: routes, FailoverThreshold: time.Minute}, c, nf
 }
 
 func reconcileRecovered(t *testing.T, routes RouteHolder, objs ...client.Object) (*platformv1.ClusterPool, *releaseCountingFencer, time.Duration) {
@@ -328,7 +328,7 @@ func TestReleaseDrained_LookupFailureHoldsWithoutFailingThePass(t *testing.T) {
 			return cl.List(ctx, list, opts...)
 		}}).Build()
 	nf := &releaseCountingFencer{}
-	r := &Reconciler{Client: c, StorageFencer: okFencer{}, NetworkFencer: nf, Routes: &fakeRoutes{}, FailoverThreshold: time.Minute}
+	r := &Reconciler{Client: c, StorageFencer: asStorage(okFencer{}, "A", sourceNet), NetworkFencer: nf, Routes: &fakeRoutes{}, FailoverThreshold: time.Minute}
 	res, err := r.Reconcile(context.Background(), req("A"))
 	if err != nil {
 		t.Fatalf("a failed lookup must hold the release, not fail the pass: %v", err)
@@ -374,7 +374,7 @@ func TestReleaseDrained_UnreachablePoolReleasesNothing(t *testing.T) {
 			sf, nf := &releaseCountingFencer{}, &releaseCountingFencer{}
 			c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(pool, readyPoolObj("B")).
 				WithStatusSubresource(pool).Build()
-			r := &Reconciler{Client: c, StorageFencer: sf, NetworkFencer: nf, Routes: &fakeRoutes{}, FailoverThreshold: time.Minute}
+			r := &Reconciler{Client: c, StorageFencer: asStorage(sf, "A", sourceNet), NetworkFencer: nf, Routes: &fakeRoutes{}, FailoverThreshold: time.Minute}
 			if _, err := r.Reconcile(context.Background(), req("A")); err != nil {
 				t.Fatalf("reconcile: %v", err)
 			}
@@ -417,7 +417,7 @@ func TestReleaseDrained_RefenceForgetsTheDrainReport(t *testing.T) {
 	sf, nf := &releaseCountingFencer{}, &releaseCountingFencer{}
 	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(pool, readyPoolObj("B")).
 		WithStatusSubresource(pool).Build()
-	r := &Reconciler{Client: c, StorageFencer: sf, NetworkFencer: nf, Routes: &fakeRoutes{}, FailoverThreshold: time.Minute}
+	r := &Reconciler{Client: c, StorageFencer: asStorage(sf, "A", sourceNet), NetworkFencer: nf, Routes: &fakeRoutes{}, FailoverThreshold: time.Minute}
 	ctx := context.Background()
 
 	if _, err := r.Reconcile(ctx, req("A")); err != nil {

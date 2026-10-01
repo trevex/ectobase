@@ -22,7 +22,7 @@ func TestStorageFencer_FenceCreatesAndConfirms(t *testing.T) {
 	c := fake.NewClientBuilder().WithObjects(existing).Build()
 	f := NewStorageFencer(c, "rbd.csi.ceph.com", "", client.ObjectKey{Name: "csi-rbd-secret", Namespace: "ceph"})
 
-	if err := f.Fence(context.Background(), "2001:db8:0:1::/64"); err != nil {
+	if err := f.Fence(context.Background(), testPool, "2001:db8:0:1::/64"); err != nil {
 		t.Fatalf("Fence: %v", err)
 	}
 }
@@ -31,15 +31,20 @@ func TestStorageFencer_FencePendingReturnsError(t *testing.T) {
 	c := fake.NewClientBuilder().Build()
 	f := NewStorageFencer(c, "rbd.csi.ceph.com", "", client.ObjectKey{Name: "csi-rbd-secret", Namespace: "ceph"})
 	// No CR yet: Fence creates it, but status isn't Succeeded -> not active -> error (fail-safe).
-	if err := f.Fence(context.Background(), "2001:db8:0:1::/64"); err == nil {
+	if err := f.Fence(context.Background(), testPool, "2001:db8:0:1::/64"); err == nil {
 		t.Fatalf("Fence must error until the NetworkFence reports Succeeded")
 	}
 }
 
+// testPool is the pool the CRs in these tests were fenced for.
+const testPool = "k02"
+
+// fenceCR is a NetworkFence the dispatch fenced for testPool.
 func fenceCR(name, state, result string) *unstructured.Unstructured {
 	u := &unstructured.Unstructured{}
 	u.SetGroupVersionKind(schema.GroupVersionKind{Group: NetworkFenceGVR.Group, Version: NetworkFenceGVR.Version, Kind: "NetworkFence"})
 	u.SetName(name)
+	u.SetLabels(map[string]string{FencedForPoolLabel: testPool})
 	_ = unstructured.SetNestedField(u.Object, state, "spec", "fenceState")
 	if result != "" {
 		_ = unstructured.SetNestedField(u.Object, result, "status", "result")
@@ -56,7 +61,7 @@ func TestStorageFencer_ReleaseTransitionsToUnfenced(t *testing.T) {
 	c := fake.NewClientBuilder().WithObjects(cur).Build()
 	f := NewStorageFencer(c, "rbd.csi.ceph.com", "", client.ObjectKey{Name: "csi-rbd-secret", Namespace: "ceph"})
 
-	if err := f.Release(context.Background(), "2001:db8:0:1::/64"); err == nil {
+	if err := f.Release(context.Background(), testPool, "2001:db8:0:1::/64"); err == nil {
 		t.Fatalf("Release must error while the Unfenced transition is in flight")
 	}
 	got := &unstructured.Unstructured{}
@@ -77,7 +82,7 @@ func TestStorageFencer_ReleaseDeletesAfterUnfenced(t *testing.T) {
 	c := fake.NewClientBuilder().WithObjects(cur).Build()
 	f := NewStorageFencer(c, "rbd.csi.ceph.com", "", client.ObjectKey{Name: "csi-rbd-secret", Namespace: "ceph"})
 
-	if err := f.Release(context.Background(), "2001:db8:0:1::/64"); err != nil {
+	if err := f.Release(context.Background(), testPool, "2001:db8:0:1::/64"); err != nil {
 		t.Fatalf("Release: %v", err)
 	}
 	if _, ok := getCR(t, c, name); ok {
@@ -107,7 +112,7 @@ func TestStorageFencer_ReleaseKeepsAnUnfencedCRUntilTheUnfenceIsReported(t *test
 		t.Run(what, func(t *testing.T) {
 			c := fake.NewClientBuilder().WithObjects(cr).Build()
 			f := NewStorageFencer(c, "rbd.csi.ceph.com", "", client.ObjectKey{Name: "csi-rbd-secret", Namespace: "ceph"})
-			if err := f.Release(context.Background(), "2001:db8:0:1::/64"); err == nil {
+			if err := f.Release(context.Background(), testPool, "2001:db8:0:1::/64"); err == nil {
 				t.Fatal("Release must not report released before the unfence op is reported")
 			}
 			if _, ok := getCR(t, c, name); !ok {
@@ -133,7 +138,7 @@ func TestCSIAddonsOperationMessagesArePinned(t *testing.T) {
 func TestStorageFencer_ReleaseMissingIsNil(t *testing.T) {
 	c := fake.NewClientBuilder().Build()
 	f := NewStorageFencer(c, "rbd.csi.ceph.com", "", client.ObjectKey{Name: "csi-rbd-secret", Namespace: "ceph"})
-	if err := f.Release(context.Background(), "2001:db8:0:1::/64"); err != nil {
+	if err := f.Release(context.Background(), testPool, "2001:db8:0:1::/64"); err != nil {
 		t.Fatalf("Release of a missing NetworkFence must be nil, got %v", err)
 	}
 }
@@ -182,7 +187,7 @@ func TestStorageFencer_FenceOnAnUnfencedCRWaitsForTheUnfence(t *testing.T) {
 			c := fake.NewClientBuilder().WithObjects(cr).Build()
 			before, _ := getCR(t, c, name)
 			f := NewStorageFencer(c, "rbd.csi.ceph.com", "", client.ObjectKey{Name: "csi-rbd-secret", Namespace: "ceph"})
-			if err := f.Fence(context.Background(), prefix); err == nil {
+			if err := f.Fence(context.Background(), testPool, prefix); err == nil {
 				t.Fatal("Fence must not confirm on a CR whose unfence has not been reported")
 			}
 			after, ok := getCR(t, c, name)
@@ -203,13 +208,13 @@ func TestStorageFencer_FenceReplacesAnUnfencedCROnceTheUnfenceIsReported(t *test
 	c := fake.NewClientBuilder().WithObjects(unfencedCR(name)).Build()
 	f := NewStorageFencer(c, "rbd.csi.ceph.com", "", client.ObjectKey{Name: "csi-rbd-secret", Namespace: "ceph"})
 
-	if err := f.Fence(context.Background(), prefix); err == nil {
+	if err := f.Fence(context.Background(), testPool, prefix); err == nil {
 		t.Fatal("an Unfenced CR's Succeeded is the unfence op's: Fence must not confirm on it")
 	}
 	if _, ok := getCR(t, c, name); ok {
 		t.Fatal("a CR whose unfence is reported must be deleted to make way for a fresh fence")
 	}
-	if err := f.Fence(context.Background(), prefix); err == nil {
+	if err := f.Fence(context.Background(), testPool, prefix); err == nil {
 		t.Fatal("the replacement Fenced CR has no result yet: Fence must not confirm")
 	}
 	cur, ok := getCR(t, c, name)
@@ -229,7 +234,7 @@ func TestStorageFencer_FenceReplacesAnUnfencedCROnceTheUnfenceIsReported(t *test
 	if err := c.Update(context.Background(), cur); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.Fence(context.Background(), prefix); err != nil {
+	if err := f.Fence(context.Background(), testPool, prefix); err != nil {
 		t.Fatalf("a fresh Succeeded for the fence op confirms: %v", err)
 	}
 }
@@ -241,7 +246,7 @@ func TestStorageFencer_FenceIgnoresAnUnfenceResult(t *testing.T) {
 	_ = unstructured.SetNestedField(cr.Object, unfenceSucceededMsg, "status", "message")
 	c := fake.NewClientBuilder().WithObjects(cr).Build()
 	f := NewStorageFencer(c, "rbd.csi.ceph.com", "", client.ObjectKey{Name: "csi-rbd-secret", Namespace: "ceph"})
-	if err := f.Fence(context.Background(), "2001:db8:0:1::/64"); err == nil {
+	if err := f.Fence(context.Background(), testPool, "2001:db8:0:1::/64"); err == nil {
 		t.Fatal("a Succeeded for the unfence op must not confirm a fence")
 	}
 }
@@ -255,7 +260,71 @@ func TestStorageFencer_FenceOnADeletingCRWaits(t *testing.T) {
 	cr.SetFinalizers([]string{"csiaddons.openshift.io/network-fence"})
 	c := fake.NewClientBuilder().WithObjects(cr).Build()
 	f := NewStorageFencer(c, "rbd.csi.ceph.com", "", client.ObjectKey{Name: "csi-rbd-secret", Namespace: "ceph"})
-	if err := f.Fence(context.Background(), "2001:db8:0:1::/64"); err == nil {
+	if err := f.Fence(context.Background(), testPool, "2001:db8:0:1::/64"); err == nil {
 		t.Fatal("a NetworkFence being deleted must not confirm a fence")
+	}
+}
+
+func mustGetCR(t *testing.T, c client.Client, name string) *unstructured.Unstructured {
+	t.Helper()
+	u, ok := getCR(t, c, name)
+	if !ok {
+		t.Fatalf("NetworkFence %s is gone", name)
+	}
+	return u
+}
+
+// The fence records the pool it was set for, on the CR itself: the dispatch host cluster, which no
+// broker can write.
+func TestStorageFencer_FenceRecordsThePool(t *testing.T) {
+	c := fake.NewClientBuilder().Build()
+	f := NewStorageFencer(c, "rbd.csi.ceph.com", "", client.ObjectKey{Name: "csi-rbd-secret", Namespace: "ceph"})
+	_ = f.Fence(context.Background(), "k03", "2001:db8:0:1::/64") // created, not yet confirmed
+	if got := mustGetCR(t, c, "ectobase-2001-db8-0-1----64").GetLabels()[FencedForPoolLabel]; got != "k03" {
+		t.Fatalf("%s = %q, want k03", FencedForPoolLabel, got)
+	}
+	if pool, found, err := f.FencedFor(context.Background(), "2001:db8:0:1::/64"); err != nil || !found || pool != "k03" {
+		t.Fatalf("FencedFor = %q %v %v, want k03", pool, found, err)
+	}
+	if _, found, err := f.FencedFor(context.Background(), "2001:db8:0:9::/64"); err != nil || found {
+		t.Fatalf("FencedFor of an absent fence = found %v, err %v", found, err)
+	}
+}
+
+// A pool's status names the prefix to release and its broker writes that status. Release refuses,
+// and leaves untouched, a CR held for another pool or carrying no label at all.
+func TestStorageFencer_ReleaseRefusesAFenceThatIsNotThePools(t *testing.T) {
+	const name = "ectobase-2001-db8-0-1----64"
+	for owner, labels := range map[string]map[string]string{
+		"another pool": {FencedForPoolLabel: "k03"},
+		"no label":     nil,
+	} {
+		t.Run(owner, func(t *testing.T) {
+			cr := fenceCR(name, "Fenced", "Succeeded")
+			cr.SetLabels(labels)
+			c := fake.NewClientBuilder().WithObjects(cr).Build()
+			f := NewStorageFencer(c, "rbd.csi.ceph.com", "", client.ObjectKey{Name: "csi-rbd-secret", Namespace: "ceph"})
+			if err := f.Release(context.Background(), testPool, "2001:db8:0:1::/64"); err == nil {
+				t.Fatal("released a fence that is not this pool's")
+			}
+			if s, _, _ := unstructured.NestedString(mustGetCR(t, c, name).Object, "spec", "fenceState"); s != "Fenced" {
+				t.Fatalf("fenceState = %q, want it left Fenced", s)
+			}
+		})
+	}
+}
+
+// Nor may one pool's Fence take over, or replace, a CR held for another.
+func TestStorageFencer_FenceLeavesAnotherPoolsFenceAlone(t *testing.T) {
+	const name = "ectobase-2001-db8-0-1----64"
+	cr := unfencedCR(name) // spent, which Fence would otherwise delete and recreate
+	cr.SetLabels(map[string]string{FencedForPoolLabel: "k03"})
+	c := fake.NewClientBuilder().WithObjects(cr).Build()
+	f := NewStorageFencer(c, "rbd.csi.ceph.com", "", client.ObjectKey{Name: "csi-rbd-secret", Namespace: "ceph"})
+	if err := f.Fence(context.Background(), testPool, "2001:db8:0:1::/64"); err == nil {
+		t.Fatal("fenced over another pool's NetworkFence")
+	}
+	if got := mustGetCR(t, c, name).GetLabels()[FencedForPoolLabel]; got != "k03" {
+		t.Fatalf("the CR changed hands: %q", got)
 	}
 }

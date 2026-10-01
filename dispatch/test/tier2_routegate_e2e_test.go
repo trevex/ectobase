@@ -72,7 +72,7 @@ func TestTier2_FenceReleaseWaitsForMovedVMRoute(t *testing.T) {
 	rib := reflector.NewRIB()
 	rib.Announce("pool-a-node", 100, vmRoute, []string{sourceNH}, false)
 	nf := fence.NewNetworkFencer(reflectorAdmin(t, rib))
-	r := &failover.Reconciler{Client: c, StorageFencer: confirmingFencer{}, NetworkFencer: nf, Routes: nf, FailoverThreshold: time.Minute}
+	r := &failover.Reconciler{Client: c, StorageFencer: newConfirmingStorage(), NetworkFencer: nf, Routes: nf, FailoverThreshold: time.Minute}
 	reqA := ctrl.Request{NamespacedName: client.ObjectKey{Name: "pool-a"}}
 
 	// --- Fence + rebind; vm1 comes up on pool-b. ---

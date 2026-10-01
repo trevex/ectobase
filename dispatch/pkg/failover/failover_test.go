@@ -90,7 +90,7 @@ func TestFailover_WholePoolFence_ThenRebind(t *testing.T) {
 	healthy := readyPoolObj("B")
 	vm := vmOn("vm1", "A")
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(lost, healthy, vm).WithStatusSubresource(vm, lost).Build()
-	r := &Reconciler{Client: c, StorageFencer: okFencer{}, NetworkFencer: okFencer{}, FailoverThreshold: time.Minute}
+	r := &Reconciler{Client: c, StorageFencer: asStorage(okFencer{}, "A"), NetworkFencer: okFencer{}, FailoverThreshold: time.Minute}
 
 	if _, err := r.Reconcile(context.Background(), req("A")); err != nil {
 		t.Fatalf("reconcile: %v", err)
@@ -107,7 +107,7 @@ func TestFailover_PartialFence_Blocks(t *testing.T) {
 	lost := lostPoolObj("A", "2001:db8:0:1::/64")
 	vm := vmOn("vm1", "A")
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(lost, readyPoolObj("B"), vm).WithStatusSubresource(vm, lost).Build()
-	r := &Reconciler{Client: c, StorageFencer: denyFencer{errors.New("no ceph")}, NetworkFencer: okFencer{}, FailoverThreshold: time.Minute}
+	r := &Reconciler{Client: c, StorageFencer: asStorage(denyFencer{errors.New("no ceph")}, "A"), NetworkFencer: okFencer{}, FailoverThreshold: time.Minute}
 
 	if _, err := r.Reconcile(context.Background(), req("A")); err != nil {
 		t.Fatalf("reconcile: %v", err)
@@ -129,7 +129,7 @@ func TestFailover_ReleaseDrained_ReleasesOnlyDrained(t *testing.T) {
 		{Prefix: "2001:db8:0:2::/64", Drained: false},
 	}
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pool).WithStatusSubresource(pool).Build()
-	r := &Reconciler{Client: c, StorageFencer: okFencer{}, NetworkFencer: okFencer{}, FailoverThreshold: time.Minute}
+	r := &Reconciler{Client: c, StorageFencer: asStorage(okFencer{}, "A", "2001:db8:0:1::/64", "2001:db8:0:2::/64"), NetworkFencer: okFencer{}, FailoverThreshold: time.Minute}
 
 	if _, err := r.Reconcile(context.Background(), req("A")); err != nil {
 		t.Fatalf("reconcile: %v", err)
@@ -148,7 +148,7 @@ func TestFailover_ReleaseDrained_HoldsOnReleaseError(t *testing.T) {
 	pool.Status.NodeDrain = []platformv1.NodeDrainStatus{{Prefix: "2001:db8:0:1::/64", Drained: true}}
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pool).WithStatusSubresource(pool).Build()
 	// Storage release fails -> the /64 must stay fenced (held).
-	r := &Reconciler{Client: c, StorageFencer: releaseErrFencer{}, NetworkFencer: okFencer{}, FailoverThreshold: time.Minute}
+	r := &Reconciler{Client: c, StorageFencer: asStorage(releaseErrFencer{}, "A", "2001:db8:0:1::/64"), NetworkFencer: okFencer{}, FailoverThreshold: time.Minute}
 
 	if _, err := r.Reconcile(context.Background(), req("A")); err != nil {
 		t.Fatalf("reconcile: %v", err)
@@ -166,7 +166,7 @@ func TestFailover_PartialBarrier_TracksTheAppliedStorageFence(t *testing.T) {
 	vm := vmOn("vm1", "A")
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(lost, readyPoolObj("B"), vm).WithStatusSubresource(vm, lost).Build()
 	// Storage confirms; network fails -> the storage fence is applied and tracked, then network errors.
-	r := &Reconciler{Client: c, StorageFencer: okFencer{}, NetworkFencer: denyFencer{errors.New("no overlay")}, FailoverThreshold: time.Minute}
+	r := &Reconciler{Client: c, StorageFencer: asStorage(okFencer{}, "A"), NetworkFencer: denyFencer{errors.New("no overlay")}, FailoverThreshold: time.Minute}
 
 	if _, err := r.Reconcile(context.Background(), req("A")); err != nil {
 		t.Fatalf("reconcile: %v", err)
@@ -193,7 +193,7 @@ func TestFailover_LaterFenceFailure_KeepsEarlierAppliedFenceTracked(t *testing.T
 	lost.Status.FencedPrefixes = []string{testAggregate} // applied by an earlier pass
 	vm := vmOn("vm1", "A")
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(lost, readyPoolObj("B"), vm).WithStatusSubresource(vm, lost).Build()
-	r := &Reconciler{Client: c, StorageFencer: denyFencer{errors.New("ceph down")}, NetworkFencer: okFencer{}, FailoverThreshold: time.Minute}
+	r := &Reconciler{Client: c, StorageFencer: asStorage(denyFencer{errors.New("ceph down")}, "A", testAggregate), NetworkFencer: okFencer{}, FailoverThreshold: time.Minute}
 
 	if _, err := r.Reconcile(context.Background(), req("A")); err != nil {
 		t.Fatalf("reconcile: %v", err)
@@ -229,7 +229,7 @@ func TestFailover_WithoutAValidUnderlayPrefix_FencesNothingAndBlocks(t *testing.
 			vm := vmOn("vm1", "A")
 			c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(lost, readyPoolObj("B"), vm).WithStatusSubresource(vm, lost).Build()
 			storage, network := &recordingFencer{}, &recordingFencer{}
-			r := &Reconciler{Client: c, StorageFencer: storage, NetworkFencer: network, FailoverThreshold: time.Minute}
+			r := &Reconciler{Client: c, StorageFencer: asStorage(storage, "A"), NetworkFencer: network, FailoverThreshold: time.Minute}
 
 			if _, err := r.Reconcile(context.Background(), req("A")); err != nil {
 				t.Fatalf("reconcile: %v", err)
@@ -263,7 +263,7 @@ func TestFailover_DeclaredUnderlayPrefix_FencesTheAggregateAndRebinds(t *testing
 	vm := vmOn("vm1", "A")
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(lost, readyPoolObj("B"), vm).WithStatusSubresource(vm, lost).Build()
 	rec := &recordingFencer{}
-	r := &Reconciler{Client: c, StorageFencer: rec, NetworkFencer: okFencer{}, FailoverThreshold: time.Minute}
+	r := &Reconciler{Client: c, StorageFencer: asStorage(rec, "A"), NetworkFencer: okFencer{}, FailoverThreshold: time.Minute}
 
 	if _, err := r.Reconcile(context.Background(), req("A")); err != nil {
 		t.Fatalf("reconcile: %v", err)
@@ -301,7 +301,7 @@ func TestFailover_FencedPool_ReleasesRetiredTwins(t *testing.T) {
 	twin := retiredTwinOn("A")
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(lost, readyPoolObj("B"), twin).
 		WithStatusSubresource(lost, twin).Build()
-	r := &Reconciler{Client: c, StorageFencer: okFencer{}, NetworkFencer: okFencer{}, FailoverThreshold: time.Minute}
+	r := &Reconciler{Client: c, StorageFencer: asStorage(okFencer{}, "A"), NetworkFencer: okFencer{}, FailoverThreshold: time.Minute}
 
 	if _, err := r.Reconcile(context.Background(), req("A")); err != nil {
 		t.Fatalf("reconcile: %v", err)
@@ -322,7 +322,7 @@ func TestFailover_PartialFence_ReleasesNothing(t *testing.T) {
 	twin := retiredTwinOn("A")
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(lost, readyPoolObj("B"), twin).
 		WithStatusSubresource(lost, twin).Build()
-	r := &Reconciler{Client: c, StorageFencer: okFencer{}, NetworkFencer: denyFencer{err: errors.New("no")}, FailoverThreshold: time.Minute}
+	r := &Reconciler{Client: c, StorageFencer: asStorage(okFencer{}, "A"), NetworkFencer: denyFencer{err: errors.New("no")}, FailoverThreshold: time.Minute}
 
 	_, _ = r.Reconcile(context.Background(), req("A"))
 	var got compiledv1.CompiledVM
@@ -343,7 +343,7 @@ func TestFailover_FencedPool_LeavesLiveTwinAlone(t *testing.T) {
 	live.DeletionTimestamp, live.Finalizers = nil, nil
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(lost, readyPoolObj("B"), live).
 		WithStatusSubresource(lost, live).Build()
-	r := &Reconciler{Client: c, StorageFencer: okFencer{}, NetworkFencer: okFencer{}, FailoverThreshold: time.Minute}
+	r := &Reconciler{Client: c, StorageFencer: asStorage(okFencer{}, "A"), NetworkFencer: okFencer{}, FailoverThreshold: time.Minute}
 
 	if _, err := r.Reconcile(context.Background(), req("A")); err != nil {
 		t.Fatalf("reconcile: %v", err)
@@ -399,7 +399,7 @@ func TestFailover_NodePrefixOutsideTheAggregate_BlocksTheRebindAndIsNotFenced(t 
 			vm := vmOn("vm1", "A")
 			c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(lost, readyPoolObj("B"), vm).WithStatusSubresource(vm, lost).Build()
 			storage, network := &recordingFencer{}, &recordingFencer{}
-			r := &Reconciler{Client: c, StorageFencer: storage, NetworkFencer: network, FailoverThreshold: time.Minute}
+			r := &Reconciler{Client: c, StorageFencer: asStorage(storage, "A"), NetworkFencer: network, FailoverThreshold: time.Minute}
 
 			if _, err := r.Reconcile(context.Background(), req("A")); err != nil {
 				t.Fatalf("reconcile: %v", err)

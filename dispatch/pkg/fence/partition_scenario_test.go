@@ -37,12 +37,13 @@ func TestPartition_WholePoolFence_CutsBothBackends(t *testing.T) {
 	nf := &unstructured.Unstructured{}
 	nf.SetGroupVersionKind(schema.GroupVersionKind{Group: NetworkFenceGVR.Group, Version: NetworkFenceGVR.Version, Kind: "NetworkFence"})
 	nf.SetName(fenceName(prefix))
+	nf.SetLabels(map[string]string{FencedForPoolLabel: "k02"})
 	_ = unstructured.SetNestedField(nf.Object, "Fenced", "spec", "fenceState")
 	_ = unstructured.SetNestedField(nf.Object, "Succeeded", "status", "result")
 	_ = unstructured.SetNestedField(nf.Object, fenceSucceededMsg, "status", "message")
 	c := fake.NewClientBuilder().WithObjects(nf).Build()
 	sf := NewStorageFencer(c, "rbd.csi.ceph.com", "", client.ObjectKey{Name: "s", Namespace: "ceph"})
-	if err := sf.Fence(context.Background(), prefix); err != nil {
+	if err := sf.Fence(context.Background(), "k02", prefix); err != nil {
 		t.Fatalf("storage fence must confirm active: %v", err)
 	}
 }

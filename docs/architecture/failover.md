@@ -214,32 +214,45 @@ its multi-year expiry. This section describes what a returning pool must show be
 comes off, and why each condition exists.
 
 Every pass, before it checks whether the pool is lost, the reconciler runs `releaseDrained` over
-`status.fencedPrefixes`. A prefix is released only when all three gates pass:
+`status.fencedPrefixes`. A prefix is released only when all four gates pass:
 
 | Gate | Passes when | Prevents |
 |---|---|---|
+| This pool's fence | the prefix's `NetworkFence` carries the label `ectobase.dev/fenced-for-pool=<this pool>` | A pool's broker writes its own `status.fencedPrefixes` and `status.nodeDrain`, so a compromised pool could list another pool's fence as its own and drained, and have it lifted while that pool's VMs run elsewhere |
 | Reachable | `clusterpool.Reachable`: phase `Ready` and a lease renewed within `HealthStale`, both | Unfencing a pool that is still, or again, partitioned |
 | Drained | the broker's current `status.nodeDrain` entry for the prefix says `drained: true` | Unfencing storage while a stale VMI still runs there |
 | Routes withdrawn | the reflector holds, from inside the prefix, no route of an address placed on another pool | Unfencing a node that still announces, and may still run, a VM that moved |
 
-For a prefix that passes, the storage fence is released first (flip to `Unfenced`, wait for the
-unfence message, delete the CR), then the network fence (`RouteBusAdmin.ClearFence`), and the prefix
-leaves `fencedPrefixes`. A release still in progress keeps the prefix and is retried. When the
-reflector's fence clears, it re-advertises the routes it was hiding from what it stored; the agents
-do not need to re-announce them.
+The first gate reads the dispatch's own record, never the pool's status. The storage fencer labels
+each `NetworkFence` with the pool it fenced for, and `NetworkFence` CRs live on the dispatch host
+cluster, which no broker has credentials for. An entry in `status.fencedPrefixes` whose
+`NetworkFence` is labelled for another pool, carries no label, or no longer exists is dropped from
+status (and logged), and released at neither backend. The storage fencer's own `Release` refuses
+such a CR as well. A `nodeDrain` entry is consulted only for prefixes that pass this gate, so a pool
+can affect only its own fences. If the operator changes `spec.underlayPrefix` while a fence is held,
+the old prefix's `NetworkFence` is still labelled for the pool and is released as usual.
+
+For a prefix that passes, the network fence is released first (`RouteBusAdmin.ClearFence`), then
+the storage fence (flip to `Unfenced`, wait for the unfence message, delete the CR), and the prefix
+leaves `fencedPrefixes`. The `NetworkFence` holds the ownership record, so it goes last: a pass that
+stops in between leaves the record for the next one. A release still in progress keeps the prefix
+and is retried. When the reflector's fence clears, it re-advertises the routes it was hiding from
+what it stored; the agents do not need to re-announce them.
 
 ```mermaid
 flowchart TD
-    start["prefix in status.fencedPrefixes"] --> r{"Reachable?<br/>phase Ready AND lease fresh"}
+    start["prefix in status.fencedPrefixes"] --> o{"NetworkFence labelled<br/>for this pool?"}
+    o -- no --> drop["drop from fencedPrefixes,<br/>release nothing"]
+    o -- yes --> r{"Reachable?<br/>phase Ready AND lease fresh"}
     r -- no --> hold["hold"]
     r -- yes --> d{"broker reports<br/>drained: true?"}
     d -- no --> hold
     d -- yes --> q{"reflector: any address placed<br/>on another pool still announced<br/>from this prefix?"}
     q -- "cannot ask" --> blk1["hold<br/>FenceReleaseBlocked=True<br/>RouteCheckFailed"]
     q -- yes --> blk2["hold, recheck in 5s<br/>FenceReleaseBlocked=True<br/>RoutesStillAnnounced"]
-    q -- no --> sr["release storage fence<br/>(Unfenced, then delete CR)"]
-    sr --> nr["release network fence<br/>(ClearFence)"]
-    nr --> done["drop from fencedPrefixes"]
+    q -- no --> nr["release network fence<br/>(ClearFence)"]
+    nr --> sr["release storage fence<br/>(Unfenced, then delete CR)"]
+    sr --> done["drop from fencedPrefixes"]
 ```
 
 ### Gate 1: reachable
@@ -338,6 +351,7 @@ traffic could reach the wrong copy.
 | Coverage check, declared prefix only | A node outside the declared prefix stays writable while the VM starts elsewhere. Fencing broker-reported prefixes instead could miss a node that joined during the outage, or fence another pool's. |
 | Retired twin plus `releaseFencedTwins` | The target would start the VM while nothing had shown that the source stopped. |
 | `forgetDrain` | A pool lost again carries `drained: true` from its previous recovery into the next one. |
+| Ownership gate (the `NetworkFence` label) | A compromised pool lists another pool's fence in its own status as fenced and drained, and the dispatch unfences that pool at Ceph and the reflector while its VMs run elsewhere. |
 | Reachable gate | A partition that also empties the reflector passes the route gate and reopens Ceph to live, partitioned nodes. |
 | Drain gate | A stale VMI on the recovered pool regains write access to an image the new pool is using. |
 | Route gate | A stale source still announcing a moved VM's /32 attracts its traffic, and may still be running it. |
