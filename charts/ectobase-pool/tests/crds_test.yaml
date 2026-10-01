@@ -1,0 +1,27 @@
+suite: pool crds
+templates:
+  - templates/crds.yaml
+tests:
+  # Deleting a compiled CRD deletes every twin, and garbage collection then deletes the VMs, Pods
+  # and DataVolumes the materializers own. `helm uninstall` and an upgrade to installCRDs=false
+  # must leave the CRDs in place. Asserts without documentIndex run against every document.
+  - it: every CRD carries helm.sh/resource-policy keep
+    set:
+      broker.clusterName: test
+    asserts:
+      - isKind:
+          of: CustomResourceDefinition
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep
+      # The injection merges into the annotations controller-gen wrote; it does not replace them.
+      - exists:
+          path: metadata.annotations["controller-gen.kubebuilder.io/version"]
+
+  - it: renders no CRDs with installCRDs=false
+    set:
+      broker.clusterName: test
+      installCRDs: false
+    asserts:
+      - hasDocuments:
+          count: 0

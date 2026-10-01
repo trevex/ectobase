@@ -267,6 +267,7 @@ renders (ebpf clab):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: compiledcontainers.compiled.ectobase.dev
     spec:
       group: compiled.ectobase.dev
@@ -572,6 +573,7 @@ renders (ebpf clab):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: compilednics.compiled.ectobase.dev
     spec:
       group: compiled.ectobase.dev
@@ -868,6 +870,7 @@ renders (ebpf clab):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: compiledvms.compiled.ectobase.dev
     spec:
       group: compiled.ectobase.dev
@@ -1056,6 +1059,7 @@ renders (ebpf clab):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: compiledvolumeattachments.compiled.ectobase.dev
     spec:
       group: compiled.ectobase.dev
@@ -1408,6 +1412,7 @@ renders (ebpf clab):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: firewallpolicies.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -1656,6 +1661,7 @@ renders (ebpf clab):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: floatingips.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -1714,6 +1720,7 @@ renders (ebpf clab):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: ipallocations.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -1799,6 +1806,7 @@ renders (ebpf clab):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: ippools.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -1884,6 +1892,7 @@ renders (ebpf clab):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: loadbalancers.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -2052,6 +2061,7 @@ renders (ebpf clab):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: natgateways.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -2188,6 +2198,7 @@ renders (ebpf clab):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: networkinterfaces.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -2429,6 +2440,7 @@ renders (ebpf clab):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: subnets.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -2513,6 +2525,7 @@ renders (ebpf clab):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: vpcpeerings.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -2606,6 +2619,7 @@ renders (ebpf clab):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: vpcs.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -3427,6 +3441,7 @@ renders (ebpf hw):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: compiledcontainers.compiled.ectobase.dev
     spec:
       group: compiled.ectobase.dev
@@ -3732,6 +3747,7 @@ renders (ebpf hw):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: compilednics.compiled.ectobase.dev
     spec:
       group: compiled.ectobase.dev
@@ -4028,6 +4044,7 @@ renders (ebpf hw):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: compiledvms.compiled.ectobase.dev
     spec:
       group: compiled.ectobase.dev
@@ -4216,6 +4233,7 @@ renders (ebpf hw):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: compiledvolumeattachments.compiled.ectobase.dev
     spec:
       group: compiled.ectobase.dev
@@ -4568,6 +4586,7 @@ renders (ebpf hw):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: firewallpolicies.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -4816,6 +4835,7 @@ renders (ebpf hw):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: floatingips.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -4874,6 +4894,7 @@ renders (ebpf hw):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: ipallocations.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -4959,6 +4980,7 @@ renders (ebpf hw):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: ippools.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -5044,6 +5066,7 @@ renders (ebpf hw):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: loadbalancers.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -5212,6 +5235,7 @@ renders (ebpf hw):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: natgateways.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -5348,6 +5372,7 @@ renders (ebpf hw):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: networkinterfaces.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -5589,6 +5614,7 @@ renders (ebpf hw):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: subnets.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -5673,6 +5699,7 @@ renders (ebpf hw):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: vpcpeerings.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -5766,6 +5793,7 @@ renders (ebpf hw):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: vpcs.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -6584,6 +6612,7 @@ renders (tier1 on):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: compiledcontainers.compiled.ectobase.dev
     spec:
       group: compiled.ectobase.dev
@@ -6889,6 +6918,7 @@ renders (tier1 on):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: compilednics.compiled.ectobase.dev
     spec:
       group: compiled.ectobase.dev
@@ -7185,6 +7215,7 @@ renders (tier1 on):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: compiledvms.compiled.ectobase.dev
     spec:
       group: compiled.ectobase.dev
@@ -7373,6 +7404,7 @@ renders (tier1 on):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: compiledvolumeattachments.compiled.ectobase.dev
     spec:
       group: compiled.ectobase.dev
@@ -7725,6 +7757,7 @@ renders (tier1 on):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: firewallpolicies.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -7973,6 +8006,7 @@ renders (tier1 on):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: floatingips.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -8031,6 +8065,7 @@ renders (tier1 on):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: ipallocations.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -8116,6 +8151,7 @@ renders (tier1 on):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: ippools.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -8201,6 +8237,7 @@ renders (tier1 on):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: loadbalancers.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -8369,6 +8406,7 @@ renders (tier1 on):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: natgateways.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -8505,6 +8543,7 @@ renders (tier1 on):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: networkinterfaces.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -8746,6 +8785,7 @@ renders (tier1 on):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: subnets.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -8830,6 +8870,7 @@ renders (tier1 on):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: vpcpeerings.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -8923,6 +8964,7 @@ renders (tier1 on):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: vpcs.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -9781,6 +9823,7 @@ renders (tier1 watchdog):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: compiledcontainers.compiled.ectobase.dev
     spec:
       group: compiled.ectobase.dev
@@ -10086,6 +10129,7 @@ renders (tier1 watchdog):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: compilednics.compiled.ectobase.dev
     spec:
       group: compiled.ectobase.dev
@@ -10382,6 +10426,7 @@ renders (tier1 watchdog):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: compiledvms.compiled.ectobase.dev
     spec:
       group: compiled.ectobase.dev
@@ -10570,6 +10615,7 @@ renders (tier1 watchdog):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: compiledvolumeattachments.compiled.ectobase.dev
     spec:
       group: compiled.ectobase.dev
@@ -10922,6 +10968,7 @@ renders (tier1 watchdog):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: firewallpolicies.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -11170,6 +11217,7 @@ renders (tier1 watchdog):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: floatingips.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -11228,6 +11276,7 @@ renders (tier1 watchdog):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: ipallocations.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -11313,6 +11362,7 @@ renders (tier1 watchdog):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: ippools.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -11398,6 +11448,7 @@ renders (tier1 watchdog):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: loadbalancers.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -11566,6 +11617,7 @@ renders (tier1 watchdog):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: natgateways.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -11702,6 +11754,7 @@ renders (tier1 watchdog):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: networkinterfaces.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -11943,6 +11996,7 @@ renders (tier1 watchdog):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: subnets.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -12027,6 +12081,7 @@ renders (tier1 watchdog):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: vpcpeerings.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -12120,6 +12175,7 @@ renders (tier1 watchdog):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: vpcs.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -12988,6 +13044,7 @@ renders with vm-materializer enabled:
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: compiledcontainers.compiled.ectobase.dev
     spec:
       group: compiled.ectobase.dev
@@ -13293,6 +13350,7 @@ renders with vm-materializer enabled:
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: compilednics.compiled.ectobase.dev
     spec:
       group: compiled.ectobase.dev
@@ -13589,6 +13647,7 @@ renders with vm-materializer enabled:
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: compiledvms.compiled.ectobase.dev
     spec:
       group: compiled.ectobase.dev
@@ -13777,6 +13836,7 @@ renders with vm-materializer enabled:
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: compiledvolumeattachments.compiled.ectobase.dev
     spec:
       group: compiled.ectobase.dev
@@ -14129,6 +14189,7 @@ renders with vm-materializer enabled:
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: firewallpolicies.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -14377,6 +14438,7 @@ renders with vm-materializer enabled:
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: floatingips.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -14435,6 +14497,7 @@ renders with vm-materializer enabled:
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: ipallocations.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -14520,6 +14583,7 @@ renders with vm-materializer enabled:
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: ippools.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -14605,6 +14669,7 @@ renders with vm-materializer enabled:
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: loadbalancers.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -14773,6 +14838,7 @@ renders with vm-materializer enabled:
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: natgateways.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -14909,6 +14975,7 @@ renders with vm-materializer enabled:
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: networkinterfaces.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -15150,6 +15217,7 @@ renders with vm-materializer enabled:
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: subnets.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -15234,6 +15302,7 @@ renders with vm-materializer enabled:
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: vpcpeerings.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -15327,6 +15396,7 @@ renders with vm-materializer enabled:
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: vpcs.net.ectobase.dev
     spec:
       group: net.ectobase.dev
