@@ -458,3 +458,33 @@ func TestReleaseDrained_RefenceForgetsTheDrainReport(t *testing.T) {
 		t.Fatalf("a fresh drain report on a reachable pool releases; storage=%v network=%v", sf.released, nf.released)
 	}
 }
+
+// A pool with spec.underlayPrefix is fenced as one aggregate. The route gate asks the reflector
+// about that aggregate itself (which matches nexthops inside it by containment), so a moved VM
+// still announced from any node of the pool holds the release.
+func TestReleaseDrained_AggregateFenceAsksAboutTheAggregate(t *testing.T) {
+	const aggregate = "2001:db8::/48"
+	pool := readyPoolObj("A")
+	pool.Spec.UnderlayPrefix = aggregate
+	pool.Status.FencedPrefixes = []string{aggregate}
+	pool.Status.NodeDrain = []platformv1.NodeDrainStatus{{Prefix: aggregate, Drained: true}}
+	routes := &fakeRoutes{held: map[string][]RouteKey{aggregate: {{VNI: 100, Prefix: movedKey}}}}
+	r, c, nf := newRecoveredReconciler(t, routes, pool, movedVM("B"), nicTwin("B", "nic1", 100, movedIP))
+	if _, err := r.Reconcile(context.Background(), req("A")); err != nil {
+		t.Fatal(err)
+	}
+	got := &platformv1.ClusterPool{}
+	_ = c.Get(context.Background(), key("A"), got)
+	if len(got.Status.FencedPrefixes) != 1 || len(nf.released) != 0 {
+		t.Fatalf("an aggregate still announcing a moved VM must stay fenced; fenced=%v released=%v", got.Status.FencedPrefixes, nf.released)
+	}
+
+	routes.held = nil // the source withdrew
+	if _, err := r.Reconcile(context.Background(), req("A")); err != nil {
+		t.Fatal(err)
+	}
+	_ = c.Get(context.Background(), key("A"), got)
+	if len(got.Status.FencedPrefixes) != 0 || len(nf.released) != 1 || nf.released[0] != aggregate {
+		t.Fatalf("once withdrawn the aggregate must be released; fenced=%v released=%v", got.Status.FencedPrefixes, nf.released)
+	}
+}
