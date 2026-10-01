@@ -158,6 +158,10 @@ message AttachInterfaceResponse {
 message ListInterfacesRequest {}
 message ListInterfacesResponse {
   repeated InterfaceInfo interfaces = 1;
+  // instance_id is new every time the dataplane process starts. A restart keeps the pinned routes
+  // but loses a mesh route a local self-route was holding back, so the node agent watches this to
+  // know when to re-send its routes. Empty from a dataplane that predates it.
+  string instance_id = 2;
 }
 // InterfaceInfo is one locally-attached interface's overlay identity + node-local underlay.
 message InterfaceInfo {
