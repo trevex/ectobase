@@ -21,6 +21,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	platformv1 "github.com/trevex/ectobase/api/platform/v1alpha1"
@@ -146,8 +147,8 @@ func (b *PoolCertBootstrapper) Start(ctx context.Context) error {
 }
 
 // EnsureOnce provisions the pool intermediate exactly once (idempotent: a no-op if the
-// existing intermediate is still fresh). Used at broker first-boot to break the credential
-// bootstrap chicken-and-egg before the steady-state mTLS leaf exists.
+// existing intermediate is still fresh). The broker itself runs the bootstrapper as a runnable
+// (Start); this is the single pass, for callers and tests.
 func (b *PoolCertBootstrapper) EnsureOnce(ctx context.Context) error {
 	b.defaults()
 	return b.ensure(ctx)
@@ -209,25 +210,22 @@ func (b *PoolCertBootstrapper) adoptResigned(ctx context.Context, sec *corev1.Se
 // submitCSR creates or updates this pool's RouteBusIdentity on dispatch with the new CSR + the
 // pool's configured underlay CIDRs (advisory: the signer takes the constraint from the ClusterPool).
 func (b *PoolCertBootstrapper) submitCSR(ctx context.Context, csrPEM []byte, cidrs []string) error {
-	id := &platformv1.RouteBusIdentity{}
-	err := b.Dispatch.Get(ctx, types.NamespacedName{Name: b.PoolName}, id)
-	if apierrors.IsNotFound(err) {
-		id = &platformv1.RouteBusIdentity{
-			ObjectMeta: metav1.ObjectMeta{Name: b.PoolName},
-			Spec:       platformv1.RouteBusIdentitySpec{PoolName: b.PoolName, Request: csrPEM, PermittedUnderlayCIDRs: cidrs},
+	// The identity is pre-created at enrollment (RBAC cannot scope create by name, so the broker
+	// holds none). The client-certificate runnable writes the same object, hence the retry.
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		id := &platformv1.RouteBusIdentity{}
+		if err := b.Dispatch.Get(ctx, types.NamespacedName{Name: b.PoolName}, id); err != nil {
+			return err
 		}
-		return b.Dispatch.Create(ctx, id)
-	}
+		id.Spec.PoolName = b.PoolName
+		id.Spec.Request = csrPEM
+		id.Spec.PermittedUnderlayCIDRs = cidrs
+		// The status is left alone: it is the signer's, and the broker holds no grant on it. A
+		// stale cert there is for the old key, which pollSigned does not accept.
+		return b.Dispatch.Update(ctx, id)
+	})
 	if err != nil {
-		return fmt.Errorf("get RouteBusIdentity: %w", err)
-	}
-	id.Spec.PoolName = b.PoolName
-	id.Spec.Request = csrPEM
-	id.Spec.PermittedUnderlayCIDRs = cidrs
-	// The status is left alone: it is the signer's, and the broker holds no grant on it. A stale
-	// cert there is for the old key, which pollSigned does not accept.
-	if err := b.Dispatch.Update(ctx, id); err != nil {
-		return fmt.Errorf("update RouteBusIdentity: %w", err)
+		return fmt.Errorf("file intermediate CSR on RouteBusIdentity %s: %w", b.PoolName, err)
 	}
 	return nil
 }
