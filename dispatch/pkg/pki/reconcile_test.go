@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/x509"
 	"encoding/pem"
+	"net"
 	"strings"
 	"testing"
 	"time"
@@ -296,4 +297,55 @@ func TestSigner_DisjointPoolPrefixesAreSigned(t *testing.T) {
 	s.FleetIdentities = []string{"edge"}
 	signedCert(t, reconcileIdentity(t, s, c, "k02"))
 	signedCert(t, reconcileIdentity(t, s, c, "k03"))
+}
+
+// An IPv4-mapped prefix (stored before admission refused one) must sign once and then read as
+// already signed. Unmapping only the certificate's side made every reconcile re-sign, and each
+// re-sign's status write triggered the next.
+func TestSigner_IPv4MappedPrefixDoesNotReSignInALoop(t *testing.T) {
+	s, c := testSigner(t, clusterPool("k02", "::ffff:10.20.0.0/112"), identity(t, "k02"))
+	first := signedCert(t, reconcileIdentity(t, s, c, "k02"))
+	if r := ranges(first); len(r) != 1 || r[0] != "10.20.0.0/16" {
+		t.Fatalf("PermittedIPRanges = %v, want the unmapped [10.20.0.0/16]", r)
+	}
+	again := reconcileIdentity(t, s, c, "k02")
+	if string(again.Status.Certificate) != string(pemOf(first)) {
+		t.Fatal("an unchanged 4in6 constraint was re-signed")
+	}
+}
+
+func pemOf(c *x509.Certificate) []byte {
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: c.Raw})
+}
+
+func TestSameRanges_UnmapsBothSides(t *testing.T) {
+	_, v4, _ := net.ParseCIDR("10.20.0.0/16")
+	_, mapped, _ := net.ParseCIDR("::ffff:10.20.0.0/112")
+	for name, tc := range map[string]struct {
+		got  []*net.IPNet
+		want []string
+	}{
+		"v4 cert, mapped want":     {[]*net.IPNet{v4}, []string{"::ffff:10.20.0.0/112"}},
+		"mapped cert, v4 want":     {[]*net.IPNet{mapped}, []string{"10.20.0.0/16"}},
+		"mapped cert, mapped want": {[]*net.IPNet{mapped}, []string{"::ffff:10.20.0.0/112"}},
+	} {
+		if !sameRanges(tc.got, tc.want) {
+			t.Errorf("%s: sameRanges = false, want true", name)
+		}
+	}
+}
+
+// The signer's own status write must not wake it again; a spec change (a new CSR) must.
+func TestSigner_IgnoresStatusOnlyIdentityUpdates(t *testing.T) {
+	old := identity(t, "k02")
+	statusOnly := old.DeepCopy()
+	statusOnly.Status.Certificate = []byte("cert")
+	if identitySpecChanged.Update(event.UpdateEvent{ObjectOld: old, ObjectNew: statusOnly}) {
+		t.Error("a status-only update must not re-trigger the signer")
+	}
+	newCSR := old.DeepCopy()
+	newCSR.Spec.Request = []byte("another csr")
+	if !identitySpecChanged.Update(event.UpdateEvent{ObjectOld: old, ObjectNew: newCSR}) {
+		t.Error("a new CSR must trigger the signer")
+	}
 }

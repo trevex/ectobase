@@ -25,6 +25,7 @@ import (
 	"strings"
 	"time"
 
+	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -225,7 +226,7 @@ func (s *Signer) constraint(ctx context.Context, id *platformv1.RouteBusIdentity
 			return nil, "", fmt.Sprintf("fleet identity %s has no spec.permittedUnderlayCIDRs; "+
 				"an intermediate is only signed with an IP constraint", id.Name), nil
 		}
-		return id.Spec.PermittedUnderlayCIDRs, "", "", nil
+		return canonicalCIDRs(id.Spec.PermittedUnderlayCIDRs), "", "", nil
 	}
 	if !poolExists {
 		return nil, "", fmt.Sprintf("no ClusterPool %s and not a fleet identity (--routebus-fleet-identities); "+
@@ -239,7 +240,7 @@ func (s *Signer) constraint(ctx context.Context, id *platformv1.RouteBusIdentity
 	if perr != nil {
 		return nil, "", fmt.Sprintf("ClusterPool %s spec.underlayPrefix %q is not a CIDR: %v", pool.Name, pool.Spec.UnderlayPrefix, perr), nil
 	}
-	prefix = prefix.Masked()
+	prefix = canonical(prefix)
 	if denial, err := s.overlap(ctx, reader, &pool, prefix); denial != "" || err != nil {
 		return nil, "", denial, err
 	}
@@ -270,7 +271,7 @@ func (s *Signer) overlap(ctx context.Context, reader client.Reader, pool *platfo
 		if other.Name == pool.Name || !enrolledBefore(other, pool) {
 			continue
 		}
-		if p, err := netip.ParsePrefix(other.Spec.UnderlayPrefix); err == nil && p.Masked().Overlaps(prefix) {
+		if p, err := netip.ParsePrefix(other.Spec.UnderlayPrefix); err == nil && canonical(p).Overlaps(prefix) {
 			return fmt.Sprintf("ClusterPool %s spec.underlayPrefix %s overlaps ClusterPool %s's %s, enrolled earlier",
 				pool.Name, prefix, other.Name, other.Spec.UnderlayPrefix), nil
 		}
@@ -283,7 +284,7 @@ func (s *Signer) overlap(ctx context.Context, reader client.Reader, pool *platfo
 			return "", fmt.Errorf("get fleet identity %s: %w", name, err)
 		}
 		for _, c := range fleet.Spec.PermittedUnderlayCIDRs {
-			if p, err := netip.ParsePrefix(c); err == nil && p.Masked().Overlaps(prefix) {
+			if p, err := netip.ParsePrefix(c); err == nil && canonical(p).Overlaps(prefix) {
 				return fmt.Sprintf("ClusterPool %s spec.underlayPrefix %s overlaps fleet identity %s's %s",
 					pool.Name, prefix, name, c), nil
 			}
@@ -344,7 +345,7 @@ func sameRanges(got []*net.IPNet, want []string) bool {
 	set := func(ps []netip.Prefix) []string {
 		out := make([]string, 0, len(ps))
 		for _, p := range ps {
-			out = append(out, p.Masked().String())
+			out = append(out, canonical(p).String())
 		}
 		slices.Sort(out)
 		return slices.Compact(out)
@@ -356,7 +357,7 @@ func sameRanges(got []*net.IPNet, want []string) bool {
 			return false
 		}
 		ones, _ := n.Mask.Size()
-		g = append(g, netip.PrefixFrom(addr.Unmap(), ones))
+		g = append(g, netip.PrefixFrom(addr, ones))
 	}
 	for _, c := range want {
 		p, err := netip.ParsePrefix(c)
@@ -366,6 +367,29 @@ func sameRanges(got []*net.IPNet, want []string) bool {
 		w = append(w, p)
 	}
 	return slices.Equal(set(g), set(w))
+}
+
+// canonical is p masked, with an IPv4-mapped IPv6 prefix turned into the IPv4 prefix it maps. Both
+// sides of every comparison go through it: the certificate encodes a mapped range as IPv4, so
+// unmapping only one side never matches and re-signs on every reconcile.
+func canonical(p netip.Prefix) netip.Prefix {
+	if p.Addr().Is4In6() {
+		return netip.PrefixFrom(p.Addr().Unmap(), max(p.Bits()-96, 0)).Masked()
+	}
+	return p.Masked()
+}
+
+// canonicalCIDRs rewrites each CIDR in canonical form, leaving one that does not parse for
+// SignIntermediate to reject.
+func canonicalCIDRs(cidrs []string) []string {
+	out := make([]string, 0, len(cidrs))
+	for _, c := range cidrs {
+		if p, err := netip.ParsePrefix(c); err == nil {
+			c = canonical(p).String()
+		}
+		out = append(out, c)
+	}
+	return out
 }
 
 // deny records Signed=False and drops any certificate from status: a denied identity must not
@@ -383,12 +407,23 @@ func (s *Signer) deny(ctx context.Context, id *platformv1.RouteBusIdentity, msg 
 
 func (s *Signer) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&platformv1.RouteBusIdentity{}).
+		For(&platformv1.RouteBusIdentity{}, builder.WithPredicates(identitySpecChanged)).
 		// The constraint is the ClusterPool's spec.underlayPrefix, so declaring or changing it
 		// re-signs (or unblocks a denied) identity of the same name right away.
 		Watches(&platformv1.ClusterPool{}, handler.EnqueueRequestsFromMapFunc(identityForPool),
 			builder.WithPredicates(underlayPrefixChanged)).
 		Complete(s)
+}
+
+// identitySpecChanged admits RouteBusIdentity create and delete events and updates that change the
+// spec (a new CSR). Status-only updates, the signer's own writes among them, do not re-trigger it.
+// metadata.generation cannot carry this: the aggregated apiserver does not bump it for this type.
+var identitySpecChanged = predicate.Funcs{
+	UpdateFunc: func(e event.UpdateEvent) bool {
+		o, ok1 := e.ObjectOld.(*platformv1.RouteBusIdentity)
+		n, ok2 := e.ObjectNew.(*platformv1.RouteBusIdentity)
+		return !ok1 || !ok2 || !equality.Semantic.DeepEqual(o.Spec, n.Spec)
+	},
 }
 
 // identityForPool maps a ClusterPool to the RouteBusIdentity of the same name (the signer only
