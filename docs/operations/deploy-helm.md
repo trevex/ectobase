@@ -197,7 +197,7 @@ Removing a pool means removing everything enrollment created for it, not only it
 - the namespace `pool-<pool>`, once its twins are gone.
 
 Nothing revokes the old broker's credentials. Its dispatch client certificate
-(`CN=ectobase:cluster:<pool>`) stays valid for up to 90 days, and so does the pool's intermediate,
+(`CN=ectobase:cluster:<pool>`, from the dispatch client CA) stays valid for up to 90 days, and so does the pool's intermediate,
 which can mint route-bus leaves for `<pool>.routebus.ectobase.dev` inside its old prefix. While the
 per-pool grant exists, that certificate still acts as the pool. Do not give a new pool the same
 name until the old broker certificate has expired, or unless every grant above was deleted first:
@@ -214,8 +214,8 @@ kubectl label namespace ectobase-system pod-security.kubernetes.io/enforce=privi
 
 ### Fresh-pool enrollment (bootstrap)
 
-The broker's steady-state certificate comes from the pool's own intermediate CA, and the broker
-obtains that CA over its connection to the dispatch. A new pool therefore needs two Secrets in
+The broker's dispatch client certificate is issued by the dispatch signer, and the broker requests
+it over its connection to the dispatch. A new pool therefore needs two Secrets in
 `ectobase-system` before the broker first starts:
 
 - `dispatch-root-ca`, key `ca.crt`: the `ectobase-ca` root certificate, copied from the
@@ -226,11 +226,13 @@ obtains that CA over its connection to the dispatch. A new pool therefore needs 
   `https://[<dispatch-ip>]:6444`. Mint the token with
   `kubectl create token dispatch-broker-bootstrap-<pool> -n system --duration=1h` on the dispatch.
 
-On first boot the broker generates the pool key, submits its CSR through the bootstrap token, and
-writes the signed intermediate into the `pki.intermediateSecret` Secret. cert-manager then issues
-`broker-dispatch-tls` from it, and the broker switches to mTLS for everything after that,
-including later renewals of the intermediate. The lab (`installPool` in the same file) creates
-both Secrets for you.
+On first boot the broker generates its client key, files a CSR on its `RouteBusIdentity` through
+the bootstrap token, and writes the certificate the signer returns into `broker-dispatch-tls`. It
+then switches to mTLS for everything else: the route-bus intermediate (written into the
+`pki.intermediateSecret` Secret), and renewals of both. If the dispatch ever stops accepting its
+certificate, the broker enrolls again with the bootstrap token, so a pool that has to re-enroll
+needs only a fresh token in `broker-dispatch-bootstrap`. The lab (`installPool` in the same file)
+creates both Secrets for you, with a fresh token on every deploy.
 
 Then install the chart:
 
@@ -262,9 +264,9 @@ helm upgrade --install ectobase-pool charts/ectobase-pool \
   the prefix is only named in the `RouteBusIdentity`'s `Signed` condition. The flag stays for
   compatibility.
 
-The lab gives `--wait` twelve minutes because the agent's readiness waits on a chain: broker CSR,
-dispatch signer, intermediate Secret, pool `Issuer`, then cert-manager issuing each node's agent
-certificate.
+The lab gives `--wait` twelve minutes because the agent's readiness waits on a chain: broker
+enrollment, intermediate CSR, dispatch signer, intermediate Secret, pool `Issuer`, then cert-manager
+issuing each node's agent certificate.
 
 When both sides are up, the `ClusterPool` reaches phase `Ready` with a non-empty
 `status.nodePrefixes`.
@@ -272,9 +274,14 @@ When both sides are up, the `ClusterPool` reaches phase `Ready` with a non-empty
 ### The broker's dispatch credential
 
 The broker authenticates to the dispatch with a client certificate, not a token.
-`broker-dispatch-tls` has `CN=ectobase:cluster:<pool>` and `O=ectobase:brokers`, is issued by
-the pool's `ectobase-pool-ca` `Issuer` with a 90-day lifetime, and is renewed by cert-manager.
-The broker reloads the files as they rotate, so there is nothing to re-mint.
+`broker-dispatch-tls` holds a certificate with `CN=ectobase:cluster:<pool>` and
+`O=ectobase:brokers`, signed by the dispatch client CA (`ectobase-dispatch-client-ca`) with a
+90-day lifetime. The signer forces that subject whatever the CSR asks for. The broker writes the
+Secret itself and renews the certificate, with a new key, at two thirds of its lifetime; client-go
+reloads the mounted files, so a renewal needs no restart.
+
+The dispatch apiserver accepts client certificates only from that CA. Pool intermediates chain to
+`ectobase-ca`, which signs the apiserver's serving certificate but is not trusted for clients.
 
 The broker dials `dispatch-apiserver` directly on port 6444 rather than through the host
 kube-apiserver's aggregation layer, because the host apiserver on 6443 serves the host cluster's
@@ -379,6 +386,24 @@ The reflector also refuses an intermediate with no IP constraint, which is what 
 with an empty `pki.underlayCIDRs` holds. Such a pool loses its route-bus sessions as soon as the new
 reflector runs, until it is re-signed and its agents present the new chain; see
 [Where the certificates come from](../architecture/route-bus.md#where-the-certificates-come-from).
+
+### Cutting over to the dispatch client CA
+
+A release whose dispatch apiserver trusts only `ectobase-dispatch-client-ca` for client
+certificates is a hard cutover. No release trusts both CAs. The moment the dispatch chart is
+upgraded, every broker's old certificate (minted by cert-manager from its pool intermediate) is
+rejected, and each pool is off the dispatch until it re-enrolls:
+
+1. Upgrade the dispatch chart.
+2. For each pool, write a fresh bootstrap token into `broker-dispatch-bootstrap`, as for a new
+   pool (see [Fresh-pool enrollment](#fresh-pool-enrollment-bootstrap)).
+3. Delete the pool's old `broker-dispatch-tls` cert-manager Certificate
+   (`kubectl -n ectobase-system delete certificates.cert-manager.io broker-dispatch-tls`), so
+   cert-manager does not re-mint the Secret the broker now writes.
+4. Upgrade the pool chart. The new broker finds no dispatch-issued certificate and enrolls with
+   the token.
+
+The lab does all of this on every `lab deploy`.
 
 ## Upgrading an existing release
 

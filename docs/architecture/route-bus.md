@@ -182,6 +182,12 @@ those constraints. Each agent then mints its own leaf from the pool's cert-manag
 (`mesh/agent/nodecert.go`). A WAN edge has no cert-manager; its agent mints its leaf in-process from
 an edge CA directory (`--routebus-intermediate`).
 
+The same signer also issues the broker's dispatch client certificate, but from a different root,
+the dispatch client CA, which is the only CA the dispatch apiserver accepts client certificates
+from. A pool intermediate chains to `ectobase-ca`, and its name constraints bind SANs, not the
+subject, so it could otherwise mint an apiserver identity such as `O=system:masters`. See
+[the two roots](overview.md#two-roots).
+
 The IP constraint is what stops one pool from minting a valid leaf for another pool's VTEP, which
 the reflector's exact-match nexthop check would then accept. So the signer takes it from the
 operator, never from the pool:
