@@ -320,6 +320,10 @@ A few links are not authenticated the same way. Know them before you run this ou
   `spec.underlayPrefix` stays valid until it expires (90 days). The signer re-signs and the broker
   adopts the new one, but a compromised pool keeps the old one. Rotating the root is the only way
   to cut it off sooner.
+- The `ectobase-ca` `ClusterIssuer` on the dispatch host signs with the route-bus root, so anyone
+  allowed to create cert-manager `Certificate`s on that cluster can mint a root-issued leaf (the
+  reflector admin API trusts a root-issued `CN=dispatch-controller`). Grant that permission to
+  dispatch operators only.
 - The dispatch apiserver still authorizes the group `system:masters` unconditionally (the generic
   apiserver default; the apiserver kit exposes no way to change it, and the delegated check against
   the host kube-apiserver would allow that group anyway). No certificate a pool can obtain carries

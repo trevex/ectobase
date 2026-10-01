@@ -46,6 +46,17 @@ type PrefixFencer interface {
 	Release(ctx context.Context, prefix string) error
 }
 
+// StorageFencer is the storage backend. It also keeps the dispatch's record of which pool each fence
+// was set for, outside anything a broker can write: Fence records pool, Release refuses a fence
+// recorded for another pool (or for none), and FencedFor reads the record.
+type StorageFencer interface {
+	Fence(ctx context.Context, pool, prefix string) error
+	Release(ctx context.Context, pool, prefix string) error
+	// FencedFor returns the pool the fence on prefix was set for ("" if unrecorded) and whether a
+	// fence exists at all.
+	FencedFor(ctx context.Context, prefix string) (pool string, found bool, err error)
+}
+
 // DenyFencer refuses to confirm any fence; wiring it means Tier-2 always fails safe.
 type DenyFencer struct{}
 
@@ -59,7 +70,7 @@ func (DenyFencer) Release(context.Context, string) error {
 // Reconciler runs Tier-2 fence-gated failover for VMs bound to a lost pool.
 type Reconciler struct {
 	Client        client.Client
-	StorageFencer PrefixFencer
+	StorageFencer StorageFencer
 	NetworkFencer PrefixFencer
 	// Routes gates fence release on route state (see routegate.go). nil holds every release that
 	// has an address to check, as an unreachable reflector does.
@@ -110,7 +121,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, rq ctrl.Request) (ctrl.Resul
 	// no-op. The error paths persist only pool status + VM status, never Spec.
 	var fenced []string
 	for _, p := range targets {
-		if err := r.StorageFencer.Fence(ctx, p); err != nil {
+		if err := r.StorageFencer.Fence(ctx, pool.Name, p); err != nil {
 			_ = r.setFencedPrefixes(ctx, &pool, fenced) // track what's already applied for later release
 			return ctrl.Result{RequeueAfter: r.FailoverThreshold}, r.blockPoolVMs(ctx, pool.Name, "storage fence unconfirmed for "+p+": "+err.Error())
 		}
@@ -280,7 +291,7 @@ func (r *Reconciler) setFencedPrefixes(ctx context.Context, pool *platformv1.Clu
 
 // releaseDrained clears the fence (both backends) for every FencedPrefix the broker
 // has reported Drained and that no longer announces an address placed on another pool,
-// then trims it from FencedPrefixes. Fail-safe: an un-drained /64 stays fenced, and so
+// then trims it from FencedPrefixes. Fail-safe: an un-drained prefix stays fenced, and so
 // does one the reflector still holds such a route from, or that cannot be checked.
 // waiting reports a prefix held on routes alone, which the caller rechecks soon; the
 // pool's FenceReleaseBlocked condition says which and why. A failed check is not an
@@ -292,7 +303,23 @@ func (r *Reconciler) setFencedPrefixes(ctx context.Context, pool *platformv1.Clu
 // is reachable: a partition that also drops the pool's route-bus sessions empties the
 // reflector, the route gate passes, and the release would reopen Ceph to nodes that are
 // partitioned but alive — while the same pass fences and rebinds their VMs elsewhere.
+//
+// Nothing is released unless the fence is THIS pool's. status.fencedPrefixes and status.nodeDrain
+// are written by the pool's own broker, so a compromised pool could list another pool's fenced
+// prefix as fenced and drained and have it lifted. Whose fence a prefix is comes from the
+// dispatch's own record instead (the NetworkFence's fenced-for-pool label, which no broker can
+// write): an entry recorded for another pool, for none, or with no fence left at all is dropped
+// from status and never released at either backend. That also confines a nodeDrain entry to this
+// pool's own fences, since only those are looked up in it. An operator changing
+// spec.underlayPrefix while a fence is held does not orphan it: the old prefix's fence is still
+// recorded for this pool and is released as before.
+//
+// The reflector fence is lifted before the storage fence, so the storage NetworkFence, which holds
+// the ownership record, is the last thing removed: a pass that fails in between leaves the record
+// in place for the next one.
 func (r *Reconciler) releaseDrained(ctx context.Context, pool *platformv1.ClusterPool, reachable bool) (waiting bool, err error) {
+	before := append([]string(nil), pool.Status.FencedPrefixes...)
+	own, unverified := r.ownFences(ctx, pool)
 	drained := map[string]bool{}
 	for _, d := range pool.Status.NodeDrain {
 		if d.Drained && reachable {
@@ -303,17 +330,16 @@ func (r *Reconciler) releaseDrained(ctx context.Context, pool *platformv1.Cluste
 	var keys []RouteKey
 	var owner map[RouteKey]string
 	var lookupErr error
-	for _, p := range pool.Status.FencedPrefixes {
-		if drained[p] {
+	for _, p := range own {
+		if drained[p] && !unverified[p] {
 			keys, owner, lookupErr = r.placedElsewhere(ctx, pool.Name)
 			break
 		}
 	}
 	var remain, blocked []string
 	reason := ""
-	changed := false
-	for _, p := range pool.Status.FencedPrefixes {
-		if !drained[p] {
+	for _, p := range own {
+		if !drained[p] || unverified[p] {
 			remain = append(remain, p)
 			continue
 		}
@@ -331,16 +357,16 @@ func (r *Reconciler) releaseDrained(ctx context.Context, pool *platformv1.Cluste
 			}
 			continue
 		}
-		if err := r.StorageFencer.Release(ctx, p); err != nil {
+		if err := r.NetworkFencer.Release(ctx, p); err != nil {
 			remain = append(remain, p) // hold the fence if release unconfirmed
 			continue
 		}
-		if err := r.NetworkFencer.Release(ctx, p); err != nil {
+		if err := r.StorageFencer.Release(ctx, pool.Name, p); err != nil {
 			remain = append(remain, p)
 			continue
 		}
-		changed = true
 	}
+	changed := !slices.Equal(before, remain)
 	if changed {
 		pool.Status.FencedPrefixes = remain
 	}
@@ -354,6 +380,29 @@ func (r *Reconciler) releaseDrained(ctx context.Context, pool *platformv1.Cluste
 		return len(blocked) > 0, nil
 	}
 	return len(blocked) > 0, r.Client.Status().Update(ctx, pool)
+}
+
+// ownFences filters pool's status.fencedPrefixes down to the fences the dispatch's record says are
+// this pool's. An entry recorded for another pool, for none, or with no fence left is dropped
+// (logged). One whose record cannot be read is kept but marked unverified: it is not released this
+// pass, and not dropped either.
+func (r *Reconciler) ownFences(ctx context.Context, pool *platformv1.ClusterPool) (own []string, unverified map[string]bool) {
+	unverified = map[string]bool{}
+	for _, p := range pool.Status.FencedPrefixes {
+		holder, found, err := r.StorageFencer.FencedFor(ctx, p)
+		switch {
+		case err != nil:
+			own = append(own, p)
+			unverified[p] = true
+			log.FromContext(ctx).Error(err, "cannot read whose fence this is; holding it", "pool", pool.Name, "prefix", p)
+		case found && holder == pool.Name:
+			own = append(own, p)
+		default:
+			log.FromContext(ctx).Info("dropping a fenced prefix that is not this pool's fence",
+				"pool", pool.Name, "prefix", p, "fenceExists", found, "fencedFor", holder)
+		}
+	}
+	return own, unverified
 }
 
 // setReleaseBlocked records on the pool why a drained prefix is still fenced, or — once nothing is

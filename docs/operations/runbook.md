@@ -79,6 +79,9 @@ get one:
   the `NetworkFence` and returns while the fence is still pending; if the pool's lease comes back
   before the next pass, about two minutes later, the pool is no longer lost and nothing returns
   to that object. It stays `Fenced`, is most likely blocklisted, and no pool lists it.
+- A `NetworkFence` that is not the listing pool's. Failover releases a fence only for the pool its
+  `ectobase.dev/fenced-for-pool` label names, and drops any other entry from that pool's status.
+  An object without the label (created before the label existed) is no pool's, so it strands.
 
 This section is the only place a hand unfence is allowed, and only when both hold:
 
@@ -94,7 +97,9 @@ and find the object:
 kubectl get networkfences.csiaddons.openshift.io
 ```
 
-Clear it by patching the object to `Unfenced` and letting csi-addons run the removal:
+Clear it by patching the object to `Unfenced` and letting csi-addons run the removal. The
+`ectobase.dev/fenced-for-pool` label plays no part in a hand release: it only decides what the
+controller will release on a pool's behalf.
 
 ```sh
 kubectl patch networkfences.csiaddons.openshift.io ectobase-fd00-cafe-1234----64 \
@@ -105,8 +110,9 @@ kubectl get networkfences.csiaddons.openshift.io ectobase-fd00-cafe-1234----64 \
 
 The removal is done when the status reads `Succeeded unfencing operation successful`. Right after
 the patch the status can still show the earlier fence operation's `Succeeded`, so check the
-message, not just the result. The object is then spent: you can delete it, and if the prefix is
-ever fenced again the controller replaces a spent object with a fresh one.
+message, not just the result. The object is then spent: delete it. The controller replaces a spent
+object with a fresh one only if it is labelled for the same pool, and refuses to fence over one held
+for another pool or carrying no label.
 
 !!! warning "Never delete a `Fenced` NetworkFence to clear a blocklist entry"
     Deleting the object only drops csi-addons' finalizer; it never unfences. The blocklist

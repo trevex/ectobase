@@ -142,7 +142,7 @@ func main() {
 	// (a cluster without csi-addons just errors on Fence → the barrier blocks →
 	// fail-safe). The network fencer defaults to DenyFencer (fail-safe) and is
 	// wired to the real reflector RouteBusAdmin only when -reflector-admin is set.
-	var storageF failover.PrefixFencer = fence.NewStorageFencer(mgr.GetClient(), *csiDriver, *csiClusterID, client.ObjectKey{Name: *csiSecretName, Namespace: *csiSecretNS})
+	var storageF failover.StorageFencer = fence.NewStorageFencer(mgr.GetClient(), *csiDriver, *csiClusterID, client.ObjectKey{Name: *csiSecretName, Namespace: *csiSecretNS})
 	var networkF failover.PrefixFencer = failover.DenyFencer{}
 	// Fence release also waits on route state: the reflector must hold, from the /64 being
 	// released, no overlay address placed on another pool. Asked over the same admin client; with

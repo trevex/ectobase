@@ -80,9 +80,10 @@ func TestTier2_Failover_FenceRebindRelease(t *testing.T) {
 	}
 
 	reqA := ctrl.Request{NamespacedName: client.ObjectKey{Name: "pool-a"}}
+	storage := newConfirmingStorage()
 	r := &failover.Reconciler{
 		Client:            c,
-		StorageFencer:     confirmingFencer{},
+		StorageFencer:     storage,
 		NetworkFencer:     confirmingFencer{},
 		FailoverThreshold: time.Minute,
 	}
@@ -108,6 +109,38 @@ func TestTier2_Failover_FenceRebindRelease(t *testing.T) {
 		t.Fatalf("expected FencedPrefixes=[%s], got %v", prefix, fencedA.Status.FencedPrefixes)
 	}
 	t.Logf("fence+rebind: PASS (vm1 poolA->poolB, FencedPrefixes=%v)", fencedA.Status.FencedPrefixes)
+
+	// --- A healthy pool claims pool-a's fence as its own, drained. ---
+	// Its broker writes its own status, so it can list anything. The fence is pool-a's by the
+	// dispatch's record, so it is not released, and the claim is dropped from pool-b's status.
+	claimB := &platformv1.ClusterPool{}
+	if err := c.Get(ctx, client.ObjectKey{Name: "pool-b"}, claimB); err != nil {
+		t.Fatalf("get poolB: %v", err)
+	}
+	// Reachable (Ready on a fresh lease), so the release path runs in full for it.
+	fresh := metav1.NewMicroTime(time.Now())
+	claimB.Status.Lease = &platformv1.ClusterPoolLease{HolderIdentity: "brokerB", RenewTime: &fresh}
+	claimB.Status.FencedPrefixes = []string{prefix}
+	claimB.Status.NodeDrain = []platformv1.NodeDrainStatus{{Prefix: prefix, Drained: true}}
+	if err := c.Status().Update(ctx, claimB); err != nil {
+		t.Fatalf("status update poolB (claim): %v", err)
+	}
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKey{Name: "pool-b"}}); err != nil {
+		t.Fatalf("reconcile poolB: %v", err)
+	}
+	if owner, found, _ := storage.FencedFor(ctx, prefix); !found || owner != "pool-a" {
+		t.Fatalf("pool-b's claim released pool-a's fence (owner=%q found=%v)", owner, found)
+	}
+	if err := c.Get(ctx, client.ObjectKey{Name: "pool-b"}, claimB); err != nil {
+		t.Fatalf("get poolB: %v", err)
+	}
+	if len(claimB.Status.FencedPrefixes) != 0 {
+		t.Fatalf("pool-b's claim on pool-a's fence must be dropped, got %v", claimB.Status.FencedPrefixes)
+	}
+	if err := c.Get(ctx, client.ObjectKey{Name: "pool-a"}, fencedA); err != nil {
+		t.Fatalf("get poolA: %v", err)
+	}
+	t.Log("cross-pool claim: PASS (pool-a's fence untouched, pool-b's claim dropped)")
 
 	// --- Recovery: pool returns (Ready) and its broker confirms the /64 drained. ---
 	// Back means Ready on a lease its broker just renewed: release never runs on a stale lease.

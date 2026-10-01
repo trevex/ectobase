@@ -238,6 +238,8 @@ apiVersion: csiaddons.openshift.io/v1alpha1
 kind: NetworkFence
 metadata:
   name: ectobase-fd00-cafe-1a2b-1----64   # "ectobase-" + prefix with ":"/"." -> "-", "/" -> "--"
+  labels:
+    ectobase.dev/fenced-for-pool: k02      # the pool fenced for; release refuses any other pool
 spec:
   fenceState: Fenced
   driver: rbd.csi.ceph.com                # --csi-driver

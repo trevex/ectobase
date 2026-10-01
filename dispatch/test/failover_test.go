@@ -5,6 +5,8 @@ package test
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -28,6 +30,44 @@ type confirmingFencer struct{}
 
 func (confirmingFencer) Fence(context.Context, string) error   { return nil }
 func (confirmingFencer) Release(context.Context, string) error { return nil }
+
+// confirmingStorage is the storage side of confirmingFencer: it confirms every fence and release,
+// and keeps the record of which pool each fence was set for, as the real NetworkFence label does
+// (Release refuses another pool's fence).
+type confirmingStorage struct{ owner map[string]string }
+
+func newConfirmingStorage() *confirmingStorage { return &confirmingStorage{owner: map[string]string{}} }
+
+func (s *confirmingStorage) Fence(_ context.Context, pool, prefix string) error {
+	s.owner[prefix] = pool
+	return nil
+}
+
+func (s *confirmingStorage) Release(_ context.Context, pool, prefix string) error {
+	if o, ok := s.owner[prefix]; ok && o != pool {
+		return fmt.Errorf("fence on %s is held for pool %s", prefix, o)
+	}
+	delete(s.owner, prefix)
+	return nil
+}
+
+func (s *confirmingStorage) FencedFor(_ context.Context, prefix string) (string, bool, error) {
+	o, ok := s.owner[prefix]
+	return o, ok, nil
+}
+
+// denyStorage refuses every storage fence, as a dispatch without csi-addons does.
+type denyStorage struct{}
+
+func (denyStorage) Fence(context.Context, string, string) error {
+	return errors.New("no fence actuator configured")
+}
+func (denyStorage) Release(context.Context, string, string) error {
+	return errors.New("no fence actuator configured")
+}
+func (denyStorage) FencedFor(context.Context, string) (string, bool, error) {
+	return "", false, nil
+}
 
 // TestFailover_RebindsOffLostPool proves Tier-2 fence-gated failover against the
 // REAL kit aggregated apiserver:
@@ -92,7 +132,7 @@ func TestFailover_RebindsOffLostPool(t *testing.T) {
 	reqC1 := ctrl.Request{NamespacedName: client.ObjectKey{Name: "c1"}}
 
 	t.Run("confirming fencer rebinds to c2", func(t *testing.T) {
-		r := &failover.Reconciler{Client: c, StorageFencer: confirmingFencer{}, NetworkFencer: confirmingFencer{}, FailoverThreshold: time.Minute}
+		r := &failover.Reconciler{Client: c, StorageFencer: newConfirmingStorage(), NetworkFencer: confirmingFencer{}, FailoverThreshold: time.Minute}
 		if _, err := r.Reconcile(ctx, reqC1); err != nil {
 			t.Fatalf("failover Reconcile: %v", err)
 		}
@@ -117,7 +157,7 @@ func TestFailover_RebindsOffLostPool(t *testing.T) {
 			t.Fatalf("re-bind vm1 to c1: %v", err)
 		}
 
-		r := &failover.Reconciler{Client: c, StorageFencer: failover.DenyFencer{}, NetworkFencer: failover.DenyFencer{}, FailoverThreshold: time.Minute}
+		r := &failover.Reconciler{Client: c, StorageFencer: denyStorage{}, NetworkFencer: failover.DenyFencer{}, FailoverThreshold: time.Minute}
 		if _, err := r.Reconcile(ctx, reqC1); err != nil {
 			t.Fatalf("failover Reconcile (deny): %v", err)
 		}
