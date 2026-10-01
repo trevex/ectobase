@@ -41,5 +41,8 @@ pub struct LbEntry {
     pub lb_underlay: [u8; 16],
     pub ports: Vec<(u16, u8)>,
     pub table_id: u32,
+    /// Tables some of an adopted LB's rows point at besides `table_id` (left by the counter reset
+    /// adopt fixes): they forward as they were and go with the LB.
+    pub other_tables: Vec<u32>,
     pub backends: Vec<flowplane_common::LbBackend>,
 }

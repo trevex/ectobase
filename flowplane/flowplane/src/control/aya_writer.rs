@@ -13,7 +13,7 @@ use flowplane_common::{
     NatKey, NatKey6, NatOwner, NatOwnerKey, NatOwnerKey6, NatValue, NatValue6, PortMeta,
     RouteValue,
 };
-use flowplane_control::{CtFlushScope, CtFlushScope6, MapWriter};
+use flowplane_control::{CtFlushScope, CtFlushScope6, MapWriter, Walk};
 
 pub struct AyaWriter {
     pub routes: Routes,
@@ -260,14 +260,14 @@ impl MapWriter for AyaWriter {
     fn maglev_remove(&mut self, k: &flowplane_common::MaglevKey) -> anyhow::Result<()> {
         self.maglev.remove(k)
     }
-    fn lb_entries(&self) -> Vec<(flowplane_common::LbKey, flowplane_common::LbValue)> {
-        self.lb.entries()
+    fn lb_entries(&self) -> Walk<(flowplane_common::LbKey, flowplane_common::LbValue)> {
+        self.lb.walk()
     }
-    fn lb6_entries(&self) -> Vec<(flowplane_common::LbKey6, flowplane_common::LbValue)> {
-        self.lb6.entries()
+    fn lb6_entries(&self) -> Walk<(flowplane_common::LbKey6, flowplane_common::LbValue)> {
+        self.lb6.walk()
     }
-    fn maglev_entries(&self) -> Vec<(flowplane_common::MaglevKey, flowplane_common::LbBackend)> {
-        self.maglev.entries()
+    fn maglev_entries(&self) -> Walk<(flowplane_common::MaglevKey, flowplane_common::LbBackend)> {
+        self.maglev.walk()
     }
     fn underlay_upsert(
         &mut self,

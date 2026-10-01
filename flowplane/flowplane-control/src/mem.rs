@@ -1,5 +1,5 @@
 //! In-memory `MapWriter` for testing `ControlCore` without CAP_BPF or a live map.
-use crate::writer::{CtFlushScope, CtFlushScope6, MapWriter};
+use crate::writer::{CtFlushScope, CtFlushScope6, MapWriter, Walk};
 use flowplane_common::{
     DhcpConfig, FloatingIPKey, FwBind, IfaceKey, IfaceKey6, IfaceMetaKey, IfaceMetaVal, IfaceValue,
     LbBackend, LbKey, LbKey6, LbValue, MaglevKey, MeterState, NatKey, NatKey6, NatOwner,
@@ -34,6 +34,9 @@ pub struct MemMapWriter {
     pub lb: HashMap<LbKey, LbValue>,
     pub lb6: HashMap<LbKey6, LbValue>,
     pub maglev: HashMap<MaglevKey, LbBackend>,
+    /// Test knob: cut each `LB`, `LB6` and `MAGLEV` walk short after this many entries, as a
+    /// kernel map walk can fail part-way.
+    pub lb_walk_cut: Option<usize>,
     pub underlay: HashMap<[u8; 16], UnderlayValue>,
     pub fw_bind: HashMap<u32, FwBind>,
     pub fw_scopes: HashMap<u64, crate::fwclass::Scope>,
@@ -54,6 +57,22 @@ pub struct MemMapWriter {
     pub ct_flushes: Vec<CtFlushScope>,
     pub ct6_flushes: Vec<CtFlushScope6>,
     pub ct_iface_flushes: Vec<(u32, [u8; 4], [u8; 16])>,
+}
+
+impl MemMapWriter {
+    fn walk<K: Copy, V: Copy>(&self, map: &HashMap<K, V>) -> Walk<(K, V)> {
+        let all = map.iter().map(|(k, v)| (*k, *v));
+        match self.lb_walk_cut {
+            Some(n) => Walk {
+                entries: all.take(n).collect(),
+                error: Some(anyhow::anyhow!("injected walk failure")),
+            },
+            None => Walk {
+                entries: all.collect(),
+                error: None,
+            },
+        }
+    }
 }
 
 impl MapWriter for MemMapWriter {
@@ -205,14 +224,14 @@ impl MapWriter for MemMapWriter {
         self.maglev.remove(k);
         Ok(())
     }
-    fn lb_entries(&self) -> Vec<(LbKey, LbValue)> {
-        self.lb.iter().map(|(k, v)| (*k, *v)).collect()
+    fn lb_entries(&self) -> Walk<(LbKey, LbValue)> {
+        self.walk(&self.lb)
     }
-    fn lb6_entries(&self) -> Vec<(LbKey6, LbValue)> {
-        self.lb6.iter().map(|(k, v)| (*k, *v)).collect()
+    fn lb6_entries(&self) -> Walk<(LbKey6, LbValue)> {
+        self.walk(&self.lb6)
     }
-    fn maglev_entries(&self) -> Vec<(MaglevKey, LbBackend)> {
-        self.maglev.iter().map(|(k, v)| (*k, *v)).collect()
+    fn maglev_entries(&self) -> Walk<(MaglevKey, LbBackend)> {
+        self.walk(&self.maglev)
     }
     fn underlay_upsert(&mut self, k: [u8; 16], v: UnderlayValue) -> anyhow::Result<()> {
         self.underlay.insert(k, v);

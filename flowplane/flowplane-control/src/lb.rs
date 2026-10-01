@@ -10,6 +10,9 @@ use crate::shadow::{LbEntry, LbIp, LbIpBytes};
 use crate::{ControlCore, MapWriter};
 use flowplane_common::{LbBackend, LbKey, LbKey6, LbValue, MaglevKey};
 
+/// An LB's (port, proto) service rows, by the table each points at.
+type RowsByTable = BTreeMap<u32, Vec<(u16, u8)>>;
+
 /// One LB service row, in whichever family map owns it. The two families live in separate maps
 /// (`LB` keyed on 4 bytes, `LB6` on the full 16) so a v6 address is never truncated into a v4 key;
 /// this keeps the register/unwind/delete paths from having to branch at every call site.
@@ -76,83 +79,127 @@ impl<W: MapWriter> ControlCore<W> {
     /// comes up: the order `maglev::build` was given is not in the maps, and any order rebuilds to
     /// nearly the same table on the next change.
     ///
+    /// An LB is an address in a VNI. The counter reset could re-create one under a new table while
+    /// some of its ports kept the old: its rows then point at two tables. It is adopted as one LB
+    /// on the table most of its rows use (the lowest id on a tie, arbitrary but deterministic);
+    /// the other rows keep forwarding as they were, and the delete takes every table.
+    ///
     /// The counter resumes above every table id either map still holds, so no id is handed out
     /// twice. Repairs, as the other adopts do: a table no row points at (a delete cut between its
     /// rows and its slots) is removed, a table missing slots (a rebuild cut short) is rewritten
     /// whole, and an address sharing its table with another (left by the counter reset) gets a
     /// copy of its own, so it forwards as before but no longer changes with the other.
-    pub fn adopt_lbs(&mut self) -> usize {
-        // Service rows by LB: one address in one VNI, on one table.
-        let mut rows: BTreeMap<(u32, LbIp, u32), Vec<(u16, u8)>> = BTreeMap::new();
-        for (k, v) in self.w.lb_entries() {
-            let lb = (k.vni, LbIp::Ipv4(k.ipv4), v.table_id);
-            rows.entry(lb).or_default().push((k.port, k.proto));
-        }
-        for (k, v) in self.w.lb6_entries() {
-            let lb = (k.vni, LbIp::Ipv6(k.ipv6), v.table_id);
-            rows.entry(lb).or_default().push((k.port, k.proto));
+    ///
+    /// A walk a read error cut short makes live rows and slots look missing, and every repair
+    /// would act on that. So then nothing is repaired: what was read is adopted, and the error is
+    /// returned. The counter only clears the ids that were read.
+    pub fn adopt_lbs(&mut self) -> anyhow::Result<usize> {
+        let (lb, lb6, maglev) = (
+            self.w.lb_entries(),
+            self.w.lb6_entries(),
+            self.w.maglev_entries(),
+        );
+        // Service rows by LB (one address in one VNI), then by the table each row points at.
+        let mut rows: BTreeMap<(u32, LbIp), RowsByTable> = BTreeMap::new();
+        let v4 = lb.entries.into_iter().map(|(k, v)| {
+            let row = (k.port, k.proto);
+            ((k.vni, LbIp::Ipv4(k.ipv4)), v.table_id, row)
+        });
+        let v6 = lb6.entries.into_iter().map(|(k, v)| {
+            let row = (k.port, k.proto);
+            ((k.vni, LbIp::Ipv6(k.ipv6)), v.table_id, row)
+        });
+        for (lb, table_id, row) in v4.chain(v6) {
+            let on = rows.entry(lb).or_default();
+            on.entry(table_id).or_default().push(row);
         }
         let mut tables: BTreeMap<u32, BTreeMap<u32, LbBackend>> = BTreeMap::new();
-        for (k, b) in self.w.maglev_entries() {
+        for (k, b) in maglev.entries {
             tables.entry(k.table_id).or_default().insert(k.slot, b);
         }
+        let error = lb.error.or(lb6.error).or(maglev.error);
+        let whole = error.is_none();
 
-        let top = rows
-            .keys()
-            .map(|lb| lb.2)
-            .chain(tables.keys().copied())
+        let referenced: BTreeSet<u32> = rows.values().flat_map(|on| on.keys().copied()).collect();
+        let top = referenced
+            .iter()
+            .chain(tables.keys())
+            .copied()
             .max()
             .unwrap_or(0);
         self.next_table_id = self.next_table_id.max(top.saturating_add(1));
 
-        let referenced: BTreeSet<u32> = rows.keys().map(|lb| lb.2).collect();
-        for (&table_id, slots) in &tables {
-            if !referenced.contains(&table_id) {
-                for &slot in slots.keys() {
-                    let _ = self.w.maglev_remove(&MaglevKey { table_id, slot });
+        if whole {
+            for (&table_id, slots) in &tables {
+                if !referenced.contains(&table_id) {
+                    for &slot in slots.keys() {
+                        let _ = self.w.maglev_remove(&MaglevKey { table_id, slot });
+                    }
                 }
             }
         }
 
         self.adopted_lbs.clear();
         let mut owned = BTreeSet::new();
-        for ((vni, ip, mut table_id), mut ports) in rows {
-            ports.sort_unstable();
-            let slots = tables.get(&table_id).cloned().unwrap_or_default();
-            let mut backends: Vec<LbBackend> = Vec::new();
-            for b in slots.values() {
-                if !backends
-                    .iter()
-                    .any(|x| x.node_vtep == b.node_vtep && x.overlay_ip == b.overlay_ip)
-                {
-                    backends.push(*b);
-                }
-            }
-            if !owned.insert(table_id) {
-                if let Some(copy) = self.copy_table(&slots) {
-                    for &(port, proto) in &ports {
-                        let val = LbValue {
-                            table_id: copy,
-                            size: crate::maglev::TABLE_SIZE,
-                        };
-                        let _ = LbRowKey::new(&ip, vni, port, proto).upsert(&mut self.w, val);
+        for ((vni, ip), on) in rows {
+            let mut ports = Vec::new();
+            // (table id, rows on it, its backends) per table this LB's rows point at.
+            let mut its: Vec<(u32, usize, Vec<LbBackend>)> = Vec::new();
+            for (mut table_id, on_table) in on {
+                let slots = tables.get(&table_id).cloned().unwrap_or_default();
+                let mut backends: Vec<LbBackend> = Vec::new();
+                for b in slots.values() {
+                    if !backends
+                        .iter()
+                        .any(|x| x.node_vtep == b.node_vtep && x.overlay_ip == b.overlay_ip)
+                    {
+                        backends.push(*b);
                     }
-                    table_id = copy;
                 }
+                if whole && !owned.insert(table_id) {
+                    if let Some(copy) = self.copy_table(&slots) {
+                        for &(port, proto) in &on_table {
+                            let val = LbValue {
+                                table_id: copy,
+                                size: crate::maglev::TABLE_SIZE,
+                            };
+                            let _ = LbRowKey::new(&ip, vni, port, proto).upsert(&mut self.w, val);
+                        }
+                        table_id = copy;
+                    }
+                }
+                if whole
+                    && !backends.is_empty()
+                    && slots.len() != crate::maglev::TABLE_SIZE as usize
+                {
+                    let _ = self.write_table(table_id, &backends);
+                }
+                its.push((table_id, on_table.len(), backends));
+                ports.extend(on_table);
             }
-            if !backends.is_empty() && slots.len() != crate::maglev::TABLE_SIZE as usize {
-                let _ = self.write_table(table_id, &backends);
-            }
+            ports.sort_unstable();
+            its.sort_by_key(|&(table_id, n, _)| (std::cmp::Reverse(n), table_id));
+            let mut its = its.into_iter();
+            let Some((table_id, _, backends)) = its.next() else {
+                continue;
+            };
             self.adopted_lbs.push(LbEntry {
                 vni,
                 ip,
                 lb_underlay: [0; 16],
                 ports,
                 table_id,
+                other_tables: its.map(|t| t.0).collect(),
                 backends,
             });
         }
-        self.adopted_lbs.len()
+        match error {
+            None => Ok(self.adopted_lbs.len()),
+            Some(e) => Err(e.context(format!(
+                "a walk was cut short: adopted the {} load balancer(s) read, repaired nothing",
+                self.adopted_lbs.len()
+            ))),
+        }
     }
 
     /// Copy a table's slots under a fresh id. A copy that fails part-way is removed again, and
@@ -214,24 +261,23 @@ impl<W: MapWriter> ControlCore<W> {
         Ok(())
     }
 
-    /// Remove an LB's service rows and, unless another LB still points at it, its table.
+    /// Remove an LB's service rows and each of its tables no other LB still points at.
     fn clear_lb(&mut self, lb: &LbEntry) {
         for &(port, proto) in &lb.ports {
             let _ = LbRowKey::new(&lb.ip, lb.vni, port, proto).remove(&mut self.w);
         }
-        if self
-            .lbs
-            .values()
-            .chain(&self.adopted_lbs)
-            .any(|o| o.table_id == lb.table_id)
-        {
-            return;
-        }
-        for slot in 0..crate::maglev::TABLE_SIZE {
-            let _ = self.w.maglev_remove(&MaglevKey {
-                table_id: lb.table_id,
-                slot,
-            });
+        for &table_id in std::iter::once(&lb.table_id).chain(&lb.other_tables) {
+            if self
+                .lbs
+                .values()
+                .chain(&self.adopted_lbs)
+                .any(|o| o.table_id == table_id || o.other_tables.contains(&table_id))
+            {
+                continue;
+            }
+            for slot in 0..crate::maglev::TABLE_SIZE {
+                let _ = self.w.maglev_remove(&MaglevKey { table_id, slot });
+            }
         }
     }
 
@@ -314,6 +360,7 @@ impl<W: MapWriter> ControlCore<W> {
                 lb_underlay,
                 ports,
                 table_id,
+                other_tables: Vec::new(),
                 backends: Vec::new(),
             },
         );
@@ -706,7 +753,7 @@ mod tests {
     /// The process exits and a new one adopts the pinned maps.
     fn restart(c: ControlCore<MemMapWriter>) -> ControlCore<MemMapWriter> {
         let mut c = ControlCore::new(c.w);
-        c.adopt_lbs();
+        c.adopt_lbs().expect("adopt");
         c
     }
 
@@ -907,31 +954,9 @@ mod tests {
     // cut short) and two addresses sharing one table (the counter reset this fixes).
     #[test]
     fn adopt_repairs_what_a_crash_left() {
-        let mut c = two_lbs();
-        let t4 = c.w.lb[&key4(A4, 443)].table_id;
-        c.w.maglev_upsert(
-            MaglevKey {
-                table_id: 77,
-                slot: 3,
-            },
-            backend(1, 5),
-        )
-        .unwrap();
-        for slot in 0..100 {
-            c.w.maglev.remove(&MaglevKey { table_id: t4, slot });
-        }
         let shared = [198, 51, 100, 9];
-        c.w.lb_upsert(
-            key4(shared, 443),
-            LbValue {
-                table_id: t4,
-                size: crate::maglev::TABLE_SIZE,
-            },
-        )
-        .unwrap();
         let full = crate::maglev::TABLE_SIZE as usize;
-
-        let mut c = restart(c);
+        let mut c = restart(damaged());
         assert!(slots(&c, 77).is_empty(), "the orphan table goes");
         let (a, b) = (
             c.w.lb[&key4(A4, 443)].table_id,
@@ -952,5 +977,80 @@ mod tests {
             BTreeSet::from([t6]),
             "only the v6 LB's table is left"
         );
+    }
+
+    /// The damage `adopt_repairs_what_a_crash_left` repairs: an orphan table (77), a table missing
+    /// slots (the v4 LB's) and a second address on that same table.
+    fn damaged() -> ControlCore<MemMapWriter> {
+        let mut c = two_lbs();
+        let t4 = c.w.lb[&key4(A4, 443)].table_id;
+        c.w.maglev_upsert(
+            MaglevKey {
+                table_id: 77,
+                slot: 3,
+            },
+            backend(1, 5),
+        )
+        .unwrap();
+        for slot in 0..100 {
+            c.w.maglev.remove(&MaglevKey { table_id: t4, slot });
+        }
+        c.w.lb_upsert(
+            key4([198, 51, 100, 9], 443),
+            LbValue {
+                table_id: t4,
+                size: crate::maglev::TABLE_SIZE,
+            },
+        )
+        .unwrap();
+        c
+    }
+
+    // A walk a read error cut short reads live rows and slots as missing: a live table would look
+    // orphaned and be deleted, a whole one partial and be rewritten. Adopt takes what it read and
+    // repairs nothing, and says so.
+    #[test]
+    fn a_cut_walk_adopts_what_it_read_and_repairs_nothing() {
+        let mut w = damaged().w;
+        w.lb_walk_cut = Some(1);
+        let (lb, lb6, maglev) = (w.lb.clone(), w.lb6.clone(), w.maglev.clone());
+        let mut c = ControlCore::new(w);
+        assert!(c.adopt_lbs().is_err(), "a cut walk is reported");
+        assert_eq!(c.w.lb, lb);
+        assert_eq!(c.w.lb6, lb6);
+        assert!(c.w.maglev == maglev, "no table removed or rewritten");
+
+        // The one v6 row was read, so that LB is adopted and its delete is whole.
+        let t6 = c.w.lb6[&key6(A6, 443)].table_id;
+        assert!(c.delete_lb(b"2001:db8::50").unwrap());
+        assert!(c.w.lb6.is_empty());
+        assert!(slots(&c, t6).is_empty());
+    }
+
+    // The counter reset could also re-create an address under a new table while some of its
+    // ports kept the old one. It is still one LB: the delete by its address takes every row and
+    // both tables.
+    #[test]
+    fn an_address_on_two_tables_is_one_lb() {
+        let mut c = two_lbs();
+        for slot in 0..crate::maglev::TABLE_SIZE {
+            c.w.maglev_upsert(MaglevKey { table_id: 9, slot }, backend(4, 8))
+                .unwrap();
+        }
+        c.w.lb_upsert(
+            key4(A4, 80),
+            LbValue {
+                table_id: 9,
+                size: crate::maglev::TABLE_SIZE,
+            },
+        )
+        .unwrap();
+        let mut c = ControlCore::new(c.w);
+        assert_eq!(c.adopt_lbs().unwrap(), 2, "one LB per address");
+        assert!(c.w.maglev.keys().any(|k| k.table_id == 9), "kept as it was");
+        assert!(c.delete_lb(b"203.0.113.50").unwrap());
+        assert!(c.w.lb.is_empty());
+        let t6 = c.w.lb6[&key6(A6, 443)].table_id;
+        assert_eq!(tables(&c), BTreeSet::from([t6]), "both its tables go");
     }
 }

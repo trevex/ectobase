@@ -226,8 +226,10 @@ impl Control {
             // And the load balancers in the pinned `LB{,6}` and `MAGLEV` maps: a new LB must not
             // be given a table a live one points at, and a delete or backend change after the
             // restart must find the LB it names.
-            let lbs = inner.core.adopt_lbs();
-            eprintln!("adopt: recovered {lbs} load balancer(s) from pinned maps");
+            match inner.core.adopt_lbs() {
+                Ok(n) => eprintln!("adopt: recovered {n} load balancer(s) from pinned maps"),
+                Err(e) => eprintln!("adopt: WARNING load balancers: {e:#}"),
+            }
             let recovered = Self::rebuild_from_maps(&mut inner)?;
             eprintln!(
                 "adopt: recovered {} interface(s) from pinned maps",

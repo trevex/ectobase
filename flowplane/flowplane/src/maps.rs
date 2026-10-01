@@ -26,6 +26,8 @@ use flowplane_common::{
 /// - `get_owned`      — `get(key: $key)  -> Option<$val>`
 /// - `entries`        — `pub fn entries() -> Vec<($key, $val)>`
 /// - `entries_crate`  — `pub(crate) fn entries() -> Vec<($key, $val)>`
+/// - `walk`           — `pub fn walk() -> Walk<($key, $val)>`: like `entries`, but keeps the
+///   first read error instead of dropping it, for an adopt that must know its walk was whole
 ///
 /// `$name` is the aya map name (must match the eBPF object) and doubles as the error context.
 macro_rules! bpf_hash_map {
@@ -57,6 +59,24 @@ macro_rules! bpf_hash_map {
     (@entries $key:ty, $val:ty, $name:literal) => {
         pub fn entries(&self) -> Vec<($key, $val)> {
             self.map.iter().filter_map(|r| r.ok()).collect()
+        }
+    };
+    (@walk $key:ty, $val:ty, $name:literal) => {
+        pub fn walk(&self) -> flowplane_control::Walk<($key, $val)> {
+            let mut walk = flowplane_control::Walk {
+                entries: Vec::new(),
+                error: None,
+            };
+            for r in self.map.iter() {
+                match r {
+                    Ok(e) => walk.entries.push(e),
+                    Err(e) => {
+                        walk.error
+                            .get_or_insert(anyhow::Error::from(e).context(concat!("walk ", $name)));
+                    }
+                }
+            }
+            walk
         }
     };
     (@entries_crate $key:ty, $val:ty, $name:literal) => {
@@ -175,17 +195,17 @@ bpf_hash_map!(
 
 bpf_hash_map!(
     /// Typed handle over the `LB` BPF map.
-    Lb, "LB", LbKey, LbValue, upsert, remove, entries
+    Lb, "LB", LbKey, LbValue, upsert, remove, walk
 );
 
 bpf_hash_map!(
     /// Typed handle over the `LB6` BPF map (IPv6 LB services, full-address key).
-    Lb6, "LB6", LbKey6, LbValue, upsert, remove, entries
+    Lb6, "LB6", LbKey6, LbValue, upsert, remove, walk
 );
 
 bpf_hash_map!(
     /// Typed handle over the `MAGLEV` BPF map.
-    Maglev, "MAGLEV", MaglevKey, LbBackend, upsert, remove, entries
+    Maglev, "MAGLEV", MaglevKey, LbBackend, upsert, remove, walk
 );
 
 bpf_hash_map!(

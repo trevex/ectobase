@@ -28,6 +28,15 @@ pub struct CtFlushScope6 {
     pub port_max: u16,
 }
 
+/// A whole-map walk for adopt: the entries read, and the error that cut the walk short if one
+/// did. After a cut walk an entry missing from `entries` may still be in the map, so adopt must
+/// not act on its absence (delete a table no row seemed to point at, rewrite one that seemed to
+/// be missing slots).
+pub struct Walk<T> {
+    pub entries: Vec<T>,
+    pub error: Option<anyhow::Error>,
+}
+
 /// Uniform config-map write surface. All methods return `anyhow::Result<()>` except the reads
 /// used by conflict checks. Method names are `<map>_<op>`.
 pub trait MapWriter {
@@ -97,9 +106,9 @@ pub trait MapWriter {
     fn maglev_remove(&mut self, key: &MaglevKey) -> anyhow::Result<()>;
     /// Adopt: the service rows and Maglev slots that survived a restart in the pinned `LB`,
     /// `LB6` and `MAGLEV` maps.
-    fn lb_entries(&self) -> Vec<(LbKey, LbValue)>;
-    fn lb6_entries(&self) -> Vec<(LbKey6, LbValue)>;
-    fn maglev_entries(&self) -> Vec<(MaglevKey, LbBackend)>;
+    fn lb_entries(&self) -> Walk<(LbKey, LbValue)>;
+    fn lb6_entries(&self) -> Walk<(LbKey6, LbValue)>;
+    fn maglev_entries(&self) -> Walk<(MaglevKey, LbBackend)>;
     fn underlay_upsert(&mut self, key: [u8; 16], val: UnderlayValue) -> anyhow::Result<()>;
     fn underlay_remove(&mut self, key: &[u8; 16]) -> anyhow::Result<()>;
     fn underlay_get(&self, key: &[u8; 16]) -> Option<UnderlayValue>;

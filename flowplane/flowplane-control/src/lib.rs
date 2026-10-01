@@ -17,7 +17,7 @@ pub use firewall::FwError;
 pub use interface::{meter_state, IfaceParams};
 pub use nat::ReplaceCounts;
 pub use natowner::NeighborNatError;
-pub use writer::{CtFlushScope, CtFlushScope6, MapWriter};
+pub use writer::{CtFlushScope, CtFlushScope6, MapWriter, Walk};
 
 /// A neighbor-NAT block's place in the index: its nat_ip and the port its range starts at.
 pub(crate) type BlockKey4 = ([u8; 4], u16);
