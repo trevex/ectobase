@@ -585,7 +585,7 @@ func schema_ectobase_api_compiled_v1alpha1_CompiledContainerSpec(ref common.Refe
 				Properties: map[string]spec.Schema{
 					"clusterName": {
 						SchemaProps: spec.SchemaProps{
-							Description: "ClusterName is the cluster this compiled container is bound to. The broker selects on this field.",
+							Description: "ClusterName is the cluster this compiled container is bound to. The twin lives in the pool's pool-<clusterName> namespace on the dispatch, which is the namespace the pool's broker syncs.",
 							Type:        []string{"string"},
 							Format:      "",
 						},
@@ -1030,14 +1030,14 @@ func schema_ectobase_api_compiled_v1alpha1_CompiledNICSpec(ref common.ReferenceC
 				Properties: map[string]spec.Schema{
 					"clusterName": {
 						SchemaProps: spec.SchemaProps{
-							Description: "ClusterName is the cluster this compiled NIC is bound to (the pod->node binding). Set by the compiler from the owning VirtualMachine's placement, or the compiler's --cluster-name default for NICs with no owning VM. The per-cluster broker selects on this field.",
+							Description: "ClusterName is the cluster this compiled NIC is bound to (the pod->node binding). The compiler resolves it in order: the owning Container, the owning VirtualMachine, the NIC's own spec.clusterName, then the compiler's --cluster-name default. The twin is written into that pool's pool-<clusterName> namespace on the dispatch, which is the namespace the pool's broker syncs.",
 							Type:        []string{"string"},
 							Format:      "",
 						},
 					},
 					"vni": {
 						SchemaProps: spec.SchemaProps{
-							Description: "VNI is the effective VXLAN network identifier for this NIC (resolved from the NIC's status.vni, falling back to its VPC's status.vni).",
+							Description: "VNI is the effective Geneve virtual network identifier for this NIC (resolved from the NIC's status.vni, falling back to its VPC's status.vni).",
 							Default:     0,
 							Type:        []string{"integer"},
 							Format:      "int32",
@@ -1366,7 +1366,7 @@ func schema_ectobase_api_compiled_v1alpha1_CompiledVMSpec(ref common.ReferenceCa
 				Properties: map[string]spec.Schema{
 					"clusterName": {
 						SchemaProps: spec.SchemaProps{
-							Description: "ClusterName is the cluster this compiled VM is bound to (the pod->node binding). The per-cluster broker selects on this field.",
+							Description: "ClusterName is the cluster this compiled VM is bound to (the pod->node binding). The twin lives in the pool's pool-<clusterName> namespace on the dispatch, which is the namespace the pool's broker syncs.",
 							Type:        []string{"string"},
 							Format:      "",
 						},
@@ -1575,7 +1575,7 @@ func schema_ectobase_api_compiled_v1alpha1_CompiledVolumeAttachmentSpec(ref comm
 				Properties: map[string]spec.Schema{
 					"clusterName": {
 						SchemaProps: spec.SchemaProps{
-							Description: "ClusterName is the cluster this attachment is bound to (the pod->node binding); the per-cluster broker selects on this field.",
+							Description: "ClusterName is the cluster this attachment is bound to (the pod->node binding). The twin lives in the pool's pool-<clusterName> namespace on the dispatch, which is the namespace the pool's broker syncs.",
 							Type:        []string{"string"},
 							Format:      "",
 						},
@@ -2262,7 +2262,7 @@ func schema_ectobase_api_compute_v1alpha1_VirtualMachineSpec(ref common.Referenc
 					},
 					"antiAffinity": {
 						SchemaProps: spec.SchemaProps{
-							Description: "AntiAffinity, if set, spreads VMs sharing a Group across ClusterPools during scheduling and failover (best-effort: availability wins if no non-violating pool).",
+							Description: "AntiAffinity, if set, spreads VMs sharing a Group across ClusterPools when failover re-places them (best-effort: availability wins if no non-violating pool). The initial scheduler does not consult it yet.",
 							Ref:         ref(computev1alpha1.VMAntiAffinity{}.OpenAPIModelName()),
 						},
 					},
@@ -3059,7 +3059,7 @@ func schema_ectobase_api_net_v1alpha1_LoadBalancer(ref common.ReferenceCallback)
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
-				Description: "LoadBalancer is a scaffold-only resource. Selector-target load balancer (§3.5).",
+				Description: "LoadBalancer is a Maglev load balancer: one address that spreads flows across the NetworkInterfaces matched by spec.targetSelector or named by spec.targetRefs.",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
 					"kind": {
@@ -3185,7 +3185,7 @@ func schema_ectobase_api_net_v1alpha1_LoadBalancerSpec(ref common.ReferenceCallb
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
-				Description: "LoadBalancerSpec is the desired state of a LoadBalancer. The IP is the LB's identity (v4 or v6); backends are the NetworkInterfaces matched by TargetSelector or named by TargetRefs.\n\nDeliberately NOT called a \"LB address\". A load-balancer address is 1:N and ingress-only — clients reach it and it Maglev-hashes to a backend, but a backend's own egress is SNATed to its NATGateway address, never to this one. The 1:1, bidirectional \"virtual IP\" that a single interface owns for both directions (ironcore/dpservice VirtualIP, AWS Elastic IP) is a different object: FloatingIP. Naming both \"LB address\" conflated them once too often.",
+				Description: "LoadBalancerSpec is the desired state of a LoadBalancer. The IP is the LB's identity (v4 or v6); backends are the NetworkInterfaces matched by TargetSelector or named by TargetRefs.\n\nIt is deliberately not called a VIP. A load-balancer address is 1:N and ingress-only: clients reach it and it Maglev-hashes to a backend, but a backend's own egress is SNATed to its NATGateway address, never to this one. The 1:1, bidirectional \"virtual IP\" that a single interface owns for both directions (ironcore/dpservice VirtualIP, AWS Elastic IP) is a different object: FloatingIP.",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
 					"ip": {
@@ -3255,7 +3255,7 @@ func schema_ectobase_api_net_v1alpha1_LoadBalancerStatus(ref common.ReferenceCal
 				Properties: map[string]spec.Schema{
 					"state": {
 						SchemaProps: spec.SchemaProps{
-							Description: "State is the lifecycle state (Pending | Ready).",
+							Description: "State is the address allocation state: Allocated, Pending (waiting on the pool), Exhausted (the pool has no free address) or Invalid (the request cannot be satisfied).",
 							Type:        []string{"string"},
 							Format:      "",
 						},
@@ -4591,7 +4591,7 @@ func schema_ectobase_api_platform_v1alpha1_ClusterPoolSpec(ref common.ReferenceC
 					},
 					"underlayPrefix": {
 						SchemaProps: spec.SchemaProps{
-							Description: "UnderlayPrefix is this cluster's underlay aggregate (a CIDR that contains every node's underlay address, e.g. \"fd00:cafe:1a2b::/48\"). Declaring it makes Tier-2 fencing COMPLETE by construction: central fences this one prefix instead of enumerating node /64s, so a node it never observed — one that joined while the pool was unreachable — is fenced too.\n\nIt is central configuration, set when the pool is registered, deliberately NOT reported by the broker: a fence coordinate must never be derived from the entity being fenced, because that entity is by definition the one you have lost contact with.\n\nWhen empty, central falls back to the broker-reported node /64s, which is only safe while every node in the cluster shares one /64 (each node's identity being a /128 inside it). If the reported set contains MORE than one distinct /64, the cluster spans /64s, an unobserved node could sit in an unreported one, and failover blocks rather than fencing incompletely — set this field to unblock it. See docs/architecture/rescheduling-and-failover.md.",
+							Description: "UnderlayPrefix is this cluster's underlay aggregate (a CIDR that contains every node's underlay address, e.g. \"fd00:cafe:1a2b::/48\"). Declaring it makes Tier-2 fencing COMPLETE by construction: central fences this one prefix instead of enumerating node /64s, so a node it never observed — one that joined while the pool was unreachable — is fenced too.\n\nIt is central configuration, set when the pool is registered, deliberately NOT reported by the broker: a fence coordinate must never be derived from the entity being fenced, because that entity is by definition the one you have lost contact with.\n\nWhen empty, central falls back to the broker-reported node /64s, which is only safe while every node in the cluster shares one /64 (each node's identity being a /128 inside it). If the reported set contains MORE than one distinct /64, the cluster spans /64s, an unobserved node could sit in an unreported one. Failover then fences the /64s it knows about but blocks the rebind, because fencing incompletely must not reattach a disk an unfenced node may still write to. Set this field to unblock it. See docs/architecture/failover.md.",
 							Type:        []string{"string"},
 							Format:      "",
 						},

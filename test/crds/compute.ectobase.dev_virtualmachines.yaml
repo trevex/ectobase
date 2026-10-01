@@ -47,8 +47,9 @@ spec:
             properties:
               antiAffinity:
                 description: |-
-                  AntiAffinity, if set, spreads VMs sharing a Group across ClusterPools during
-                  scheduling and failover (best-effort: availability wins if no non-violating pool).
+                  AntiAffinity, if set, spreads VMs sharing a Group across ClusterPools when failover
+                  re-places them (best-effort: availability wins if no non-violating pool). The initial
+                  scheduler does not consult it yet.
                 properties:
                   group:
                     description: Group is the anti-affinity key; VMs with the same

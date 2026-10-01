@@ -58,9 +58,10 @@ spec:
               clusterName:
                 description: |-
                   ClusterName is the cluster this compiled NIC is bound to (the pod->node
-                  binding). Set by the compiler from the owning VirtualMachine's placement,
-                  or the compiler's --cluster-name default for NICs with no owning VM.
-                  The per-cluster broker selects on this field.
+                  binding). The compiler resolves it in order: the owning Container, the owning
+                  VirtualMachine, the NIC's own spec.clusterName, then the compiler's --cluster-name
+                  default. The twin is written into that pool's pool-<clusterName> namespace on the
+                  dispatch, which is the namespace the pool's broker syncs.
                 type: string
               firewall:
                 description: Firewall holds the compiled ingress and egress firewall
@@ -289,7 +290,7 @@ spec:
                 type: object
               vni:
                 description: |-
-                  VNI is the effective VXLAN network identifier for this NIC (resolved from the NIC's
+                  VNI is the effective Geneve virtual network identifier for this NIC (resolved from the NIC's
                   status.vni, falling back to its VPC's status.vni).
                 format: int32
                 type: integer

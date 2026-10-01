@@ -12,11 +12,11 @@ import (
 // LoadBalancerSpec is the desired state of a LoadBalancer. The IP is the LB's identity (v4 or v6);
 // backends are the NetworkInterfaces matched by TargetSelector or named by TargetRefs.
 //
-// Deliberately NOT called a "LB address". A load-balancer address is 1:N and ingress-only — clients reach
-// it and it Maglev-hashes to a backend, but a backend's own egress is SNATed to its NATGateway
-// address, never to this one. The 1:1, bidirectional "virtual IP" that a single interface owns for
-// both directions (ironcore/dpservice VirtualIP, AWS Elastic IP) is a different object: FloatingIP.
-// Naming both "LB address" conflated them once too often.
+// It is deliberately not called a VIP. A load-balancer address is 1:N and ingress-only: clients
+// reach it and it Maglev-hashes to a backend, but a backend's own egress is SNATed to its
+// NATGateway address, never to this one. The 1:1, bidirectional "virtual IP" that a single
+// interface owns for both directions (ironcore/dpservice VirtualIP, AWS Elastic IP) is a
+// different object: FloatingIP.
 type LoadBalancerSpecApplyConfiguration struct {
 	// IP is the requested load-balancer address. Empty => allocate from PoolRef; set =>
 	// validate membership in the pool + reserve (bring-your-own).

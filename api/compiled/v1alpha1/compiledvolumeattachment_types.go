@@ -38,8 +38,9 @@ type DiskIdentity struct {
 // Volume to one VM: the RBD disk parameters a downstream materializer turns into a
 // CDI DataVolume (RBD PVC).
 type CompiledVolumeAttachmentSpec struct {
-	// ClusterName is the cluster this attachment is bound to (the pod->node binding);
-	// the per-cluster broker selects on this field.
+	// ClusterName is the cluster this attachment is bound to (the pod->node binding). The twin
+	// lives in the pool's pool-<clusterName> namespace on the dispatch, which is the namespace
+	// the pool's broker syncs.
 	// +optional
 	ClusterName string `json:"clusterName,omitempty"`
 	// Size is the RBD disk size.

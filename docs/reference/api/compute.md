@@ -225,7 +225,7 @@ _Appears in:_
 | `image` _string_ | Image is the containerDisk image the VM boots from (e.g. quay.io/containerdisks/fedora:41). |  | Optional: \{\} <br /> |
 | `runStrategy` _string_ | RunStrategy is the KubeVirt run strategy (Always, RerunOnFailure, Manual, Halted).<br />Empty defaults to RerunOnFailure (Tier-1 local restart on node death). |  | Optional: \{\} <br /> |
 | `poolSelector` _[LabelSelector](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30/#labelselector-v1-meta)_ | PoolSelector, if set, restricts scheduling to ClusterPools whose labels match. |  | Optional: \{\} <br /> |
-| `antiAffinity` _[VMAntiAffinity](#vmantiaffinity)_ | AntiAffinity, if set, spreads VMs sharing a Group across ClusterPools during<br />scheduling and failover (best-effort: availability wins if no non-violating pool). |  | Optional: \{\} <br /> |
+| `antiAffinity` _[VMAntiAffinity](#vmantiaffinity)_ | AntiAffinity, if set, spreads VMs sharing a Group across ClusterPools when failover<br />re-places them (best-effort: availability wins if no non-violating pool). The initial<br />scheduler does not consult it yet. |  | Optional: \{\} <br /> |
 | `cloudInit` _[CloudInit](#cloudinit)_ | CloudInit, if set, provides guest bootstrap (users, SSH keys, packages) delivered to<br />the VM as a cloud-init NoCloud datasource. Required to log in to a stock cloud image. |  | Optional: \{\} <br /> |
 
 

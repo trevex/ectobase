@@ -103,7 +103,7 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `clusterName` _string_ | ClusterName is the cluster this compiled container is bound to. The broker selects on this field. |  | Optional: \{\} <br /> |
+| `clusterName` _string_ | ClusterName is the cluster this compiled container is bound to. The twin lives in the pool's<br />pool-<clusterName> namespace on the dispatch, which is the namespace the pool's broker syncs. |  | Optional: \{\} <br /> |
 | `nodeName` _string_ | NodeName is the pod nodeSelector (kubernetes.io/hostname). |  | Optional: \{\} <br /> |
 | `image` _string_ | Image is the container image. |  | Optional: \{\} <br /> |
 | `command` _string array_ | Command overrides the image entrypoint. |  | Optional: \{\} <br /> |
@@ -271,8 +271,8 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `clusterName` _string_ | ClusterName is the cluster this compiled NIC is bound to (the pod->node<br />binding). Set by the compiler from the owning VirtualMachine's placement,<br />or the compiler's --cluster-name default for NICs with no owning VM.<br />The per-cluster broker selects on this field. |  | Optional: \{\} <br /> |
-| `vni` _integer_ | VNI is the effective VXLAN network identifier for this NIC (resolved from the NIC's<br />status.vni, falling back to its VPC's status.vni). |  |  |
+| `clusterName` _string_ | ClusterName is the cluster this compiled NIC is bound to (the pod->node<br />binding). The compiler resolves it in order: the owning Container, the owning<br />VirtualMachine, the NIC's own spec.clusterName, then the compiler's --cluster-name<br />default. The twin is written into that pool's pool-<clusterName> namespace on the<br />dispatch, which is the namespace the pool's broker syncs. |  | Optional: \{\} <br /> |
+| `vni` _integer_ | VNI is the effective Geneve virtual network identifier for this NIC (resolved from the NIC's<br />status.vni, falling back to its VPC's status.vni). |  |  |
 | `port` _[PortStatus](#portstatus)_ | Port describes the dataplane port allocated for this interface. |  |  |
 | `overlayIPs` _string array_ | OverlayIPs are the guest overlay IP addresses. |  | Optional: \{\} <br /> |
 | `firewall` _[CompiledFirewall](#compiledfirewall)_ | Firewall holds the compiled ingress and egress firewall rules. |  |  |
@@ -405,7 +405,7 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `clusterName` _string_ | ClusterName is the cluster this compiled VM is bound to (the pod->node binding).<br />The per-cluster broker selects on this field. |  | Optional: \{\} <br /> |
+| `clusterName` _string_ | ClusterName is the cluster this compiled VM is bound to (the pod->node binding).<br />The twin lives in the pool's pool-<clusterName> namespace on the dispatch, which is the<br />namespace the pool's broker syncs. |  | Optional: \{\} <br /> |
 | `image` _string_ | Image is the containerDisk image to boot from. |  | Optional: \{\} <br /> |
 | `resources` _[ResourceRequirements](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30/#resourcerequirements-v1-core)_ | Resources is the compute request/limit; maps to the KubeVirt domain resources. |  | Optional: \{\} <br /> |
 | `runStrategy` _string_ | RunStrategy is the KubeVirt run strategy (defaulted upstream by the compiler). |  | Optional: \{\} <br /> |
@@ -485,7 +485,7 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `clusterName` _string_ | ClusterName is the cluster this attachment is bound to (the pod->node binding);<br />the per-cluster broker selects on this field. |  | Optional: \{\} <br /> |
+| `clusterName` _string_ | ClusterName is the cluster this attachment is bound to (the pod->node binding). The twin<br />lives in the pool's pool-<clusterName> namespace on the dispatch, which is the namespace<br />the pool's broker syncs. |  | Optional: \{\} <br /> |
 | `size` _[Quantity](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30/#quantity-resource-api)_ | Size is the RBD disk size. |  | Required: \{\} <br /> |
 | `storageClass` _string_ | StorageClass is the ceph-csi RBD StorageClass (empty = cluster default). |  | Optional: \{\} <br /> |
 | `bootImage` _string_ | BootImage, if set, is imported into the disk (bootable); empty = blank disk. |  | Optional: \{\} <br /> |

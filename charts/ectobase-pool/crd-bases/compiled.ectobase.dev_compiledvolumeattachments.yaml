@@ -51,8 +51,9 @@ spec:
                 type: string
               clusterName:
                 description: |-
-                  ClusterName is the cluster this attachment is bound to (the pod->node binding);
-                  the per-cluster broker selects on this field.
+                  ClusterName is the cluster this attachment is bound to (the pod->node binding). The twin
+                  lives in the pool's pool-<clusterName> namespace on the dispatch, which is the namespace
+                  the pool's broker syncs.
                 type: string
               diskIdentity:
                 description: |-

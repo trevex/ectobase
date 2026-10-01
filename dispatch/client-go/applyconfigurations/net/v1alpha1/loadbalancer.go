@@ -11,7 +11,8 @@ import (
 // LoadBalancerApplyConfiguration represents a declarative configuration of the LoadBalancer type for use
 // with apply.
 //
-// LoadBalancer is a scaffold-only resource. Selector-target load balancer (§3.5).
+// LoadBalancer is a Maglev load balancer: one address that spreads flows across the
+// NetworkInterfaces matched by spec.targetSelector or named by spec.targetRefs.
 type LoadBalancerApplyConfiguration struct {
 	v1.TypeMetaApplyConfiguration    `json:",inline"`
 	*v1.ObjectMetaApplyConfiguration `json:"metadata,omitempty"`

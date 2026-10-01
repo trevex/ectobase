@@ -23,8 +23,9 @@ type ClusterPoolSpecApplyConfiguration struct {
 	// When empty, central falls back to the broker-reported node /64s, which is only safe while
 	// every node in the cluster shares one /64 (each node's identity being a /128 inside it). If
 	// the reported set contains MORE than one distinct /64, the cluster spans /64s, an unobserved
-	// node could sit in an unreported one, and failover blocks rather than fencing incompletely —
-	// set this field to unblock it. See docs/architecture/rescheduling-and-failover.md.
+	// node could sit in an unreported one. Failover then fences the /64s it knows about but blocks
+	// the rebind, because fencing incompletely must not reattach a disk an unfenced node may still
+	// write to. Set this field to unblock it. See docs/architecture/failover.md.
 	UnderlayPrefix *string `json:"underlayPrefix,omitempty"`
 }
 

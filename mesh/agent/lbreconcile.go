@@ -68,4 +68,4 @@ func (r *Reconciler) desiredLB(ctx context.Context, ulByKey map[ipKey]string, lo
 //
 // Announced LB addresses are always the centrally-ALLOCATED ones: the compiler only writes a CompiledNIC.LB
 // entry for a LoadBalancer whose status is Allocated with a non-empty allocatedIP (see
-// controllers/compilednic.go), so an auto-allocated LB's empty spec.lbIP can never reach the edge.
+// controllers/compilednic.go), so an auto-allocated LB's empty spec.ip can never reach the edge.

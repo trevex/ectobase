@@ -311,7 +311,8 @@ _Appears in:_
 
 
 
-LoadBalancer is a scaffold-only resource. Selector-target load balancer (§3.5).
+LoadBalancer is a Maglev load balancer: one address that spreads flows across the
+NetworkInterfaces matched by spec.targetSelector or named by spec.targetRefs.
 
 
 
@@ -350,11 +351,11 @@ _Appears in:_
 LoadBalancerSpec is the desired state of a LoadBalancer. The IP is the LB's identity (v4 or v6);
 backends are the NetworkInterfaces matched by TargetSelector or named by TargetRefs.
 
-Deliberately NOT called a "LB address". A load-balancer address is 1:N and ingress-only — clients reach
-it and it Maglev-hashes to a backend, but a backend's own egress is SNATed to its NATGateway
-address, never to this one. The 1:1, bidirectional "virtual IP" that a single interface owns for
-both directions (ironcore/dpservice VirtualIP, AWS Elastic IP) is a different object: FloatingIP.
-Naming both "LB address" conflated them once too often.
+It is deliberately not called a VIP. A load-balancer address is 1:N and ingress-only: clients
+reach it and it Maglev-hashes to a backend, but a backend's own egress is SNATed to its
+NATGateway address, never to this one. The 1:1, bidirectional "virtual IP" that a single
+interface owns for both directions (ironcore/dpservice VirtualIP, AWS Elastic IP) is a
+different object: FloatingIP.
 
 
 
@@ -383,7 +384,7 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `state` _string_ | State is the lifecycle state (Pending \| Ready). |  | Optional: \{\} <br /> |
+| `state` _string_ | State is the address allocation state: Allocated, Pending (waiting on the pool),<br />Exhausted (the pool has no free address) or Invalid (the request cannot be satisfied). |  | Optional: \{\} <br /> |
 | `allocatedIP` _string_ | AllocatedIP is the authoritative address assigned by the LB address allocator. Mirrors<br />NetworkInterface.status.allocatedIPs: spec is the request, status is the truth. |  | Optional: \{\} <br /> |
 | `observedGeneration` _integer_ | ObservedGeneration is the Spec generation the allocation reflects. |  | Optional: \{\} <br /> |
 

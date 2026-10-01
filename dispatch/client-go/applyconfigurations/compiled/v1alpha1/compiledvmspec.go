@@ -15,7 +15,8 @@ import (
 // turns this into a kubevirt.io/v1.VirtualMachine.
 type CompiledVMSpecApplyConfiguration struct {
 	// ClusterName is the cluster this compiled VM is bound to (the pod->node binding).
-	// The per-cluster broker selects on this field.
+	// The twin lives in the pool's pool-<clusterName> namespace on the dispatch, which is the
+	// namespace the pool's broker syncs.
 	ClusterName *string `json:"clusterName,omitempty"`
 	// Image is the containerDisk image to boot from.
 	Image *string `json:"image,omitempty"`

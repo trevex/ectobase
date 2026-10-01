@@ -12,7 +12,8 @@ import (
 // template + the cluster/node binding + the per-interface overlay wiring. A downstream pod-materializer
 // turns this into a v1.Pod.
 type CompiledContainerSpec struct {
-	// ClusterName is the cluster this compiled container is bound to. The broker selects on this field.
+	// ClusterName is the cluster this compiled container is bound to. The twin lives in the pool's
+	// pool-<clusterName> namespace on the dispatch, which is the namespace the pool's broker syncs.
 	// +optional
 	ClusterName string `json:"clusterName,omitempty"`
 	// NodeName is the pod nodeSelector (kubernetes.io/hostname).

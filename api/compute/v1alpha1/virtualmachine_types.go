@@ -41,8 +41,9 @@ type VirtualMachineSpec struct {
 	// PoolSelector, if set, restricts scheduling to ClusterPools whose labels match.
 	// +optional
 	PoolSelector *metav1.LabelSelector `json:"poolSelector,omitempty"`
-	// AntiAffinity, if set, spreads VMs sharing a Group across ClusterPools during
-	// scheduling and failover (best-effort: availability wins if no non-violating pool).
+	// AntiAffinity, if set, spreads VMs sharing a Group across ClusterPools when failover
+	// re-places them (best-effort: availability wins if no non-violating pool). The initial
+	// scheduler does not consult it yet.
 	// +optional
 	AntiAffinity *VMAntiAffinity `json:"antiAffinity,omitempty"`
 	// CloudInit, if set, provides guest bootstrap (users, SSH keys, packages) delivered to
