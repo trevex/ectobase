@@ -5,6 +5,7 @@ package reflector
 import (
 	"log"
 	"net"
+	"net/netip"
 	"sort"
 	"sync"
 
@@ -496,6 +497,64 @@ func (r *RIB) advertised(e routeEntry) []string {
 		}
 	}
 	return out
+}
+
+// AnnouncedFrom returns those of keys that some origin announces with a nexthop inside within —
+// read from what the RIB stores, so a key a fence hides still counts: it is exactly what releasing
+// that fence would re-advertise. Failover asks this, about the addresses of the VMs it moved off a
+// pool, before it releases the pool's fence (see ClearFence).
+//
+// It answers only for the keys asked, never for whatever else the prefix announces: a recovered
+// pool legitimately shares keys with other origins (its E/W LB anycast addresses), and those must
+// not hold its fence. A key matches in its own spelling or in canonical form, and is returned as
+// asked, each at most once.
+func (r *RIB) AnnouncedFrom(within string, keys []*pb.RouteKey) ([]*pb.RouteKey, error) {
+	_, ipnet, err := net.ParseCIDR(within)
+	if err != nil {
+		return nil, err
+	}
+	nets := map[string]*net.IPNet{within: ipnet} // the shape nexthopFenced tests against
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []*pb.RouteKey
+	seen := map[routeKey]bool{}
+	for _, q := range keys {
+		asked := routeKey{q.GetVni(), q.GetPrefix()}
+		if seen[asked] {
+			continue
+		}
+		seen[asked] = true
+		for _, k := range spellings(asked) {
+			if r.announcedWithin(k, nets) {
+				out = append(out, &pb.RouteKey{Vni: asked.vni, Prefix: asked.prefix})
+				break
+			}
+		}
+	}
+	return out, nil
+}
+
+// announcedWithin reports whether any origin of k announces a nexthop inside one of nets. Caller
+// holds r.mu.
+func (r *RIB) announcedWithin(k routeKey, nets map[string]*net.IPNet) bool {
+	for _, nhs := range r.routes[k].origins {
+		for _, nh := range nhs {
+			if nexthopFenced(nh, nets) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// spellings is k as asked, plus its canonical form when that differs: the agent keys a host route
+// by the address string flowplane reports, which need not match the caller's.
+func spellings(k routeKey) []routeKey {
+	p, err := netip.ParsePrefix(k.prefix)
+	if err != nil || p.String() == k.prefix {
+		return []routeKey{k}
+	}
+	return []routeKey{k, {k.vni, p.String()}}
 }
 
 // HasRoute reports whether (vni, prefix) is currently advertised — stored AND left with a

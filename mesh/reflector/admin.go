@@ -43,3 +43,13 @@ func (a *AdminServer) ClearFence(_ context.Context, req *pb.FenceRequest) (*pb.F
 	a.rib.ClearFence(req.GetPrefix())
 	return &pb.FenceReply{}, nil
 }
+
+// AnnouncedFrom reports which of the asked keys are still announced from inside a prefix, fenced
+// or not — what failover waits on before it calls ClearFence (see RIB.AnnouncedFrom).
+func (a *AdminServer) AnnouncedFrom(_ context.Context, req *pb.AnnouncedFromRequest) (*pb.AnnouncedFromReply, error) {
+	held, err := a.rib.AnnouncedFrom(req.GetPrefix(), req.GetKeys())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid prefix %q: %v", req.GetPrefix(), err)
+	}
+	return &pb.AnnouncedFromReply{Keys: held}, nil
+}

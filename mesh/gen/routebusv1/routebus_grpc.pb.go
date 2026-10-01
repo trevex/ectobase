@@ -121,18 +121,25 @@ var RouteBus_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	RouteBusAdmin_SetFence_FullMethodName   = "/routebus.v1.RouteBusAdmin/SetFence"
-	RouteBusAdmin_ClearFence_FullMethodName = "/routebus.v1.RouteBusAdmin/ClearFence"
+	RouteBusAdmin_SetFence_FullMethodName      = "/routebus.v1.RouteBusAdmin/SetFence"
+	RouteBusAdmin_ClearFence_FullMethodName    = "/routebus.v1.RouteBusAdmin/ClearFence"
+	RouteBusAdmin_AnnouncedFrom_FullMethodName = "/routebus.v1.RouteBusAdmin/AnnouncedFrom"
 )
 
 // RouteBusAdminClient is the client API for RouteBusAdmin service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// RouteBusAdmin lets central set/clear per-/64 route fences on the reflector.
+// RouteBusAdmin lets central set/clear per-/64 route fences on the reflector, and ask what a
+// fenced /64 still announces before it releases one.
 type RouteBusAdminClient interface {
 	SetFence(ctx context.Context, in *FenceRequest, opts ...grpc.CallOption) (*FenceReply, error)
 	ClearFence(ctx context.Context, in *FenceRequest, opts ...grpc.CallOption) (*FenceReply, error)
+	// AnnouncedFrom reports which of the asked keys some origin currently announces with a nexthop
+	// inside the prefix. It reads what the reflector STORES, so a key a fence hides still counts:
+	// that is the route ClearFence would re-advertise. Failover asks it about the addresses of the
+	// VMs it moved off a pool, and holds the pool's fence while any is still announced from there.
+	AnnouncedFrom(ctx context.Context, in *AnnouncedFromRequest, opts ...grpc.CallOption) (*AnnouncedFromReply, error)
 }
 
 type routeBusAdminClient struct {
@@ -163,14 +170,30 @@ func (c *routeBusAdminClient) ClearFence(ctx context.Context, in *FenceRequest, 
 	return out, nil
 }
 
+func (c *routeBusAdminClient) AnnouncedFrom(ctx context.Context, in *AnnouncedFromRequest, opts ...grpc.CallOption) (*AnnouncedFromReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AnnouncedFromReply)
+	err := c.cc.Invoke(ctx, RouteBusAdmin_AnnouncedFrom_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // RouteBusAdminServer is the server API for RouteBusAdmin service.
 // All implementations must embed UnimplementedRouteBusAdminServer
 // for forward compatibility.
 //
-// RouteBusAdmin lets central set/clear per-/64 route fences on the reflector.
+// RouteBusAdmin lets central set/clear per-/64 route fences on the reflector, and ask what a
+// fenced /64 still announces before it releases one.
 type RouteBusAdminServer interface {
 	SetFence(context.Context, *FenceRequest) (*FenceReply, error)
 	ClearFence(context.Context, *FenceRequest) (*FenceReply, error)
+	// AnnouncedFrom reports which of the asked keys some origin currently announces with a nexthop
+	// inside the prefix. It reads what the reflector STORES, so a key a fence hides still counts:
+	// that is the route ClearFence would re-advertise. Failover asks it about the addresses of the
+	// VMs it moved off a pool, and holds the pool's fence while any is still announced from there.
+	AnnouncedFrom(context.Context, *AnnouncedFromRequest) (*AnnouncedFromReply, error)
 	mustEmbedUnimplementedRouteBusAdminServer()
 }
 
@@ -186,6 +209,9 @@ func (UnimplementedRouteBusAdminServer) SetFence(context.Context, *FenceRequest)
 }
 func (UnimplementedRouteBusAdminServer) ClearFence(context.Context, *FenceRequest) (*FenceReply, error) {
 	return nil, status.Error(codes.Unimplemented, "method ClearFence not implemented")
+}
+func (UnimplementedRouteBusAdminServer) AnnouncedFrom(context.Context, *AnnouncedFromRequest) (*AnnouncedFromReply, error) {
+	return nil, status.Error(codes.Unimplemented, "method AnnouncedFrom not implemented")
 }
 func (UnimplementedRouteBusAdminServer) mustEmbedUnimplementedRouteBusAdminServer() {}
 func (UnimplementedRouteBusAdminServer) testEmbeddedByValue()                       {}
@@ -244,6 +270,24 @@ func _RouteBusAdmin_ClearFence_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
+func _RouteBusAdmin_AnnouncedFrom_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AnnouncedFromRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RouteBusAdminServer).AnnouncedFrom(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RouteBusAdmin_AnnouncedFrom_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RouteBusAdminServer).AnnouncedFrom(ctx, req.(*AnnouncedFromRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // RouteBusAdmin_ServiceDesc is the grpc.ServiceDesc for RouteBusAdmin service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -258,6 +302,10 @@ var RouteBusAdmin_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ClearFence",
 			Handler:    _RouteBusAdmin_ClearFence_Handler,
+		},
+		{
+			MethodName: "AnnouncedFrom",
+			Handler:    _RouteBusAdmin_AnnouncedFrom_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

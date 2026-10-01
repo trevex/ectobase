@@ -10,10 +10,16 @@ service RouteBus {
   rpc Session(stream ClientMsg) returns (stream ServerMsg);
 }
 
-// RouteBusAdmin lets central set/clear per-/64 route fences on the reflector.
+// RouteBusAdmin lets central set/clear per-/64 route fences on the reflector, and ask what a
+// fenced /64 still announces before it releases one.
 service RouteBusAdmin {
   rpc SetFence(FenceRequest) returns (FenceReply);
   rpc ClearFence(FenceRequest) returns (FenceReply);
+  // AnnouncedFrom reports which of the asked keys some origin currently announces with a nexthop
+  // inside the prefix. It reads what the reflector STORES, so a key a fence hides still counts:
+  // that is the route ClearFence would re-advertise. Failover asks it about the addresses of the
+  // VMs it moved off a pool, and holds the pool's fence while any is still announced from there.
+  rpc AnnouncedFrom(AnnouncedFromRequest) returns (AnnouncedFromReply);
 }
 
 message FenceRequest {
@@ -21,6 +27,24 @@ message FenceRequest {
 }
 
 message FenceReply {}
+
+// RouteKey names one route in the RIB: a prefix in a VNI.
+message RouteKey {
+  uint32 vni = 1;
+  string prefix = 2; // e.g. "10.0.0.5/32"; matched in either spelling of an address, answered as asked
+}
+
+// AnnouncedFromRequest asks about a targeted set of keys, never the whole table: the caller knows
+// which addresses must be gone, and a pool's other routes (its anycast LB addresses among them)
+// have no bearing on the answer.
+message AnnouncedFromRequest {
+  string prefix = 1;          // CIDR the nexthops are tested against, e.g. "2001:db8:0:1::/64"
+  repeated RouteKey keys = 2;
+}
+
+message AnnouncedFromReply {
+  repeated RouteKey keys = 1; // the asked keys announced from inside the prefix; empty = none
+}
 
 enum RouteOp {
   ROUTE_OP_UNSPECIFIED = 0;
