@@ -8,7 +8,9 @@ datapath forwards an imported route exactly like a native one.
 ## The API: a pair of VPCPeering objects
 
 A `VPCPeering` is one direction of a peering. A reciprocal pair, `A→B` in A's namespace and `B→A` in
-B's, forms an active peering.
+B's, forms an active peering. A peering applies only to the VPCs it names, by namespace and name: its
+local VPC is `spec.vpcRef` in the peering's own namespace, and its peer is `spec.peerVpcRef`'s
+namespace and name. A VPC with the same name in another namespace is a different VPC.
 
 | Field | Meaning |
 |---|---|
@@ -55,10 +57,11 @@ flowchart TD
 ```
 
 1. Consent. `VPCPeeringReconciler` marks a peering `Ready` when the reciprocal object exists (same
-   VPC pair, reversed), else `Pending`. It re-evaluates the counterpart whenever either side
+   VPC pair, reversed, with both namespaces matching), else `Pending`. It re-evaluates the counterpart whenever either side
    changes, so the pair converges together.
 2. Compile. For every `Ready` peering, the compiler adds a `CompiledPeerImport` to each
-   `CompiledNIC` of the local VPC: the peer's VNI and, as `importPrefixes`, the reciprocal object's
+   `CompiledNIC` of the local VPC, meaning interfaces in the peering's namespace whose `vpcRef` names
+   that VPC: the peer's VNI and, as `importPrefixes`, the reciprocal object's
    `exposedPrefixes`. In other words, what B exposes is enforced on A's side, when A imports.
 3. Import. The agent unions the imports of its local interfaces per local VNI and subscribes to each
    peer VNI. For every route it learns on a peer VNI that falls inside `importPrefixes`, it programs

@@ -127,6 +127,7 @@ renders (ebpf clab):
                 - --cluster-name=test
                 - --dispatch-server=https://[fd00:db8:0:1::1]:6444
                 - --dispatch-ca=/secrets/dispatch-root/ca.crt
+                - --dispatch-client-secret=broker-dispatch-tls
                 - --dispatch-client-cert=/secrets/dispatch-cert/tls.crt
                 - --dispatch-client-key=/secrets/dispatch-cert/tls.key
                 - --dispatch-bootstrap-kubeconfig=/secrets/dispatch-bootstrap/kubeconfig
@@ -267,6 +268,7 @@ renders (ebpf clab):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: compiledcontainers.compiled.ectobase.dev
     spec:
       group: compiled.ectobase.dev
@@ -572,6 +574,7 @@ renders (ebpf clab):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: compilednics.compiled.ectobase.dev
     spec:
       group: compiled.ectobase.dev
@@ -868,6 +871,7 @@ renders (ebpf clab):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: compiledvms.compiled.ectobase.dev
     spec:
       group: compiled.ectobase.dev
@@ -1056,6 +1060,7 @@ renders (ebpf clab):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: compiledvolumeattachments.compiled.ectobase.dev
     spec:
       group: compiled.ectobase.dev
@@ -1408,6 +1413,7 @@ renders (ebpf clab):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: firewallpolicies.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -1656,6 +1662,7 @@ renders (ebpf clab):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: floatingips.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -1714,6 +1721,7 @@ renders (ebpf clab):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: ipallocations.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -1799,6 +1807,7 @@ renders (ebpf clab):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: ippools.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -1884,6 +1893,7 @@ renders (ebpf clab):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: loadbalancers.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -2052,6 +2062,7 @@ renders (ebpf clab):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: natgateways.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -2188,6 +2199,7 @@ renders (ebpf clab):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: networkinterfaces.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -2429,6 +2441,7 @@ renders (ebpf clab):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: subnets.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -2513,6 +2526,7 @@ renders (ebpf clab):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: vpcpeerings.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -2606,6 +2620,7 @@ renders (ebpf clab):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: vpcs.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -3134,30 +3149,6 @@ renders (ebpf clab):
     spec:
       ca:
         secretName: ectobase-pool-ca
-  36: |
-    apiVersion: cert-manager.io/v1
-    kind: Certificate
-    metadata:
-      labels:
-        app.kubernetes.io/managed-by: Helm
-        app.kubernetes.io/part-of: ectobase
-      name: broker-dispatch-tls
-      namespace: ectobase-system
-    spec:
-      commonName: ectobase:cluster:test
-      duration: 2160h
-      issuerRef:
-        kind: Issuer
-        name: ectobase-pool-ca
-      privateKey:
-        algorithm: ECDSA
-        size: 256
-      secretName: broker-dispatch-tls
-      subject:
-        organizations:
-          - ectobase:brokers
-      usages:
-        - client auth
 renders (ebpf hw):
   1: |
     apiVersion: v1
@@ -3287,6 +3278,7 @@ renders (ebpf hw):
                 - --cluster-name=test
                 - --dispatch-server=https://[fd00:db8:0:1::1]:6444
                 - --dispatch-ca=/secrets/dispatch-root/ca.crt
+                - --dispatch-client-secret=broker-dispatch-tls
                 - --dispatch-client-cert=/secrets/dispatch-cert/tls.crt
                 - --dispatch-client-key=/secrets/dispatch-cert/tls.key
                 - --dispatch-bootstrap-kubeconfig=/secrets/dispatch-bootstrap/kubeconfig
@@ -3427,6 +3419,7 @@ renders (ebpf hw):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: compiledcontainers.compiled.ectobase.dev
     spec:
       group: compiled.ectobase.dev
@@ -3732,6 +3725,7 @@ renders (ebpf hw):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: compilednics.compiled.ectobase.dev
     spec:
       group: compiled.ectobase.dev
@@ -4028,6 +4022,7 @@ renders (ebpf hw):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: compiledvms.compiled.ectobase.dev
     spec:
       group: compiled.ectobase.dev
@@ -4216,6 +4211,7 @@ renders (ebpf hw):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: compiledvolumeattachments.compiled.ectobase.dev
     spec:
       group: compiled.ectobase.dev
@@ -4568,6 +4564,7 @@ renders (ebpf hw):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: firewallpolicies.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -4816,6 +4813,7 @@ renders (ebpf hw):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: floatingips.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -4874,6 +4872,7 @@ renders (ebpf hw):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: ipallocations.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -4959,6 +4958,7 @@ renders (ebpf hw):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: ippools.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -5044,6 +5044,7 @@ renders (ebpf hw):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: loadbalancers.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -5212,6 +5213,7 @@ renders (ebpf hw):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: natgateways.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -5348,6 +5350,7 @@ renders (ebpf hw):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: networkinterfaces.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -5589,6 +5592,7 @@ renders (ebpf hw):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: subnets.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -5673,6 +5677,7 @@ renders (ebpf hw):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: vpcpeerings.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -5766,6 +5771,7 @@ renders (ebpf hw):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: vpcs.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -6291,30 +6297,6 @@ renders (ebpf hw):
     spec:
       ca:
         secretName: ectobase-pool-ca
-  36: |
-    apiVersion: cert-manager.io/v1
-    kind: Certificate
-    metadata:
-      labels:
-        app.kubernetes.io/managed-by: Helm
-        app.kubernetes.io/part-of: ectobase
-      name: broker-dispatch-tls
-      namespace: ectobase-system
-    spec:
-      commonName: ectobase:cluster:test
-      duration: 2160h
-      issuerRef:
-        kind: Issuer
-        name: ectobase-pool-ca
-      privateKey:
-        algorithm: ECDSA
-        size: 256
-      secretName: broker-dispatch-tls
-      subject:
-        organizations:
-          - ectobase:brokers
-      usages:
-        - client auth
 renders (tier1 on):
   1: |
     apiVersion: v1
@@ -6444,6 +6426,7 @@ renders (tier1 on):
                 - --cluster-name=test
                 - --dispatch-server=https://[fd00:db8:0:1::1]:6444
                 - --dispatch-ca=/secrets/dispatch-root/ca.crt
+                - --dispatch-client-secret=broker-dispatch-tls
                 - --dispatch-client-cert=/secrets/dispatch-cert/tls.crt
                 - --dispatch-client-key=/secrets/dispatch-cert/tls.key
                 - --dispatch-bootstrap-kubeconfig=/secrets/dispatch-bootstrap/kubeconfig
@@ -6584,6 +6567,7 @@ renders (tier1 on):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: compiledcontainers.compiled.ectobase.dev
     spec:
       group: compiled.ectobase.dev
@@ -6889,6 +6873,7 @@ renders (tier1 on):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: compilednics.compiled.ectobase.dev
     spec:
       group: compiled.ectobase.dev
@@ -7185,6 +7170,7 @@ renders (tier1 on):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: compiledvms.compiled.ectobase.dev
     spec:
       group: compiled.ectobase.dev
@@ -7373,6 +7359,7 @@ renders (tier1 on):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: compiledvolumeattachments.compiled.ectobase.dev
     spec:
       group: compiled.ectobase.dev
@@ -7725,6 +7712,7 @@ renders (tier1 on):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: firewallpolicies.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -7973,6 +7961,7 @@ renders (tier1 on):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: floatingips.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -8031,6 +8020,7 @@ renders (tier1 on):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: ipallocations.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -8116,6 +8106,7 @@ renders (tier1 on):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: ippools.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -8201,6 +8192,7 @@ renders (tier1 on):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: loadbalancers.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -8369,6 +8361,7 @@ renders (tier1 on):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: natgateways.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -8505,6 +8498,7 @@ renders (tier1 on):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: networkinterfaces.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -8746,6 +8740,7 @@ renders (tier1 on):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: subnets.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -8830,6 +8825,7 @@ renders (tier1 on):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: vpcpeerings.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -8923,6 +8919,7 @@ renders (tier1 on):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: vpcs.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -9452,30 +9449,6 @@ renders (tier1 on):
       ca:
         secretName: ectobase-pool-ca
   36: |
-    apiVersion: cert-manager.io/v1
-    kind: Certificate
-    metadata:
-      labels:
-        app.kubernetes.io/managed-by: Helm
-        app.kubernetes.io/part-of: ectobase
-      name: broker-dispatch-tls
-      namespace: ectobase-system
-    spec:
-      commonName: ectobase:cluster:test
-      duration: 2160h
-      issuerRef:
-        kind: Issuer
-        name: ectobase-pool-ca
-      privateKey:
-        algorithm: ECDSA
-        size: 256
-      secretName: broker-dispatch-tls
-      subject:
-        organizations:
-          - ectobase:brokers
-      usages:
-        - client auth
-  37: |
     apiVersion: remediation.medik8s.io/v1alpha1
     kind: NodeHealthCheck
     metadata:
@@ -9500,7 +9473,7 @@ renders (tier1 on):
         - duration: 60s
           status: Unknown
           type: Ready
-  38: |
+  37: |
     apiVersion: self-node-remediation.medik8s.io/v1alpha1
     kind: SelfNodeRemediationTemplate
     metadata:
@@ -9641,6 +9614,7 @@ renders (tier1 watchdog):
                 - --cluster-name=test
                 - --dispatch-server=https://[fd00:db8:0:1::1]:6444
                 - --dispatch-ca=/secrets/dispatch-root/ca.crt
+                - --dispatch-client-secret=broker-dispatch-tls
                 - --dispatch-client-cert=/secrets/dispatch-cert/tls.crt
                 - --dispatch-client-key=/secrets/dispatch-cert/tls.key
                 - --dispatch-bootstrap-kubeconfig=/secrets/dispatch-bootstrap/kubeconfig
@@ -9781,6 +9755,7 @@ renders (tier1 watchdog):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: compiledcontainers.compiled.ectobase.dev
     spec:
       group: compiled.ectobase.dev
@@ -10086,6 +10061,7 @@ renders (tier1 watchdog):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: compilednics.compiled.ectobase.dev
     spec:
       group: compiled.ectobase.dev
@@ -10382,6 +10358,7 @@ renders (tier1 watchdog):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: compiledvms.compiled.ectobase.dev
     spec:
       group: compiled.ectobase.dev
@@ -10570,6 +10547,7 @@ renders (tier1 watchdog):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: compiledvolumeattachments.compiled.ectobase.dev
     spec:
       group: compiled.ectobase.dev
@@ -10922,6 +10900,7 @@ renders (tier1 watchdog):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: firewallpolicies.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -11170,6 +11149,7 @@ renders (tier1 watchdog):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: floatingips.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -11228,6 +11208,7 @@ renders (tier1 watchdog):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: ipallocations.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -11313,6 +11294,7 @@ renders (tier1 watchdog):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: ippools.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -11398,6 +11380,7 @@ renders (tier1 watchdog):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: loadbalancers.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -11566,6 +11549,7 @@ renders (tier1 watchdog):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: natgateways.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -11702,6 +11686,7 @@ renders (tier1 watchdog):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: networkinterfaces.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -11943,6 +11928,7 @@ renders (tier1 watchdog):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: subnets.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -12027,6 +12013,7 @@ renders (tier1 watchdog):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: vpcpeerings.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -12120,6 +12107,7 @@ renders (tier1 watchdog):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: vpcs.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -12649,30 +12637,6 @@ renders (tier1 watchdog):
       ca:
         secretName: ectobase-pool-ca
   36: |
-    apiVersion: cert-manager.io/v1
-    kind: Certificate
-    metadata:
-      labels:
-        app.kubernetes.io/managed-by: Helm
-        app.kubernetes.io/part-of: ectobase
-      name: broker-dispatch-tls
-      namespace: ectobase-system
-    spec:
-      commonName: ectobase:cluster:test
-      duration: 2160h
-      issuerRef:
-        kind: Issuer
-        name: ectobase-pool-ca
-      privateKey:
-        algorithm: ECDSA
-        size: 256
-      secretName: broker-dispatch-tls
-      subject:
-        organizations:
-          - ectobase:brokers
-      usages:
-        - client auth
-  37: |
     apiVersion: remediation.medik8s.io/v1alpha1
     kind: NodeHealthCheck
     metadata:
@@ -12697,7 +12661,7 @@ renders (tier1 watchdog):
         - duration: 60s
           status: Unknown
           type: Ready
-  38: |
+  37: |
     apiVersion: self-node-remediation.medik8s.io/v1alpha1
     kind: SelfNodeRemediationTemplate
     metadata:
@@ -12709,7 +12673,7 @@ renders (tier1 watchdog):
       template:
         spec:
           remediationStrategy: OutOfServiceTaint
-  39: |
+  38: |
     apiVersion: self-node-remediation.medik8s.io/v1alpha1
     kind: SelfNodeRemediationConfig
     metadata:
@@ -12848,6 +12812,7 @@ renders with vm-materializer enabled:
                 - --cluster-name=test
                 - --dispatch-server=https://[fd00:db8:0:1::1]:6444
                 - --dispatch-ca=/secrets/dispatch-root/ca.crt
+                - --dispatch-client-secret=broker-dispatch-tls
                 - --dispatch-client-cert=/secrets/dispatch-cert/tls.crt
                 - --dispatch-client-key=/secrets/dispatch-cert/tls.key
                 - --dispatch-bootstrap-kubeconfig=/secrets/dispatch-bootstrap/kubeconfig
@@ -12988,6 +12953,7 @@ renders with vm-materializer enabled:
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: compiledcontainers.compiled.ectobase.dev
     spec:
       group: compiled.ectobase.dev
@@ -13293,6 +13259,7 @@ renders with vm-materializer enabled:
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: compilednics.compiled.ectobase.dev
     spec:
       group: compiled.ectobase.dev
@@ -13589,6 +13556,7 @@ renders with vm-materializer enabled:
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: compiledvms.compiled.ectobase.dev
     spec:
       group: compiled.ectobase.dev
@@ -13777,6 +13745,7 @@ renders with vm-materializer enabled:
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: compiledvolumeattachments.compiled.ectobase.dev
     spec:
       group: compiled.ectobase.dev
@@ -14129,6 +14098,7 @@ renders with vm-materializer enabled:
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: firewallpolicies.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -14377,6 +14347,7 @@ renders with vm-materializer enabled:
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: floatingips.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -14435,6 +14406,7 @@ renders with vm-materializer enabled:
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: ipallocations.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -14520,6 +14492,7 @@ renders with vm-materializer enabled:
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: ippools.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -14605,6 +14578,7 @@ renders with vm-materializer enabled:
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: loadbalancers.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -14773,6 +14747,7 @@ renders with vm-materializer enabled:
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: natgateways.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -14909,6 +14884,7 @@ renders with vm-materializer enabled:
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: networkinterfaces.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -15150,6 +15126,7 @@ renders with vm-materializer enabled:
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: subnets.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -15234,6 +15211,7 @@ renders with vm-materializer enabled:
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: vpcpeerings.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -15327,6 +15305,7 @@ renders with vm-materializer enabled:
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+        helm.sh/resource-policy: keep
       name: vpcs.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -15956,30 +15935,6 @@ renders with vm-materializer enabled:
       ca:
         secretName: ectobase-pool-ca
   39: |
-    apiVersion: cert-manager.io/v1
-    kind: Certificate
-    metadata:
-      labels:
-        app.kubernetes.io/managed-by: Helm
-        app.kubernetes.io/part-of: ectobase
-      name: broker-dispatch-tls
-      namespace: ectobase-system
-    spec:
-      commonName: ectobase:cluster:test
-      duration: 2160h
-      issuerRef:
-        kind: Issuer
-        name: ectobase-pool-ca
-      privateKey:
-        algorithm: ECDSA
-        size: 256
-      secretName: broker-dispatch-tls
-      subject:
-        organizations:
-          - ectobase:brokers
-      usages:
-        - client auth
-  40: |
     apiVersion: apps/v1
     kind: Deployment
     metadata:

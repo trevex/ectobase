@@ -4,50 +4,39 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
-func TestNeedsBootstrap(t *testing.T) {
-	dir := t.TempDir()
-
-	certFile := filepath.Join(dir, "tls.crt")
-	keyFile := filepath.Join(dir, "tls.key")
-	if err := os.WriteFile(certFile, []byte("cert-bytes"), 0o600); err != nil {
-		t.Fatalf("write cert: %v", err)
+// After enrolling, the broker writes its certificate to the Secret and must wait for the kubelet to
+// project THAT certificate into the mounted file before it builds its dispatch client. A file that
+// merely exists is not enough: on a cutover it is the old, rejected certificate.
+func TestWaitForFile_WaitsForTheWantedContent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tls.crt")
+	if err := os.WriteFile(path, []byte("old certificate"), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	if err := os.WriteFile(keyFile, []byte("key-bytes"), 0o600); err != nil {
-		t.Fatalf("write key: %v", err)
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		_ = os.WriteFile(path, []byte("new certificate"), 0o600)
+	}()
+	if err := waitForFile(context.Background(), path, []byte("new certificate"), time.Second, 5*time.Millisecond); err != nil {
+		t.Fatalf("waitForFile: %v", err)
 	}
+}
 
-	emptyFile := filepath.Join(dir, "empty")
-	if err := os.WriteFile(emptyFile, nil, 0o600); err != nil {
-		t.Fatalf("write empty: %v", err)
+func TestWaitForFile_TimesOutOnTheOldContent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tls.crt")
+	if err := os.WriteFile(path, []byte("old certificate"), 0o600); err != nil {
+		t.Fatal(err)
 	}
-
-	missingFile := filepath.Join(dir, "does-not-exist")
-
-	tests := []struct {
-		name     string
-		certFile string
-		keyFile  string
-		want     bool
-	}{
-		{"present non-empty cert+key", certFile, keyFile, false},
-		{"missing cert", missingFile, keyFile, true},
-		{"missing key", certFile, missingFile, true},
-		{"empty cert", emptyFile, keyFile, true},
-		{"empty key", certFile, emptyFile, true},
-		{"empty cert path", "", keyFile, true},
-		{"empty key path", certFile, "", true},
-		{"both empty paths", "", "", true},
+	if err := waitForFile(context.Background(), path, []byte("new certificate"), 30*time.Millisecond, 5*time.Millisecond); err == nil {
+		t.Fatal("an old file must not satisfy the wait")
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := needsBootstrap(tc.certFile, tc.keyFile); got != tc.want {
-				t.Fatalf("needsBootstrap(%q, %q) = %v, want %v", tc.certFile, tc.keyFile, got, tc.want)
-			}
-		})
+	if err := waitForFile(context.Background(), filepath.Join(t.TempDir(), "missing"), []byte("x"), 30*time.Millisecond, 5*time.Millisecond); err == nil {
+		t.Fatal("a missing file must not satisfy the wait")
 	}
 }

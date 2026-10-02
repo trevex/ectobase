@@ -53,12 +53,12 @@ func TestTier2_FenceReleaseWaitsForMovedVMRoute(t *testing.T) {
 	mustHaveNamespaces(t, ctx, c, validate.PoolNamespace("pool-b"))
 
 	stale := metav1.NewMicroTime(time.Now().Add(-10 * time.Minute))
-	createPool(t, ctx, c, "pool-a", func(s *platformv1.ClusterPoolStatus) {
+	createPool(t, ctx, c, "pool-a", prefix, func(s *platformv1.ClusterPoolStatus) {
 		s.Phase = clusterpool.PhaseUnknown
 		s.Lease = &platformv1.ClusterPoolLease{HolderIdentity: "brokerA", RenewTime: &stale}
 		s.NodePrefixes = []string{prefix}
 	})
-	createPool(t, ctx, c, "pool-b", func(s *platformv1.ClusterPoolStatus) { s.Phase = clusterpool.PhaseReady })
+	createPool(t, ctx, c, "pool-b", "2001:db8:0:2::/64", func(s *platformv1.ClusterPoolStatus) { s.Phase = clusterpool.PhaseReady })
 	vm := &computev1.VirtualMachine{
 		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "vm1"},
 		Spec: computev1.VirtualMachineSpec{ClusterName: "pool-a",
@@ -72,7 +72,7 @@ func TestTier2_FenceReleaseWaitsForMovedVMRoute(t *testing.T) {
 	rib := reflector.NewRIB()
 	rib.Announce("pool-a-node", 100, vmRoute, []string{sourceNH}, false)
 	nf := fence.NewNetworkFencer(reflectorAdmin(t, rib))
-	r := &failover.Reconciler{Client: c, StorageFencer: confirmingFencer{}, NetworkFencer: nf, Routes: nf, FailoverThreshold: time.Minute}
+	r := &failover.Reconciler{Client: c, StorageFencer: newConfirmingStorage(), NetworkFencer: nf, Routes: nf, FailoverThreshold: time.Minute}
 	reqA := ctrl.Request{NamespacedName: client.ObjectKey{Name: "pool-a"}}
 
 	// --- Fence + rebind; vm1 comes up on pool-b. ---
@@ -160,9 +160,12 @@ func reflectorAdmin(t *testing.T, rib *reflector.RIB) pb.RouteBusAdminClient {
 	return pb.NewRouteBusAdminClient(conn)
 }
 
-func createPool(t *testing.T, ctx context.Context, c client.Client, name string, status func(*platformv1.ClusterPoolStatus)) {
+// createPool creates pool name declaring underlayPrefix (the only coordinate failover fences), then
+// sets its status.
+func createPool(t *testing.T, ctx context.Context, c client.Client, name, underlayPrefix string, status func(*platformv1.ClusterPoolStatus)) {
 	t.Helper()
-	if err := c.Create(ctx, &platformv1.ClusterPool{ObjectMeta: metav1.ObjectMeta{Name: name}}); err != nil {
+	if err := c.Create(ctx, &platformv1.ClusterPool{ObjectMeta: metav1.ObjectMeta{Name: name},
+		Spec: platformv1.ClusterPoolSpec{UnderlayPrefix: underlayPrefix}}); err != nil {
 		t.Fatalf("create pool %s: %v", name, err)
 	}
 	setPoolStatus(t, ctx, c, name, status)

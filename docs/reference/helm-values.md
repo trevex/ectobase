@@ -32,6 +32,8 @@ the fence API all run over mTLS from one root. cert-manager is required in the c
 | `pki.clusterIssuer` | `ectobase-ca` | Name of the CA `ClusterIssuer` both charts issue from. Must match the pool chart. |
 | `pki.caSecretName` | `ectobase-ca` | Secret holding the root CA key pair. cert-manager must run with `--cluster-resource-namespace` set to `namespace` so the `ClusterIssuer` can read it. |
 | `pki.reflectorIP` | `fd00:db8:0:1::1` | The address agents dial, added as an IP SAN on the reflector's server certificate. Must match the host in `reflectorAdmin` and in the pools' `reflectorAddress`. |
+| `pki.clientCASecretName` | `ectobase-dispatch-client-ca` | Secret of the dispatch client CA, a separate self-signed root the chart creates. It is the only CA `dispatch-apiserver` accepts client certificates from (it mounts only the certificate), and the dispatch-controller signs each broker's client certificate from it. Not the route-bus root: every pool intermediate chains to that one. |
+| `pki.fleetIdentities` | `[]` | `RouteBusIdentity` names that are not pools, such as the WAN edge fleet's `edge`, passed to the signer as `--routebus-fleet-identities`. The signer constrains a fleet identity's intermediate to its own `spec.permittedUnderlayCIDRs`, so list only identities the operator creates and no broker can write. Every other identity must be a `ClusterPool` with `spec.underlayPrefix`. Empty trusts none. A name that is also a `ClusterPool` is denied. |
 | `dispatchApiserver.serviceIP` | `fd00:db8:0:1::1` | The address brokers dial `dispatch-apiserver` at, added as an IP SAN on its serving certificate. Must equal the host in each pool's `dispatchServer`. |
 | `dispatchApiserver.grantClusterAdmin` | `false` | Binds the apiserver's ServiceAccount to `cluster-admin`. Off by default: the auth-delegator binding, the extension-apiserver-authentication reader and a scoped informer role are what it needs. |
 
@@ -100,15 +102,15 @@ up as `--extra-uplink`, so returns arriving over a second top-of-rack switch are
 | Value | Default | Meaning |
 | --- | --- | --- |
 | `broker.clusterName` | `""` | This pool's name, matching its `ClusterPool` on the dispatch. Required: the chart refuses to render without it. |
-| `pki.enabled` | `true` | Turns on mTLS to the reflector and the broker's dispatch credential (`broker-dispatch-tls`, `CN=ectobase:cluster:<pool>`, `O=ectobase:brokers`, 90 days). Must match the dispatch chart; requires cert-manager in the pool. |
-| `pki.intermediateSecret` | `ectobase-pool-ca` | The Secret the broker writes the pool's intermediate CA into (`tls.crt`, `tls.key`, `ca.crt` = root). It backs the pool's `ectobase-pool-ca` `Issuer`, which issues the broker's certificate and each agent's node certificate, and the agent trusts its `ca.crt`. |
-| `pki.underlayCIDRs` | `""` | Comma-separated underlay ranges of this pool, for example its /48. The intermediate is IP-name-constrained to them, so it can only issue node certificates whose IP SAN falls inside. Empty means no constraint. |
+| `pki.enabled` | `true` | Turns on mTLS to the reflector and the broker's dispatch credential: `broker-dispatch-tls`, which the broker writes itself from the client certificate the dispatch signer issues (`CN=ectobase:cluster:<pool>`, `O=ectobase:brokers`, 90 days, from the dispatch client CA). Must match the dispatch chart; requires cert-manager in the pool. |
+| `pki.intermediateSecret` | `ectobase-pool-ca` | The Secret the broker writes the pool's intermediate CA into (`tls.crt`, `tls.key`, `ca.crt` = root). It backs the pool's `ectobase-pool-ca` `Issuer`, which issues each agent's node certificate, and the agent trusts its `ca.crt`. |
+| `pki.underlayCIDRs` | `""` | Advisory. Comma-separated underlay ranges of this pool, sent with the broker's intermediate CSR. The dispatch signer ignores them: it constrains the pool intermediate to the `ClusterPool`'s `spec.underlayPrefix`, and denies a pool that has none. A range outside that prefix is only named in the `Signed` condition. |
 
 ### CRDs and optional components
 
 | Value | Default | Meaning |
 | --- | --- | --- |
-| `installCRDs` | `true` | Install the `net` and `compiled` CRDs from `crd-bases/` as ordinary chart resources. Helm updates them on upgrade and deletes any it no longer renders. Never upgrade a live pool to `installCRDs=false`, and never `helm uninstall` it: removing the compiled CRDs deletes every twin, and garbage collection then deletes the VMs, Pods and DataVolumes the materializers own. |
+| `installCRDs` | `true` | Install the `net` and `compiled` CRDs from `crd-bases/`. Helm updates them on upgrade. Each CRD carries `helm.sh/resource-policy: keep`, so `helm uninstall`, setting this to `false`, or a chart version that drops a CRD leaves the CRDs and their objects in place. Removing one takes a deliberate `kubectl delete crd`, which still deletes every object of that kind; for a compiled CRD that is every twin, and garbage collection then deletes the VMs, Pods and DataVolumes the materializers own. A release installed by a chart from before the annotation is protected only after one upgrade with this set to `true`; see [Protecting the CRDs of an older pool release](../operations/deploy-helm.md#protecting-the-crds-of-an-older-pool-release). |
 | `vmMaterializer.enabled` | `false` | Deploy `vm-materializer`, which turns `CompiledVM`s into KubeVirt VMs and `CompiledVolumeAttachment`s into CDI `DataVolume`s. Enable only on pools with KubeVirt and CDI. |
 
 ### Tier-1 failover

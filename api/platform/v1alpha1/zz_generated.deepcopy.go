@@ -248,6 +248,11 @@ func (in *RouteBusIdentitySpec) DeepCopyInto(out *RouteBusIdentitySpec) {
 		*out = make([]string, len(*in))
 		copy(*out, *in)
 	}
+	if in.ClientRequest != nil {
+		in, out := &in.ClientRequest, &out.ClientRequest
+		*out = make([]byte, len(*in))
+		copy(*out, *in)
+	}
 	return
 }
 
@@ -271,6 +276,11 @@ func (in *RouteBusIdentityStatus) DeepCopyInto(out *RouteBusIdentityStatus) {
 	}
 	if in.CABundle != nil {
 		in, out := &in.CABundle, &out.CABundle
+		*out = make([]byte, len(*in))
+		copy(*out, *in)
+	}
+	if in.ClientCertificate != nil {
+		in, out := &in.ClientCertificate, &out.ClientCertificate
 		*out = make([]byte, len(*in))
 		copy(*out, *in)
 	}

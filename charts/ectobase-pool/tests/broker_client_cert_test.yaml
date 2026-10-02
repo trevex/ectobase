@@ -1,0 +1,32 @@
+suite: broker dispatch client certificate
+templates:
+  - templates/routebus-tls.yaml
+  - templates/broker.yaml
+tests:
+  # The pool intermediate chains to the route-bus root, which the dispatch apiserver no longer
+  # trusts for clients: no certificate is minted from it for the broker. Only the agents' Issuer.
+  - it: mints no broker certificate from the pool intermediate
+    template: templates/routebus-tls.yaml
+    set: {broker.clusterName: test}
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: Issuer
+  - it: the broker keeps its dispatch-issued certificate in broker-dispatch-tls
+    template: templates/broker.yaml
+    set: {broker.clusterName: test}
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--dispatch-client-secret=broker-dispatch-tls"
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--dispatch-bootstrap-kubeconfig=/secrets/dispatch-bootstrap/kubeconfig"
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: dispatch-cert
+            secret:
+              secretName: broker-dispatch-tls
+              optional: true

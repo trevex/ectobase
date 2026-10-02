@@ -89,7 +89,7 @@ func TestSignIntermediate_IsConstrainedCA(t *testing.T) {
 	root, rootKey, _ := makeRoot(t)
 	csr, _ := makePoolCSR(t, "k02")
 
-	interPEM, err := SignIntermediate(root, rootKey, csr, "k02", nil, time.Now().Add(90*24*time.Hour))
+	interPEM, err := SignIntermediate(root, rootKey, csr, "k02", []string{"fd00:cafe:1914::/48"}, time.Now().Add(90*24*time.Hour))
 	if err != nil {
 		t.Fatalf("sign: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestSignIntermediate_IsConstrainedCA(t *testing.T) {
 func TestNameConstraint_BlocksCrossPoolLeaf(t *testing.T) {
 	root, rootKey, _ := makeRoot(t)
 	csr, poolKey := makePoolCSR(t, "k02")
-	interPEM, err := SignIntermediate(root, rootKey, csr, "k02", nil, time.Now().Add(90*24*time.Hour))
+	interPEM, err := SignIntermediate(root, rootKey, csr, "k02", []string{"fd00:cafe:1914::/48"}, time.Now().Add(90*24*time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -219,7 +219,7 @@ func TestLoadRootCA_RoundTrip(t *testing.T) {
 
 func TestSignIntermediate_RejectsGarbageCSR(t *testing.T) {
 	root, rootKey, _ := makeRoot(t)
-	if _, err := SignIntermediate(root, rootKey, []byte("not a csr"), "k02", nil, time.Now().Add(time.Hour)); err == nil {
+	if _, err := SignIntermediate(root, rootKey, []byte("not a csr"), "k02", []string{"fd00:cafe:1914::/48"}, time.Now().Add(time.Hour)); err == nil {
 		t.Error("expected error on non-PEM CSR")
 	}
 }

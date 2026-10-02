@@ -22,13 +22,20 @@ func TestMintKubeconfigCAQuotesBracketedV6Server(t *testing.T) {
 }
 
 func TestClusterPoolsManifest(t *testing.T) {
-	got := clusterPoolsManifest([]ComputeCluster{{Name: "k02"}, {Name: "k03"}})
+	got := clusterPoolsManifest([]ComputeCluster{
+		{Name: "k02", UnderlayCIDRs: "fd00:cafe:1914::/48"},
+		{Name: "k03", UnderlayCIDRs: "fd00:cafe:2a3b::/48"},
+	})
 	for _, want := range []string{
 		"apiVersion: platform.ectobase.dev/v1alpha1",
 		"kind: ClusterPool",
 		"name: k02",
 		"name: k03",
 		"region: eu",
+		// Each pool's operator-declared underlay aggregate: the signer constrains the pool's
+		// route-bus intermediate to it, and denies a pool that has none.
+		`underlayPrefix: "fd00:cafe:1914::/48"`,
+		`underlayPrefix: "fd00:cafe:2a3b::/48"`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("manifest missing %q:\n%s", want, got)
@@ -68,6 +75,10 @@ func TestClusterPoolsManifestScopesRouteBusPerPool(t *testing.T) {
 		}
 	}
 
+	// The RouteBusIdentity status (the signed certificate) is the signer's alone.
+	if strings.Contains(got, "routebusidentities/status") {
+		t.Fatalf("per-pool grant must not include routebusidentities/status:\n%s", got)
+	}
 	// The grant must never include `create` — that verb cannot be resourceNames-scoped, so
 	// granting it would re-open cross-pool RouteBusIdentity creation.
 	if strings.Contains(got, `"create"`) {
@@ -91,9 +102,25 @@ func TestClusterPoolsManifestEmpty(t *testing.T) {
 // The dispatch cluster has no StorageClass until `lab ceph` runs, so the chart's default PVC would
 // sit Pending and `lab up` would never see the dispatch come up.
 func TestDispatchHelmArgsPersistPostgresOnHostPath(t *testing.T) {
-	args := dispatchHelmArgs("/kc", "/chart", "fd00:db8:0:1::1", true, "fd00:db8:0:1::1", "registry:5000", "")
+	args := dispatchHelmArgs("/kc", "/chart", "fd00:db8:0:1::1", true, "fd00:db8:0:1::1", "registry:5000", "", nil)
 	if !containsSubseq(args, []string{"--set", "postgres.persistence.type=hostPath"}) {
 		t.Fatalf("dispatch install does not put postgres on a hostPath:\n%v", args)
+	}
+}
+
+// The dispatch chart trusts no fleet identity by default, so the lab must name its edge identity, or
+// the signer denies it as neither a ClusterPool nor a fleet identity and no edge joins the route bus.
+func TestDispatchHelmArgsTrustTheEdgeFleetIdentity(t *testing.T) {
+	s := EctobaseSpec{RouteBusMTLS: true, EdgePKIDir: "/build/edge/pki"}
+	args := dispatchHelmArgs("/kc", "/chart", "fd00:db8:0:1::1", true, "fd00:db8:0:1::1", "registry:5000", "", fleetIdentities(s))
+	if !containsSubseq(args, []string{"--set", "pki.fleetIdentities={edge}"}) {
+		t.Fatalf("dispatch install does not trust the edge fleet identity:\n%v", args)
+	}
+	// No edge provisioned: nothing to trust.
+	for _, s := range []EctobaseSpec{{RouteBusMTLS: true}, {EdgePKIDir: "/build/edge/pki"}} {
+		if got := fleetIdentities(s); len(got) != 0 {
+			t.Errorf("fleetIdentities(%+v) = %v, want none", s, got)
+		}
 	}
 }
 
@@ -192,5 +219,24 @@ func TestMigrateRecreateDeployments(t *testing.T) {
 	}
 	if fresh.findCall("kubectl", "patch") != nil {
 		t.Errorf("fresh install was patched:\n%v", fresh.calls)
+	}
+}
+
+// The pool chart no longer mints broker-dispatch-tls from the pool intermediate; the broker writes
+// it from the dispatch signer's answer. On an existing lab the old Certificate must be gone before
+// the broker enrolls, or cert-manager re-mints the Secret over what the broker wrote.
+func TestRetireBrokerCertificate(t *testing.T) {
+	r := &fakeRunner{}
+	if err := retireBrokerCertificate(context.Background(), r, "/kc"); err != nil {
+		t.Fatalf("retireBrokerCertificate: %v", err)
+	}
+	call := r.findCall("kubectl", "delete", "certificates.cert-manager.io", "broker-dispatch-tls")
+	if call == nil {
+		t.Fatalf("the old Certificate was not deleted:\n%v", r.calls)
+	}
+	for _, want := range [][]string{{"--kubeconfig", "/kc"}, {"-n", "ectobase-system"}, {"--ignore-not-found"}} {
+		if !containsSubseq(call, want) {
+			t.Errorf("delete argv missing %v:\n%v", want, call)
+		}
 	}
 }

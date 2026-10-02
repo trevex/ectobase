@@ -108,6 +108,13 @@ carries out storage fences. `lab tier2 up` installs KubeVirt and CDI on `k02` an
 turns on the vm-materializer by upgrading the pool release, and gives the dispatch controller
 the Ceph cluster ID it needs to fence.
 
+!!! warning "Re-running `lab deploy`"
+    `make lab-deploy` reinstalls the pool chart with its base values, which turns the
+    vm-materializer off again. Run `make lab-tier2-up` after every `lab deploy`, or every VM and
+    volume test fails waiting for a KubeVirt VM that is never created. The lab tool also takes the
+    charts from the checkout that contains `LAB_CONFIG`, not from your working directory: to
+    deploy a git worktree, point `LAB_CONFIG` at that worktree's `test/lab/lab.yaml`.
+
 ## Step 4: reach the clusters
 
 Each cluster's kubeconfig lands at `test/lab/build/<name>/<cluster>.kubeconfig`, owned by you

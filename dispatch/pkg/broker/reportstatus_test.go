@@ -173,3 +173,46 @@ func TestReportStatus_UnknownVMsLeaveTheDrainReportAlone(t *testing.T) {
 		t.Fatalf("NodePrefixes must still be reported, got %v", got.Status.NodePrefixes)
 	}
 }
+
+// A pool with spec.underlayPrefix is fenced as one aggregate. The drain report must say the
+// aggregate is busy while a VM still runs on any node /64 inside it, drained once none does, and —
+// as everywhere — stay as stored when the VMI list failed.
+func TestReportStatus_AggregateFenceDrainsOnlyWhenNoNodeInsideIsBusy(t *testing.T) {
+	s := runtime.NewScheme()
+	if err := platforminstall.AddToScheme(s); err != nil {
+		t.Fatal(err)
+	}
+	const aggregate = "2001:db8::/48"
+	nodes := []NodeFact{{Name: "node-1", Prefix: "2001:db8:0:1::/64"}, {Name: "node-2", Prefix: "2001:db8:0:2::/64"}}
+	report := func(stored bool, vmNode map[string]string, vmsKnown bool) bool {
+		t.Helper()
+		pool := &platformv1.ClusterPool{
+			ObjectMeta: metav1.ObjectMeta{Name: "c1"},
+			Spec:       platformv1.ClusterPoolSpec{UnderlayPrefix: aggregate},
+			Status: platformv1.ClusterPoolStatus{FencedPrefixes: []string{aggregate},
+				NodeDrain: []platformv1.NodeDrainStatus{{Prefix: aggregate, Drained: stored}}},
+		}
+		c := fake.NewClientBuilder().WithScheme(s).WithObjects(pool).WithStatusSubresource(pool).Build()
+		b := &Broker{Dispatch: c, Pools: c, ClusterName: "c1"}
+		if err := b.ReportStatus(context.Background(), nodes, vmNode, vmsKnown); err != nil {
+			t.Fatalf("ReportStatus: %v", err)
+		}
+		got := &platformv1.ClusterPool{}
+		if err := c.Get(context.Background(), client.ObjectKey{Name: "c1"}, got); err != nil {
+			t.Fatal(err)
+		}
+		if len(got.Status.NodeDrain) != 1 || got.Status.NodeDrain[0].Prefix != aggregate {
+			t.Fatalf("want one drain entry for the aggregate, got %+v", got.Status.NodeDrain)
+		}
+		return got.Status.NodeDrain[0].Drained
+	}
+	if report(false, map[string]string{"default/vm1": "node-2"}, true) {
+		t.Fatal("a VM on a node /64 inside the aggregate must hold it")
+	}
+	if !report(false, nil, true) {
+		t.Fatal("with no VM left inside, the aggregate must report drained")
+	}
+	if report(false, nil, false) {
+		t.Fatal("an unknown VM placement must leave a not-drained aggregate as stored")
+	}
+}

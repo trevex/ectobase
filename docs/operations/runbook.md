@@ -23,8 +23,9 @@ those away: each one is there because the problem came back without it.
 
 ## A pool that will not let go
 
-A fence (a reflector route fence plus a Ceph `NetworkFence` on a node's /64) is how failover
-isolates a lost pool. When the pool comes back, the `dispatch-controller` lifts each fence only
+A fence (a reflector route fence plus a Ceph `NetworkFence` on the pool's declared
+`spec.underlayPrefix`) is how failover isolates a lost pool. A pool without that prefix is never
+fenced: its VMs stay put with `FailoverBlocked`. When the pool comes back, the `dispatch-controller` lifts each fence only
 once it can show that doing so is safe, and it fails closed. A pool whose `status.fencedPrefixes`
 stays non-empty after recovery is a pool where one of those proofs has not arrived. This entry is
 the quick check of which one; the diagnosis and the remedies for each case are in
@@ -36,14 +37,14 @@ Start with the pool's status on the dispatch:
 kubectl get clusterpools.platform.ectobase.dev <pool> -o yaml
 ```
 
-The release code (`releaseDrained` in `dispatch/pkg/failover/failover.go`) lifts a fenced /64
+The release code (`releaseDrained` in `dispatch/pkg/failover/failover.go`) lifts a fenced prefix
 only when every row of this table holds. Walk it top to bottom.
 
 | Check | Where to look | When it fails |
 |---|---|---|
 | The pool is reachable | `status.phase` is `Ready` and `status.lease.renewTime` is under 30 seconds old | Nothing is released at all. The broker (`dispatch-broker`) is not renewing its lease. |
-| The broker reports the /64 drained | `status.nodeDrain[]` has `drained: true` for that prefix | The broker still sees a VM running on a node in that /64, or cannot list where VMs run and leaves its previous report in place. While the pool was lost the controller marked every entry not drained, so only a report made after recovery counts. |
-| No route from the /64 is still announced for an address placed on another pool | condition `FenceReleaseBlocked` is `True` with reason `RoutesStillAnnounced` | A node in the /64 still announces a moved workload's address. The message names each route: VNI, prefix, announcing node, nexthop and the owning NIC. |
+| The broker reports the prefix drained | `status.nodeDrain[]` has `drained: true` for that prefix | The broker still sees a VM running on a node whose /64 lies inside it, or cannot list where VMs run and leaves its previous report in place. While the pool was lost the controller marked every entry not drained, so only a report made after recovery counts. |
+| No route from inside the prefix is still announced for an address placed on another pool | condition `FenceReleaseBlocked` is `True` with reason `RoutesStillAnnounced` | A node inside the prefix still announces a moved workload's address. The message names each route: VNI, prefix, announcing node, nexthop and the owning NIC. |
 | The route check itself works | condition `FenceReleaseBlocked` is `True` with reason `RouteCheckFailed` | The check could not run. The message says why: `reflectorAdmin` is empty (message: no route reflector configured); the reflector is unreachable; it runs an image without `AnnouncedFrom` and answers `Unimplemented`, which happens when the reflector lags the controller during an upgrade ([Upgrade order](deploy-helm.md#upgrade-order)); or the `CompiledNIC` twins could not be listed. |
 | Both fences confirm the release | the prefix's `NetworkFence`: `spec.fenceState`, `status.result`, `status.message` | The storage release returns only after csi-addons reports `unfencing operation successful`; until then the prefix stays fenced and the pass retries. The controller does not log a pending or failed release, so read the `NetworkFence` itself. |
 
@@ -78,6 +79,9 @@ get one:
   the `NetworkFence` and returns while the fence is still pending; if the pool's lease comes back
   before the next pass, about two minutes later, the pool is no longer lost and nothing returns
   to that object. It stays `Fenced`, is most likely blocklisted, and no pool lists it.
+- A `NetworkFence` that is not the listing pool's. Failover releases a fence only for the pool its
+  `ectobase.dev/fenced-for-pool` label names, and drops any other entry from that pool's status.
+  An object without the label (created before the label existed) is no pool's, so it strands.
 
 This section is the only place a hand unfence is allowed, and only when both hold:
 
@@ -93,7 +97,9 @@ and find the object:
 kubectl get networkfences.csiaddons.openshift.io
 ```
 
-Clear it by patching the object to `Unfenced` and letting csi-addons run the removal:
+Clear it by patching the object to `Unfenced` and letting csi-addons run the removal. The
+`ectobase.dev/fenced-for-pool` label plays no part in a hand release: it only decides what the
+controller will release on a pool's behalf.
 
 ```sh
 kubectl patch networkfences.csiaddons.openshift.io ectobase-fd00-cafe-1234----64 \
@@ -104,8 +110,9 @@ kubectl get networkfences.csiaddons.openshift.io ectobase-fd00-cafe-1234----64 \
 
 The removal is done when the status reads `Succeeded unfencing operation successful`. Right after
 the patch the status can still show the earlier fence operation's `Succeeded`, so check the
-message, not just the result. The object is then spent: you can delete it, and if the prefix is
-ever fenced again the controller replaces a spent object with a fresh one.
+message, not just the result. The object is then spent: delete it. The controller replaces a spent
+object with a fresh one only if it is labelled for the same pool, and refuses to fence over one held
+for another pool or carrying no label.
 
 !!! warning "Never delete a `Fenced` NetworkFence to clear a blocklist entry"
     Deleting the object only drops csi-addons' finalizer; it never unfences. The blocklist

@@ -6,9 +6,11 @@ package failover
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -59,10 +61,16 @@ func (releaseErrFencer) Release(context.Context, string) error {
 	return errors.New("release unconfirmed")
 }
 
+// testAggregate is the underlay aggregate lostPoolObj declares; every 2001:db8:0:<n>::/64 is inside.
+const testAggregate = "2001:db8::/48"
+
+// lostPoolObj is a pool that declares testAggregate as its spec.underlayPrefix (the only fence
+// target there is), reports the given node prefixes, and whose lease has been stale for ten minutes.
 func lostPoolObj(name string, prefixes ...string) *platformv1.ClusterPool {
 	old := metav1.NewMicroTime(time.Now().Add(-10 * time.Minute))
 	return &platformv1.ClusterPool{
 		ObjectMeta: metav1.ObjectMeta{Name: name},
+		Spec:       platformv1.ClusterPoolSpec{UnderlayPrefix: testAggregate},
 		Status: platformv1.ClusterPoolStatus{
 			Phase:        clusterpool.PhaseUnknown,
 			Lease:        &platformv1.ClusterPoolLease{RenewTime: &old},
@@ -75,17 +83,14 @@ func vmOn(name, pool string) *computev1.VirtualMachine {
 	return &computev1.VirtualMachine{ObjectMeta: metav1.ObjectMeta{Name: name}, Spec: computev1.VirtualMachineSpec{ClusterName: pool}}
 }
 
-// The happy path: fences confirm, so the batch rebinds. Uses ONE node /64 — the ordinary
-// single-/64-per-cluster topology, where fencing that prefix provably covers every node including
-// any central never observed. A pool reporting several distinct /64s is a different case now: see
-// TestFailover_MultipleDistinctNodePrefixes_BlocksWithoutADeclaredAggregate.
+// The happy path: the declared aggregate's fences confirm, so the batch rebinds.
 func TestFailover_WholePoolFence_ThenRebind(t *testing.T) {
 	scheme := testScheme(t)
 	lost := lostPoolObj("A", "2001:db8:0:1::/64")
 	healthy := readyPoolObj("B")
 	vm := vmOn("vm1", "A")
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(lost, healthy, vm).WithStatusSubresource(vm, lost).Build()
-	r := &Reconciler{Client: c, StorageFencer: okFencer{}, NetworkFencer: okFencer{}, FailoverThreshold: time.Minute}
+	r := &Reconciler{Client: c, StorageFencer: asStorage(okFencer{}, "A"), NetworkFencer: okFencer{}, FailoverThreshold: time.Minute}
 
 	if _, err := r.Reconcile(context.Background(), req("A")); err != nil {
 		t.Fatalf("reconcile: %v", err)
@@ -102,7 +107,7 @@ func TestFailover_PartialFence_Blocks(t *testing.T) {
 	lost := lostPoolObj("A", "2001:db8:0:1::/64")
 	vm := vmOn("vm1", "A")
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(lost, readyPoolObj("B"), vm).WithStatusSubresource(vm, lost).Build()
-	r := &Reconciler{Client: c, StorageFencer: denyFencer{errors.New("no ceph")}, NetworkFencer: okFencer{}, FailoverThreshold: time.Minute}
+	r := &Reconciler{Client: c, StorageFencer: asStorage(denyFencer{errors.New("no ceph")}, "A"), NetworkFencer: okFencer{}, FailoverThreshold: time.Minute}
 
 	if _, err := r.Reconcile(context.Background(), req("A")); err != nil {
 		t.Fatalf("reconcile: %v", err)
@@ -124,7 +129,7 @@ func TestFailover_ReleaseDrained_ReleasesOnlyDrained(t *testing.T) {
 		{Prefix: "2001:db8:0:2::/64", Drained: false},
 	}
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pool).WithStatusSubresource(pool).Build()
-	r := &Reconciler{Client: c, StorageFencer: okFencer{}, NetworkFencer: okFencer{}, FailoverThreshold: time.Minute}
+	r := &Reconciler{Client: c, StorageFencer: asStorage(okFencer{}, "A", "2001:db8:0:1::/64", "2001:db8:0:2::/64"), NetworkFencer: okFencer{}, FailoverThreshold: time.Minute}
 
 	if _, err := r.Reconcile(context.Background(), req("A")); err != nil {
 		t.Fatalf("reconcile: %v", err)
@@ -143,7 +148,7 @@ func TestFailover_ReleaseDrained_HoldsOnReleaseError(t *testing.T) {
 	pool.Status.NodeDrain = []platformv1.NodeDrainStatus{{Prefix: "2001:db8:0:1::/64", Drained: true}}
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pool).WithStatusSubresource(pool).Build()
 	// Storage release fails -> the /64 must stay fenced (held).
-	r := &Reconciler{Client: c, StorageFencer: releaseErrFencer{}, NetworkFencer: okFencer{}, FailoverThreshold: time.Minute}
+	r := &Reconciler{Client: c, StorageFencer: asStorage(releaseErrFencer{}, "A", "2001:db8:0:1::/64"), NetworkFencer: okFencer{}, FailoverThreshold: time.Minute}
 
 	if _, err := r.Reconcile(context.Background(), req("A")); err != nil {
 		t.Fatalf("reconcile: %v", err)
@@ -155,13 +160,13 @@ func TestFailover_ReleaseDrained_HoldsOnReleaseError(t *testing.T) {
 	}
 }
 
-func TestFailover_MultiPrefix_PartialBarrier_TracksAppliedFence(t *testing.T) {
+func TestFailover_PartialBarrier_TracksTheAppliedStorageFence(t *testing.T) {
 	scheme := testScheme(t)
 	lost := lostPoolObj("A", "2001:db8:0:1::/64", "2001:db8:0:2::/64")
 	vm := vmOn("vm1", "A")
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(lost, readyPoolObj("B"), vm).WithStatusSubresource(vm, lost).Build()
-	// Storage confirms; network fails -> on the FIRST /64, storage is applied+tracked, then network errors.
-	r := &Reconciler{Client: c, StorageFencer: okFencer{}, NetworkFencer: denyFencer{errors.New("no overlay")}, FailoverThreshold: time.Minute}
+	// Storage confirms; network fails -> the storage fence is applied and tracked, then network errors.
+	r := &Reconciler{Client: c, StorageFencer: asStorage(okFencer{}, "A"), NetworkFencer: denyFencer{errors.New("no overlay")}, FailoverThreshold: time.Minute}
 
 	if _, err := r.Reconcile(context.Background(), req("A")); err != nil {
 		t.Fatalf("reconcile: %v", err)
@@ -172,10 +177,10 @@ func TestFailover_MultiPrefix_PartialBarrier_TracksAppliedFence(t *testing.T) {
 	if got.Spec.ClusterName != "A" {
 		t.Fatalf("must NOT rebind on partial barrier, got %q", got.Spec.ClusterName)
 	}
-	// The already-applied storage fence (first /64) must be tracked in FencedPrefixes.
+	// The already-applied storage fence must be tracked in FencedPrefixes.
 	gp := &platformv1.ClusterPool{}
 	_ = c.Get(context.Background(), key("A"), gp)
-	if len(gp.Status.FencedPrefixes) != 1 || gp.Status.FencedPrefixes[0] != "2001:db8:0:1::/64" {
+	if len(gp.Status.FencedPrefixes) != 1 || gp.Status.FencedPrefixes[0] != testAggregate {
 		t.Fatalf("already-applied fence must be tracked for later release, got %v", gp.Status.FencedPrefixes)
 	}
 }
@@ -185,46 +190,67 @@ func TestFailover_MultiPrefix_PartialBarrier_TracksAppliedFence(t *testing.T) {
 func TestFailover_LaterFenceFailure_KeepsEarlierAppliedFenceTracked(t *testing.T) {
 	scheme := testScheme(t)
 	lost := lostPoolObj("A", "2001:db8:0:1::/64")
-	lost.Status.FencedPrefixes = []string{"2001:db8:0:1::/64"} // applied by an earlier pass
+	lost.Status.FencedPrefixes = []string{testAggregate} // applied by an earlier pass
 	vm := vmOn("vm1", "A")
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(lost, readyPoolObj("B"), vm).WithStatusSubresource(vm, lost).Build()
-	r := &Reconciler{Client: c, StorageFencer: denyFencer{errors.New("ceph down")}, NetworkFencer: okFencer{}, FailoverThreshold: time.Minute}
+	r := &Reconciler{Client: c, StorageFencer: asStorage(denyFencer{errors.New("ceph down")}, "A", testAggregate), NetworkFencer: okFencer{}, FailoverThreshold: time.Minute}
 
 	if _, err := r.Reconcile(context.Background(), req("A")); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 	gp := &platformv1.ClusterPool{}
 	_ = c.Get(context.Background(), key("A"), gp)
-	if len(gp.Status.FencedPrefixes) != 1 || gp.Status.FencedPrefixes[0] != "2001:db8:0:1::/64" {
+	if len(gp.Status.FencedPrefixes) != 1 || gp.Status.FencedPrefixes[0] != testAggregate {
 		t.Fatalf("an already-applied fence must stay tracked for release, got %v", gp.Status.FencedPrefixes)
 	}
 }
 
-// A fence coordinate must never be derived from the entity being fenced — that entity is by
-// definition the one central has lost contact with. Node /64s are broker-reported, so the set is
-// frozen at whatever was last seen: a node that joined during the outage is absent from it. That is
-// harmless while every node in a cluster shares ONE /64 (each node's identity is a /128 inside it),
-// because fencing that /64 covers nodes central never observed. It is NOT harmless when the
-// cluster spans several /64s — an unobserved node could sit in an unreported one, and fencing the
-// reported subset would let it keep writing while its VMs are reattached elsewhere. So that case
-// blocks instead.
-func TestFailover_MultipleDistinctNodePrefixes_BlocksWithoutADeclaredAggregate(t *testing.T) {
-	scheme := testScheme(t)
-	lost := lostPoolObj("A", "2001:db8:0:1::/64", "2001:db8:0:2::/64")
-	vm := vmOn("vm1", "A")
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(lost, readyPoolObj("B"), vm).WithStatusSubresource(vm, lost).Build()
-	r := &Reconciler{Client: c, StorageFencer: okFencer{}, NetworkFencer: okFencer{}, FailoverThreshold: time.Minute}
+// A fence coordinate is never derived from the entity being fenced. status.nodePrefixes is written
+// by the lost pool's broker: frozen at its last report (missing any node that joined since), and,
+// from a lying or buggy broker, anything at all. So a pool without an operator-declared
+// spec.underlayPrefix (or with one that fails the admission rules, stored before they existed) is
+// neither fenced nor rebound: failover fails closed, whatever the pool reports.
+func TestFailover_WithoutAValidUnderlayPrefix_FencesNothingAndBlocks(t *testing.T) {
+	for name, tc := range map[string]struct {
+		prefix   string
+		reported []string
+		why      string
+	}{
+		"no prefix, nothing reported":       {"", nil, "declares no spec.underlayPrefix"},
+		"no prefix, one node /64":           {"", []string{"2001:db8:0:1::/64"}, "declares no spec.underlayPrefix"},
+		"no prefix, several node /64s":      {"", []string{"2001:db8:0:1::/64", "2001:db8:0:2::/64"}, "declares no spec.underlayPrefix"},
+		"no prefix, ::/0 reported":          {"", []string{"::/0"}, "declares no spec.underlayPrefix"},
+		"a stored prefix that is too short": {"fd00::/8", []string{"fd00:cafe::/64"}, "at least /32"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			scheme := testScheme(t)
+			lost := lostPoolObj("A", tc.reported...)
+			lost.Spec.UnderlayPrefix = tc.prefix
+			vm := vmOn("vm1", "A")
+			c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(lost, readyPoolObj("B"), vm).WithStatusSubresource(vm, lost).Build()
+			storage, network := &recordingFencer{}, &recordingFencer{}
+			r := &Reconciler{Client: c, StorageFencer: asStorage(storage, "A"), NetworkFencer: network, FailoverThreshold: time.Minute}
 
-	if _, err := r.Reconcile(context.Background(), req("A")); err != nil {
-		t.Fatalf("reconcile: %v", err)
-	}
-	got := &computev1.VirtualMachine{}
-	_ = c.Get(context.Background(), key("vm1"), got)
-	if got.Spec.ClusterName != "A" {
-		t.Fatalf("VM must stay on the lost pool: an incomplete fence must not rebind; got %q", got.Spec.ClusterName)
-	}
-	if !isBlocked(got) {
-		t.Fatalf("want FailoverBlocked recorded, got conditions %+v", got.Status.Conditions)
+			if _, err := r.Reconcile(context.Background(), req("A")); err != nil {
+				t.Fatalf("reconcile: %v", err)
+			}
+			if len(storage.fenced)+len(network.fenced) != 0 {
+				t.Fatalf("nothing may be fenced without a valid declared prefix; storage=%v network=%v", storage.fenced, network.fenced)
+			}
+			got := &computev1.VirtualMachine{}
+			_ = c.Get(context.Background(), key("vm1"), got)
+			if got.Spec.ClusterName != "A" || !isBlocked(got) {
+				t.Fatalf("want the VM kept on A and FailoverBlocked; cluster=%q blocked=%v", got.Spec.ClusterName, isBlocked(got))
+			}
+			if cond := meta.FindStatusCondition(got.Status.Conditions, "FailoverBlocked"); !strings.Contains(cond.Message, tc.why) {
+				t.Fatalf("FailoverBlocked message %q does not say %q", cond.Message, tc.why)
+			}
+			var pool platformv1.ClusterPool
+			_ = c.Get(context.Background(), key("A"), &pool)
+			if len(pool.Status.FencedPrefixes) != 0 {
+				t.Fatalf("FencedPrefixes = %v, want none", pool.Status.FencedPrefixes)
+			}
+		})
 	}
 }
 
@@ -234,11 +260,10 @@ func TestFailover_MultipleDistinctNodePrefixes_BlocksWithoutADeclaredAggregate(t
 func TestFailover_DeclaredUnderlayPrefix_FencesTheAggregateAndRebinds(t *testing.T) {
 	scheme := testScheme(t)
 	lost := lostPoolObj("A", "2001:db8:0:1::/64", "2001:db8:0:2::/64")
-	lost.Spec.UnderlayPrefix = "2001:db8::/48"
 	vm := vmOn("vm1", "A")
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(lost, readyPoolObj("B"), vm).WithStatusSubresource(vm, lost).Build()
 	rec := &recordingFencer{}
-	r := &Reconciler{Client: c, StorageFencer: rec, NetworkFencer: okFencer{}, FailoverThreshold: time.Minute}
+	r := &Reconciler{Client: c, StorageFencer: asStorage(rec, "A"), NetworkFencer: okFencer{}, FailoverThreshold: time.Minute}
 
 	if _, err := r.Reconcile(context.Background(), req("A")); err != nil {
 		t.Fatalf("reconcile: %v", err)
@@ -259,29 +284,6 @@ func TestFailover_DeclaredUnderlayPrefix_FencesTheAggregateAndRebinds(t *testing
 	}
 }
 
-// The ordinary single-/64 cluster: unchanged behaviour, and the reason the fallback stays allowed
-// at all. Duplicate reports of the one /64 (one per node) are the same coordinate, not a span.
-func TestFailover_SingleNodePrefixRepeatedPerNode_StillRebinds(t *testing.T) {
-	scheme := testScheme(t)
-	lost := lostPoolObj("A", "2001:db8:0:1::/64", "2001:db8:0:1::/64", "2001:db8:0:1::/64")
-	vm := vmOn("vm1", "A")
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(lost, readyPoolObj("B"), vm).WithStatusSubresource(vm, lost).Build()
-	rec := &recordingFencer{}
-	r := &Reconciler{Client: c, StorageFencer: rec, NetworkFencer: okFencer{}, FailoverThreshold: time.Minute}
-
-	if _, err := r.Reconcile(context.Background(), req("A")); err != nil {
-		t.Fatalf("reconcile: %v", err)
-	}
-	got := &computev1.VirtualMachine{}
-	_ = c.Get(context.Background(), key("vm1"), got)
-	if got.Spec.ClusterName != "B" {
-		t.Fatalf("a single-/64 pool must still fail over; got %q", got.Spec.ClusterName)
-	}
-	if len(rec.fenced) != 1 {
-		t.Fatalf("the one distinct /64 should be fenced once, not once per reporting node: %v", rec.fenced)
-	}
-}
-
 // retiredTwinOn is a CompiledVM twin on pool, retired by a rebind (Terminating, held by the
 // release finalizer).
 func retiredTwinOn(pool string) *compiledv1.CompiledVM {
@@ -299,7 +301,7 @@ func TestFailover_FencedPool_ReleasesRetiredTwins(t *testing.T) {
 	twin := retiredTwinOn("A")
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(lost, readyPoolObj("B"), twin).
 		WithStatusSubresource(lost, twin).Build()
-	r := &Reconciler{Client: c, StorageFencer: okFencer{}, NetworkFencer: okFencer{}, FailoverThreshold: time.Minute}
+	r := &Reconciler{Client: c, StorageFencer: asStorage(okFencer{}, "A"), NetworkFencer: okFencer{}, FailoverThreshold: time.Minute}
 
 	if _, err := r.Reconcile(context.Background(), req("A")); err != nil {
 		t.Fatalf("reconcile: %v", err)
@@ -320,7 +322,7 @@ func TestFailover_PartialFence_ReleasesNothing(t *testing.T) {
 	twin := retiredTwinOn("A")
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(lost, readyPoolObj("B"), twin).
 		WithStatusSubresource(lost, twin).Build()
-	r := &Reconciler{Client: c, StorageFencer: okFencer{}, NetworkFencer: denyFencer{err: errors.New("no")}, FailoverThreshold: time.Minute}
+	r := &Reconciler{Client: c, StorageFencer: asStorage(okFencer{}, "A"), NetworkFencer: denyFencer{err: errors.New("no")}, FailoverThreshold: time.Minute}
 
 	_, _ = r.Reconcile(context.Background(), req("A"))
 	var got compiledv1.CompiledVM
@@ -341,7 +343,7 @@ func TestFailover_FencedPool_LeavesLiveTwinAlone(t *testing.T) {
 	live.DeletionTimestamp, live.Finalizers = nil, nil
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(lost, readyPoolObj("B"), live).
 		WithStatusSubresource(lost, live).Build()
-	r := &Reconciler{Client: c, StorageFencer: okFencer{}, NetworkFencer: okFencer{}, FailoverThreshold: time.Minute}
+	r := &Reconciler{Client: c, StorageFencer: asStorage(okFencer{}, "A"), NetworkFencer: okFencer{}, FailoverThreshold: time.Minute}
 
 	if _, err := r.Reconcile(context.Background(), req("A")); err != nil {
 		t.Fatalf("reconcile: %v", err)
@@ -376,5 +378,56 @@ func TestRetiredTwinPredicate(t *testing.T) {
 	}
 	if !retiredTwin.Update(event.UpdateEvent{ObjectOld: live, ObjectNew: retiredTwinOn("A")}) {
 		t.Fatal("a twin becoming retired did not enqueue failover")
+	}
+}
+
+// A declared aggregate is complete only if it really contains every node. A node prefix reported
+// outside it blocks the rebind, but is never fenced: status.nodePrefixes is written by the broker
+// being fenced, and a fence on whatever it reports would let one pool (lying, or buggy) fence ::/0
+// or another pool's /64 and take that down. Only the operator's aggregate is fenced.
+func TestFailover_NodePrefixOutsideTheAggregate_BlocksTheRebindAndIsNotFenced(t *testing.T) {
+	for name, reported := range map[string]string{
+		"the whole address space": "::/0",
+		"another pool's node /64": "2001:db9:0:1::/64",
+		"an IPv4 range":           "10.0.0.0/8",
+		"not a prefix at all":     "garbage",
+	} {
+		t.Run(name, func(t *testing.T) {
+			scheme := testScheme(t)
+			lost := lostPoolObj("A", "2001:db8:0:1::/64", reported)
+			lost.Spec.UnderlayPrefix = "2001:db8::/48"
+			vm := vmOn("vm1", "A")
+			c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(lost, readyPoolObj("B"), vm).WithStatusSubresource(vm, lost).Build()
+			storage, network := &recordingFencer{}, &recordingFencer{}
+			r := &Reconciler{Client: c, StorageFencer: asStorage(storage, "A"), NetworkFencer: network, FailoverThreshold: time.Minute}
+
+			if _, err := r.Reconcile(context.Background(), req("A")); err != nil {
+				t.Fatalf("reconcile: %v", err)
+			}
+			got := &computev1.VirtualMachine{}
+			_ = c.Get(context.Background(), key("vm1"), got)
+			if got.Spec.ClusterName != "A" || !isBlocked(got) {
+				t.Fatalf("a node outside the declared aggregate must block the rebind; cluster=%q blocked=%v", got.Spec.ClusterName, isBlocked(got))
+			}
+			for _, f := range [][]string{storage.fenced, network.fenced} {
+				if len(f) != 1 || f[0] != "2001:db8::/48" {
+					t.Fatalf("want only the operator's aggregate fenced, got %v", f)
+				}
+			}
+			var pool platformv1.ClusterPool
+			_ = c.Get(context.Background(), key("A"), &pool)
+			if len(pool.Status.FencedPrefixes) != 1 || pool.Status.FencedPrefixes[0] != "2001:db8::/48" {
+				t.Fatalf("FencedPrefixes = %v, want only the aggregate", pool.Status.FencedPrefixes)
+			}
+		})
+	}
+}
+
+func TestFenceCoverage_AggregateContainingEveryNodeIsComplete(t *testing.T) {
+	pool := lostPoolObj("A", "2001:db8:0:1::/64", "2001:db8:0:2::/64")
+	pool.Spec.UnderlayPrefix = "2001:db8::/48"
+	targets, complete, why := fenceCoverage(pool)
+	if !complete || len(targets) != 1 || why != "" {
+		t.Fatalf("got targets=%v complete=%v why=%q", targets, complete, why)
 	}
 }

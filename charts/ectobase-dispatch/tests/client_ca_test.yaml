@@ -1,0 +1,75 @@
+suite: dispatch client CA
+templates:
+  - templates/apiserver.yaml
+  - templates/dispatch-controller.yaml
+  - templates/routebus-tls.yaml
+tests:
+  # Every pool intermediate chains to the ectobase-ca root, and name constraints do not bind the
+  # subject: if the apiserver trusted that root for clients, a pool could mint O=system:masters.
+  - it: the apiserver trusts only the dispatch client CA for client certificates
+    template: templates/apiserver.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--client-ca-file=/secrets/client-ca/tls.crt"
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: client-ca
+            secret:
+              secretName: ectobase-dispatch-client-ca
+              items:
+                - key: tls.crt
+                  path: tls.crt
+      - notContains:
+          path: spec.template.spec.volumes
+          content:
+            name: client-ca
+            secret:
+              secretName: ectobase-ca
+  - it: the signer mounts the client CA and signs from it
+    template: templates/dispatch-controller.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "-dispatch-client-ca-cert=/etc/dispatch-client-ca/tls.crt"
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "-dispatch-client-ca-key=/etc/dispatch-client-ca/tls.key"
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: dispatch-client-ca
+            secret:
+              secretName: ectobase-dispatch-client-ca
+  # A separate self-signed root, with no Issuer: only the signer issues from it.
+  - it: the client CA is its own self-signed root
+    template: templates/routebus-tls.yaml
+    documentSelector:
+      path: metadata.name
+      value: ectobase-dispatch-client-ca
+    asserts:
+      - equal:
+          path: kind
+          value: Certificate
+      - equal:
+          path: spec.isCA
+          value: true
+      - equal:
+          path: spec.issuerRef.name
+          value: ectobase-ca-selfsign
+  - it: the ClusterIssuer issues from the route-bus root, not the client CA
+    template: templates/routebus-tls.yaml
+    documentSelector:
+      path: kind
+      value: ClusterIssuer
+    asserts:
+      - equal:
+          path: spec.ca.secretName
+          value: ectobase-ca

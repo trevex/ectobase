@@ -4,6 +4,8 @@
 package failover
 
 import (
+	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -51,3 +53,48 @@ func req(name string) ctrl.Request {
 	return ctrl.Request{NamespacedName: types.NamespacedName{Name: name}}
 }
 func key(name string) client.ObjectKey { return types.NamespacedName{Name: name} }
+
+// fenceRecord is the StorageFencer seam over a test PrefixFencer. It keeps the ownership record the
+// real NetworkFence's fenced-for-pool label keeps: Fence records the pool, Release refuses a prefix
+// recorded for another pool and forgets one it released, FencedFor reads the record.
+type fenceRecord struct {
+	PrefixFencer
+	owner map[string]string
+}
+
+// asStorage wraps f, with held already fenced for pool (as an earlier pass would have).
+func asStorage(f PrefixFencer, pool string, held ...string) *fenceRecord {
+	r := &fenceRecord{PrefixFencer: f, owner: map[string]string{}}
+	for _, p := range held {
+		r.owner[p] = pool
+	}
+	return r
+}
+
+func (r *fenceRecord) Fence(ctx context.Context, pool, prefix string) error {
+	if o, ok := r.owner[prefix]; ok && o != pool {
+		return fmt.Errorf("fence on %s is held for pool %s", prefix, o)
+	}
+	r.owner[prefix] = pool
+	return r.PrefixFencer.Fence(ctx, prefix)
+}
+
+func (r *fenceRecord) Release(ctx context.Context, pool, prefix string) error {
+	o, ok := r.owner[prefix]
+	if !ok {
+		return nil
+	}
+	if o != pool {
+		return fmt.Errorf("fence on %s is held for pool %s, not %s", prefix, o, pool)
+	}
+	if err := r.PrefixFencer.Release(ctx, prefix); err != nil {
+		return err
+	}
+	delete(r.owner, prefix)
+	return nil
+}
+
+func (r *fenceRecord) FencedFor(_ context.Context, prefix string) (string, bool, error) {
+	o, ok := r.owner[prefix]
+	return o, ok, nil
+}

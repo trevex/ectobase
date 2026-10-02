@@ -54,8 +54,9 @@ These run once per fleet, in the dispatch cluster.
 The aggregated apiserver that serves every ectobase API group: `net`, `compute`, `storage`,
 `compiled` and `platform`. Users write intent into it and controllers write compiled objects into
 it. It stores everything in kine over postgres. With `pki.enabled` it runs `hostNetwork` on port
-6444, presents a cert-manager serving certificate and trusts the `ectobase-ca` root as a client
-CA, so brokers (`dispatch-broker`) can reach it directly over mTLS. In-cluster clients reach it through the host
+6444, presents a cert-manager serving certificate from the `ectobase-ca` root, and accepts client
+certificates only from the separate dispatch client CA (`ectobase-dispatch-client-ca`), so brokers
+(`dispatch-broker`) can reach it directly over mTLS. In-cluster clients reach it through the host
 apiserver's aggregation layer. One replica, `Recreate` strategy.
 
 ### kine and postgres
@@ -76,10 +77,13 @@ The fleet's own reconcilers, run in one manager (`dispatch/cmd/controller`):
 - the failover reconciler, which fences a pool that is `Unknown` with a lease more than two
   minutes old (a Ceph `NetworkFence` and a reflector route fence per /64), rebinds its VMs elsewhere, releases the
   retired twins, and lifts the fences once the pool is back and safe;
-- the `RouteBusIdentity` signer, which signs each pool's intermediate CA from the root.
+- the `RouteBusIdentity` signer, which signs each pool's intermediate CA from the `ectobase-ca`
+  root, and each pool broker's dispatch client certificate from the dispatch client CA, with a
+  subject it forces.
 
 It dials the reflector's admin port, set by `reflectorAdmin`, with a client certificate whose CN
-is `dispatch-controller`; the reflector accepts admin calls only from that CN.
+is `dispatch-controller`, issued directly by the root; the reflector accepts admin calls only from
+that identity.
 
 ### mesh-controller
 
@@ -144,7 +148,8 @@ One per pool (`dispatch/cmd/broker`), a `hostNetwork` Deployment on the control-
 the `Recreate` strategy. It talks to two apiservers: it watches the compiled objects in
 `pool-<name>` on the dispatch and reconciles them onto the pool's apiserver, and it reports the
 pool's lease, capacity, node prefixes, drain state, VM placement, disk identity and twin releases
-back up. On first boot it bootstraps the pool's intermediate CA (see
+back up. It requests its own dispatch client certificate from the dispatch signer, enrolling with a
+short-lived bootstrap token on first boot, and the pool's intermediate CA (see
 [Fresh-pool enrollment](../operations/deploy-helm.md#fresh-pool-enrollment-bootstrap)).
 
 ### pod-materializer

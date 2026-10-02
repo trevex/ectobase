@@ -18,19 +18,21 @@ import (
 // aggregate, and each edge agent mints its own leaf from that intermediate in process.
 type RouteBusIdentitySpec struct {
 	// PoolName is the identity this intermediate belongs to — a ClusterPool name, or `edge` for
-	// the WAN edge fleet. The signed intermediate is name-constrained to it so it can only mint
-	// leaves within it: the cross-pool security boundary.
+	// the WAN edge fleet, and must equal the object's name. The signed intermediate is
+	// name-constrained to it so it can only mint leaves within it: the cross-pool security boundary.
 	PoolName string
 	// Request is the PEM-encoded PKCS#10 certificate-signing request for the intermediate CA
 	// (the requester keeps the matching private key).
 	Request []byte
-	// PermittedUnderlayCIDRs are this identity's underlay IPv6 ranges — a pool's covering /48, or
-	// the edge loopback aggregate for the edge fleet. The signer name-constrains the intermediate
-	// to these so it can only mint leaves whose IP SAN (a node's /128 underlay) falls inside them,
-	// closing the IP-SAN bypass of the DNS constraint; the reflector then binds route nexthops to
-	// that SAN. This constraint, not the minting code, is what bounds a holder of the intermediate
-	// — which matters most for the edge, where an agent signs its own leaf locally.
+	// PermittedUnderlayCIDRs are the underlay ranges of a fleet identity, one the dispatch-controller
+	// is told is not a pool (--routebus-fleet-identities), such as the edge fleet's loopback aggregate. The signer name-constrains that intermediate to these
+	// so it can only mint leaves whose IP SAN falls inside them, closing the IP-SAN bypass of the
+	// DNS constraint; the reflector then binds route nexthops to that SAN. For a pool it is
+	// ignored: the constraint is the ClusterPool's spec.underlayPrefix, which no broker can write.
 	PermittedUnderlayCIDRs []string
+	// ClientRequest is a pool broker's PEM-encoded CSR for its dispatch client certificate (the
+	// broker keeps the key). Only the public key is used: the signer forces the subject.
+	ClientRequest []byte
 }
 
 // RouteBusIdentityStatus carries the signer's response: the signed intermediate and the
@@ -41,7 +43,10 @@ type RouteBusIdentityStatus struct {
 	// CABundle is the PEM-encoded root CA the reflector trusts, so the pool can present the
 	// full chain (leaf -> intermediate -> root).
 	CABundle []byte
-	// Conditions represent the latest observations (e.g. Signed / Denied).
+	// ClientCertificate is the broker's dispatch client certificate, signed by the dispatch
+	// client CA in response to spec.clientRequest.
+	ClientCertificate []byte
+	// Conditions represent the latest observations (Signed, ClientSigned).
 	Conditions []metav1.Condition
 }
 
@@ -50,8 +55,9 @@ type RouteBusIdentityStatus struct {
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
 // RouteBusIdentity is a route-bus intermediate-CA request + signed response, served by the
-// dispatch aggregated apiserver. A pool's broker creates its own; the WAN edge fleet's is created
-// by whatever provisions the edges. The dispatch signer fills the status either way.
+// dispatch aggregated apiserver. A pool's is pre-created at enrollment and its broker files the CSR
+// into it; the WAN edge fleet's is created by whatever provisions the edges. The dispatch signer
+// fills the status either way.
 type RouteBusIdentity struct {
 	metav1.TypeMeta
 	metav1.ObjectMeta

@@ -19,8 +19,14 @@ import (
 // NetworkFenceGVR is the csi-addons NetworkFence group/version (cluster-scoped CR).
 var NetworkFenceGVR = schema.GroupVersion{Group: "csiaddons.openshift.io", Version: "v1alpha1"}
 
-// StorageFencer must satisfy the failover PrefixFencer seam.
-var _ failover.PrefixFencer = (*StorageFencer)(nil)
+// StorageFencer must satisfy the failover StorageFencer seam.
+var _ failover.StorageFencer = (*StorageFencer)(nil)
+
+// FencedForPoolLabel names, on a NetworkFence, the ClusterPool the dispatch fenced the prefix for.
+// It is the dispatch's own record of whose fence this is: NetworkFence CRs live on the dispatch
+// host cluster, which no broker has credentials for, unlike a pool's status, which its broker
+// writes. Failover releases a fence only for the pool this label names.
+const FencedForPoolLabel = "ectobase.dev/fenced-for-pool"
 
 // StorageFencer is the storage half of Tier-2 fencing: it blocklists a node /64 at
 // Ceph via a csi-addons NetworkFence CR (fenceState=Fenced), confirming active via
@@ -56,10 +62,11 @@ func fenceName(prefix string) string {
 	return "ectobase-" + r.Replace(prefix)
 }
 
-func (f *StorageFencer) obj(prefix, state string) *unstructured.Unstructured {
+func (f *StorageFencer) obj(pool, prefix, state string) *unstructured.Unstructured {
 	u := &unstructured.Unstructured{}
 	u.SetGroupVersionKind(schema.GroupVersionKind{Group: NetworkFenceGVR.Group, Version: NetworkFenceGVR.Version, Kind: "NetworkFence"})
 	u.SetName(fenceName(prefix))
+	u.SetLabels(map[string]string{FencedForPoolLabel: pool})
 	_ = unstructured.SetNestedField(u.Object, state, "spec", "fenceState")
 	_ = unstructured.SetNestedField(u.Object, f.driver, "spec", "driver")
 	_ = unstructured.SetNestedStringSlice(u.Object, []string{prefix}, "spec", "cidrs")
@@ -84,8 +91,11 @@ func (f *StorageFencer) obj(prefix, state string) *unstructured.Unstructured {
 // released). So Fence waits, touching nothing, until the unfence op is reported Succeeded; then
 // the CR is spent, and Fence deletes it and creates a fresh Fenced one, whose only possible
 // Succeeded is a fence op's. A CR being deleted is waited out.
-func (f *StorageFencer) Fence(ctx context.Context, prefix string) error {
-	want := f.obj(prefix, "Fenced")
+//
+// The CR is labelled with the pool it fences for. One already held for another pool (or carrying
+// no label) is not this pool's to fence over or replace: Fence reports it and touches nothing.
+func (f *StorageFencer) Fence(ctx context.Context, pool, prefix string) error {
+	want := f.obj(pool, prefix, "Fenced")
 	cur := &unstructured.Unstructured{}
 	cur.SetGroupVersionKind(want.GroupVersionKind())
 	err := f.c.Get(ctx, client.ObjectKey{Name: want.GetName()}, cur)
@@ -100,6 +110,9 @@ func (f *StorageFencer) Fence(ctx context.Context, prefix string) error {
 	}
 	if !cur.GetDeletionTimestamp().IsZero() {
 		return fmt.Errorf("NetworkFence %s is being deleted; awaiting it to re-fence", want.GetName())
+	}
+	if owner := cur.GetLabels()[FencedForPoolLabel]; owner != pool {
+		return fmt.Errorf("NetworkFence %s is held for pool %q, not %s; not touching it", want.GetName(), owner, pool)
 	}
 	result, _, _ := unstructured.NestedString(cur.Object, "status", "result")
 	msg, _, _ := unstructured.NestedString(cur.Object, "status", "message")
@@ -134,7 +147,11 @@ func (f *StorageFencer) Fence(ctx context.Context, prefix string) error {
 // Fenced->Unfenced state transition (this driver runs no delete-finalizer un-fence), so
 // a bare delete leaves the blocklist in place (with a multi-year expiry) even though the
 // CR is gone — exactly the recovery leak this replaces.
-func (f *StorageFencer) Release(ctx context.Context, prefix string) error {
+//
+// It releases only a CR labelled for pool. One held for another pool, or carrying no label, is
+// refused with an error and left as it is: a pool's status, which names the prefix to release, is
+// written by its broker, and must not be able to unfence another pool.
+func (f *StorageFencer) Release(ctx context.Context, pool, prefix string) error {
 	name := fenceName(prefix)
 	cur := &unstructured.Unstructured{}
 	cur.SetGroupVersionKind(schema.GroupVersionKind{Group: NetworkFenceGVR.Group, Version: NetworkFenceGVR.Version, Kind: "NetworkFence"})
@@ -144,6 +161,9 @@ func (f *StorageFencer) Release(ctx context.Context, prefix string) error {
 	}
 	if err != nil {
 		return fmt.Errorf("get NetworkFence %s: %w", name, err)
+	}
+	if owner := cur.GetLabels()[FencedForPoolLabel]; owner != pool {
+		return fmt.Errorf("NetworkFence %s is held for pool %q, not %s; refusing to release it", name, owner, pool)
 	}
 	state, _, _ := unstructured.NestedString(cur.Object, "spec", "fenceState")
 	if state != "Unfenced" {
@@ -166,4 +186,19 @@ func (f *StorageFencer) Release(ctx context.Context, prefix string) error {
 		return fmt.Errorf("delete NetworkFence %s: %w", name, derr)
 	}
 	return nil
+}
+
+// FencedFor reports the pool the NetworkFence for prefix was fenced for ("" for a CR with no label),
+// and whether one exists at all.
+func (f *StorageFencer) FencedFor(ctx context.Context, prefix string) (pool string, found bool, err error) {
+	cur := &unstructured.Unstructured{}
+	cur.SetGroupVersionKind(schema.GroupVersionKind{Group: NetworkFenceGVR.Group, Version: NetworkFenceGVR.Version, Kind: "NetworkFence"})
+	err = f.c.Get(ctx, client.ObjectKey{Name: fenceName(prefix)}, cur)
+	if apierrors.IsNotFound(err) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("get NetworkFence %s: %w", fenceName(prefix), err)
+	}
+	return cur.GetLabels()[FencedForPoolLabel], true, nil
 }

@@ -4,6 +4,8 @@
 package broker
 
 import (
+	"net/netip"
+
 	computev1 "github.com/trevex/ectobase/api/compute/v1alpha1"
 	platformv1 "github.com/trevex/ectobase/api/platform/v1alpha1"
 )
@@ -48,14 +50,44 @@ func PlacementForVM(pool, nodeName string, nodes []NodeFact) *computev1.VMPlacem
 	return nil
 }
 
-// DrainStatus computes per-/64 drain confirmation for the fenced prefixes: a /64 is
-// Drained unless it still hosts a stale VMI (busy[prefix]==true). The broker reports
-// this upward after GC-reconciling the rebound CompiledVMs; central releases a fence
-// only for Drained /64s.
-func DrainStatus(fenced []string, busy map[string]bool) []platformv1.NodeDrainStatus {
+// DrainStatus computes per-prefix drain confirmation for the fenced prefixes. busy holds the
+// node /64s that still host a VMI; unplaced says a VMI runs on a node whose /64 is unknown. The
+// broker reports this upward after GC-reconciling the rebound CompiledVMs; central releases a
+// fence only for a Drained prefix.
+//
+// A fenced prefix is busy when any busy /64 overlaps it, not only when one equals it. A pool that
+// declares spec.underlayPrefix is fenced as that one aggregate (a /48, say), which never equals a
+// node /64; matching by equality would report it drained while VMs still run inside it. Overlap
+// also covers the plain case of a fenced /64 equal to a busy one. An unplaced VMI could be inside
+// any fenced prefix, so it holds them all.
+func DrainStatus(fenced []string, busy map[string]bool, unplaced bool) []platformv1.NodeDrainStatus {
+	var busyNets []netip.Prefix
+	for p, b := range busy {
+		if n, err := netip.ParsePrefix(p); b && err == nil {
+			busyNets = append(busyNets, n.Masked())
+		}
+	}
 	out := make([]platformv1.NodeDrainStatus, 0, len(fenced))
 	for _, p := range fenced {
-		out = append(out, platformv1.NodeDrainStatus{Prefix: p, Drained: !busy[p]})
+		out = append(out, platformv1.NodeDrainStatus{Prefix: p, Drained: !unplaced && !prefixBusy(p, busy, busyNets)})
 	}
 	return out
+}
+
+// prefixBusy reports whether the fenced prefix equals a busy key or overlaps a busy prefix.
+func prefixBusy(fenced string, busy map[string]bool, busyNets []netip.Prefix) bool {
+	if busy[fenced] {
+		return true
+	}
+	f, err := netip.ParsePrefix(fenced)
+	if err != nil {
+		return false
+	}
+	f = f.Masked()
+	for _, b := range busyNets {
+		if f.Overlaps(b) {
+			return true
+		}
+	}
+	return false
 }

@@ -4,6 +4,7 @@
 package broker
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -17,8 +18,10 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	platformv1 "github.com/trevex/ectobase/api/platform/v1alpha1"
@@ -99,9 +102,10 @@ type PoolCertBootstrapper struct {
 	PoolName   string
 	SecretName string
 	SecretNS   string
-	// PermittedCIDRs are the pool's underlay ranges (from config, e.g. the pool's /48). The
-	// signer name-constrains the intermediate to these. Empty => no IP constraint (degraded;
-	// the reflector's nexthop==SAN check still holds, but a compromised pool could forge SANs).
+	// PermittedCIDRs are the pool's underlay ranges (from config, e.g. the pool's /48), sent with
+	// the CSR. ADVISORY ONLY: the signer constrains a pool intermediate to the operator-authored
+	// ClusterPool.spec.underlayPrefix and ignores these, because a constraint the constrained party
+	// chooses bounds nothing. They only surface in the Signed condition when outside the prefix.
 	PermittedCIDRs []string
 
 	RenewBefore  time.Duration // re-request when the intermediate is within this of expiry
@@ -143,8 +147,8 @@ func (b *PoolCertBootstrapper) Start(ctx context.Context) error {
 }
 
 // EnsureOnce provisions the pool intermediate exactly once (idempotent: a no-op if the
-// existing intermediate is still fresh). Used at broker first-boot to break the credential
-// bootstrap chicken-and-egg before the steady-state mTLS leaf exists.
+// existing intermediate is still fresh). The broker itself runs the bootstrapper as a runnable
+// (Start); this is the single pass, for callers and tests.
 func (b *PoolCertBootstrapper) EnsureOnce(ctx context.Context) error {
 	b.defaults()
 	return b.ensure(ctx)
@@ -156,18 +160,15 @@ func (b *PoolCertBootstrapper) ensure(ctx context.Context) error {
 	var sec corev1.Secret
 	err := b.Downstream.Get(ctx, types.NamespacedName{Namespace: b.SecretNS, Name: b.SecretName}, &sec)
 	if err == nil && !certNeedsRenewal(sec.Data["tls.crt"], b.RenewBefore, time.Now()) {
-		return nil
+		return b.adoptResigned(ctx, &sec)
 	}
 	if err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("get pool CA secret: %w", err)
 	}
 
-	// The intermediate is name-constrained to the pool's configured underlay range(s). Sourced
-	// from config (not node annotations) so cert issuance doesn't depend on any agent having
-	// started — the agent's own cert depends on this intermediate, which would otherwise deadlock.
-	if len(b.PermittedCIDRs) == 0 {
-		log.Printf("routebus cert bootstrap: no underlay CIDRs configured; signing intermediate WITHOUT an IP name-constraint (degraded)")
-	}
+	// The intermediate is IP-constrained to the ClusterPool's spec.underlayPrefix, which the
+	// signer reads itself; a pool whose ClusterPool declares none is denied and pollSigned times
+	// out (see the RouteBusIdentity's Signed condition).
 	keyPEM, csrPEM, err := GenerateIntermediateKeyAndCSR(b.PoolName)
 	if err != nil {
 		return err
@@ -182,45 +183,70 @@ func (b *PoolCertBootstrapper) ensure(ctx context.Context) error {
 	return b.writeSecret(ctx, keyPEM, certPEM, caPEM)
 }
 
+// adoptResigned copies into the pool Secret an intermediate the signer re-issued for the Secret's
+// CURRENT key. The signer re-signs when the constraint it would issue differs from the one the
+// cert carries (the operator changed the pool's underlayPrefix, or the cert predates the rule), and
+// without this the pool would keep presenting the old one until its renewal window. Best effort: a
+// failed read leaves the Secret as it is, to be retried at the next recheck.
+func (b *PoolCertBootstrapper) adoptResigned(ctx context.Context, sec *corev1.Secret) error {
+	var id platformv1.RouteBusIdentity
+	if err := b.Dispatch.Get(ctx, types.NamespacedName{Name: b.PoolName}, &id); err != nil {
+		log.Printf("routebus cert bootstrap: cannot check for a re-signed intermediate: %v", err)
+		return nil
+	}
+	cert := id.Status.Certificate
+	if len(cert) == 0 || bytes.Equal(cert, sec.Data["tls.crt"]) ||
+		!certMatchesKey(cert, sec.Data["tls.key"]) || certNeedsRenewal(cert, b.RenewBefore, time.Now()) {
+		return nil
+	}
+	ca := id.Status.CABundle
+	if len(ca) == 0 {
+		ca = sec.Data["ca.crt"]
+	}
+	log.Printf("routebus cert bootstrap: adopting the intermediate the signer re-issued for this pool's key")
+	return b.writeSecret(ctx, sec.Data["tls.key"], cert, ca)
+}
+
 // submitCSR creates or updates this pool's RouteBusIdentity on dispatch with the new CSR + the
-// pool's underlay CIDRs (which the signer turns into the intermediate's IP name-constraint).
+// pool's configured underlay CIDRs (advisory: the signer takes the constraint from the ClusterPool).
 func (b *PoolCertBootstrapper) submitCSR(ctx context.Context, csrPEM []byte, cidrs []string) error {
-	id := &platformv1.RouteBusIdentity{}
-	err := b.Dispatch.Get(ctx, types.NamespacedName{Name: b.PoolName}, id)
-	if apierrors.IsNotFound(err) {
-		id = &platformv1.RouteBusIdentity{
-			ObjectMeta: metav1.ObjectMeta{Name: b.PoolName},
-			Spec:       platformv1.RouteBusIdentitySpec{PoolName: b.PoolName, Request: csrPEM, PermittedUnderlayCIDRs: cidrs},
+	// The identity is pre-created at enrollment (RBAC cannot scope create by name, so the broker
+	// holds none). The client-certificate runnable writes the same object, hence the retry.
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		id := &platformv1.RouteBusIdentity{}
+		if err := b.Dispatch.Get(ctx, types.NamespacedName{Name: b.PoolName}, id); err != nil {
+			return err
 		}
-		return b.Dispatch.Create(ctx, id)
-	}
+		id.Spec.PoolName = b.PoolName
+		id.Spec.Request = csrPEM
+		id.Spec.PermittedUnderlayCIDRs = cidrs
+		// The status is left alone: it is the signer's, and the broker holds no grant on it. A
+		// stale cert there is for the old key, which pollSigned does not accept.
+		return b.Dispatch.Update(ctx, id)
+	})
 	if err != nil {
-		return fmt.Errorf("get RouteBusIdentity: %w", err)
+		return fmt.Errorf("file intermediate CSR on RouteBusIdentity %s: %w", b.PoolName, err)
 	}
-	id.Spec.PoolName = b.PoolName
-	id.Spec.Request = csrPEM
-	id.Spec.PermittedUnderlayCIDRs = cidrs
-	// Clear the old status cert so pollSigned waits for the re-sign, not the stale one.
-	id.Status.Certificate = nil
-	if err := b.Dispatch.Update(ctx, id); err != nil {
-		return fmt.Errorf("update RouteBusIdentity: %w", err)
-	}
-	_ = b.Dispatch.Status().Update(ctx, id) // best-effort clear of stale status
 	return nil
 }
 
 // pollSigned waits until the signer publishes a cert matching our key, or times out.
 func (b *PoolCertBootstrapper) pollSigned(ctx context.Context, keyPEM []byte) (certPEM, caPEM []byte, err error) {
 	deadline := time.Now().Add(b.PollTimeout)
+	var last string
 	for {
 		var id platformv1.RouteBusIdentity
 		if e := b.Dispatch.Get(ctx, types.NamespacedName{Name: b.PoolName}, &id); e == nil {
 			if len(id.Status.Certificate) > 0 && certMatchesKey(id.Status.Certificate, keyPEM) {
 				return id.Status.Certificate, id.Status.CABundle, nil
 			}
+			if c := meta.FindStatusCondition(id.Status.Conditions, "Signed"); c != nil {
+				last = c.Message
+			}
 		}
 		if time.Now().After(deadline) {
-			return nil, nil, fmt.Errorf("timed out waiting for RouteBusIdentity %q to be signed", b.PoolName)
+			// The signer's last word, e.g. a denial because the ClusterPool declares no underlayPrefix.
+			return nil, nil, fmt.Errorf("timed out waiting for RouteBusIdentity %q to be signed (last Signed condition: %q)", b.PoolName, last)
 		}
 		if !sleepCtx(ctx, b.PollInterval) {
 			return nil, nil, ctx.Err()

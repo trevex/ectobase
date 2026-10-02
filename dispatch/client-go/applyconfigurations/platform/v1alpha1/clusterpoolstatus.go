@@ -20,11 +20,13 @@ type ClusterPoolStatusApplyConfiguration struct {
 	Allocatable *corev1.ResourceList `json:"allocatable,omitempty"`
 	// Lease is the broker heartbeat; a stale RenewTime drives Phase to Unknown.
 	Lease *ClusterPoolLeaseApplyConfiguration `json:"lease,omitempty"`
-	// NodePrefixes is the set of node /64 underlay prefixes composing this cluster,
-	// reported by the broker. The dispatch fences these (Ceph NetworkFence + route
-	// blocklist) to evacuate a lost pool without reaching it.
+	// NodePrefixes is the set of node /64 underlay prefixes composing this cluster, reported by
+	// the broker. They key the drain report. They are never fenced: the pool writes them itself,
+	// so failover fences only spec.underlayPrefix, and a reported prefix outside it blocks the
+	// rebind.
 	NodePrefixes []string `json:"nodePrefixes,omitempty"`
-	// FencedPrefixes is the subset of NodePrefixes the dispatch has fenced (evacuation).
+	// FencedPrefixes are the prefixes the dispatch has fenced (spec.underlayPrefix) while
+	// evacuating the pool; recovery releases them.
 	FencedPrefixes []string `json:"fencedPrefixes,omitempty"`
 	// NodeDrain reports, per fenced /64, whether the returning broker has confirmed
 	// its stale VMIs are terminated (safe to release the fence).

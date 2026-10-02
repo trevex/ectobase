@@ -2,7 +2,7 @@
 
 In this guide you lose a pool and watch the dispatch recover from it. You boot a VM with a
 persistent disk on `k02`, cut `k02`'s broker off the way the live test does, and follow what the
-dispatch does about it: the pool turns `Unknown`, the dispatch fences the pool's node /64 off Ceph
+dispatch does about it: the pool turns `Unknown`, the dispatch fences the pool's underlay prefix off Ceph
 and off the route bus, and rebinds the VM to `k03`, which boots it from the same disk. Then you
 bring `k02` back and watch it earn its fence off again: it drops its stale copy of the VM, reports
 itself drained, withdraws the VM's route, and only then does the fence come off.
@@ -222,6 +222,16 @@ listed 0 entries
 ```
 
 The `NetworkFence` for `k02` will be `ectobase-fd00-cafe-1914----64`.
+
+!!! warning "The lab now fences the /48"
+    The output in this guide was captured before the lab's `ClusterPool`s declared
+    `spec.underlayPrefix`. They now do, because a pool needs it to get its route-bus intermediate,
+    and failover fences that one aggregate instead of the node /64 (see
+    [failover](../architecture/failover.md#decide-what-to-fence-coverage)). On a current lab, `k02`'s
+    fence coordinate is `fd00:cafe:1914::/48` and its `NetworkFence` is
+    `ectobase-fd00-cafe-1914----48`: use that name for `FC` and in the commands below, and read
+    `/48` wherever the captured output shows `fd00:cafe:1914::/64` as a fenced prefix. Check it with
+    `khub get clusterpool k02 -o jsonpath='{.spec.underlayPrefix}'`.
 
 ## Step 4: lose k02
 

@@ -109,24 +109,28 @@ it is back counts.
 
 ### Decide what to fence: coverage
 
-A fence on the prefixes the dispatch knows about is not necessarily a fence on every node.
-`status.nodePrefixes` is reported by the broker, so the dispatch's copy is frozen at what it saw
-before contact was lost; a node that joined during the outage is missing from it. `fenceCoverage`
-decides explicitly.
+Failover fences one coordinate only: the `ClusterPool`'s `spec.underlayPrefix`, which the operator
+declares at registration. It is an aggregate containing every node's underlay, so fencing it covers
+every node, including one the dispatch never saw. `fenceCoverage` decides:
 
 | Situation | What is fenced | Coverage | Outcome |
 |---|---|---|---|
-| `spec.underlayPrefix` set | that one aggregate, e.g. `fd00:cafe:1a2b::/48` | complete by construction | proceeds |
-| unset, reported prefixes collapse to one distinct /64 | that /64 | complete: every node's VTEP is a /128 inside it | proceeds |
-| unset, several distinct /64s | every reported /64 | not provable | fences, then blocks the rebind |
-| unset, nothing reported | nothing | none | blocks |
+| `spec.underlayPrefix` set and valid | that one aggregate, e.g. `fd00:cafe:1a2b::/48` | complete by construction | proceeds |
+| set, but a reported node prefix lies outside it | the aggregate only | not provable: the declaration may miss a node | fences, then blocks the rebind |
+| unset, or failing the admission rules | nothing | none | blocks |
 
-The third row fences first and blocks second on purpose. Containing the nodes the dispatch knows
-about costs nothing; the step that can corrupt a filesystem is attaching a disk elsewhere while an
-unfenced node might still write to it, so that is the step withheld. The fix is to declare
-`spec.underlayPrefix` on the `ClusterPool`, an aggregate containing every node's underlay. It is
-central configuration set at registration, precisely so that it does not depend on the cluster that
-can no longer be reached.
+`status.nodePrefixes` is never a fence target, whatever the pool reports. It comes from the broker of
+the pool being fenced: frozen at its last report before contact was lost, so it misses any node that
+joined during the outage, and, from a lying or buggy broker, anything at all. Fencing it would let
+one pool report `::/0`, or another pool's /64, and fence that at Ceph and the route bus. The worst a
+report can do is block its own pool's rebind, which harms only that pool's tenants.
+
+A pool without a valid `spec.underlayPrefix` therefore fails closed: nothing is fenced, nothing is
+rebound, and every VM on it gets `FailoverBlocked`. Such a pool cannot get a route-bus intermediate
+either. The second row fences first and blocks second on purpose: containing what the declaration
+covers costs nothing, and the step that can corrupt a filesystem is attaching a disk elsewhere while
+an unfenced node might still write to it, so that is the step withheld. The fix in both blocked
+cases is a correct `spec.underlayPrefix`.
 
 ### Fence each prefix
 
@@ -154,13 +158,14 @@ spec is never touched.
 
 | Message starts with | Meaning |
 |---|---|
-| `no NodePrefixes reported and spec.underlayPrefix unset` | Nothing to fence. Set `spec.underlayPrefix`. |
+| `ClusterPool <name> declares no spec.underlayPrefix; failover fences only an operator-declared prefix` | Nothing is fenced or rebound. Declare `spec.underlayPrefix`. |
+| `ClusterPool <name>: spec.underlayPrefix: Invalid value ...` | A prefix stored before the admission rules fails them. Nothing is fenced or rebound until it is corrected. |
 | `storage fence unconfirmed for <prefix>: NetworkFence ... created; awaiting Succeeded` | Normal for one pass; csi-addons has not run the fence yet. |
 | `storage fence unconfirmed for <prefix>: ... not active (result=..., message=...)` | csi-addons reports something other than a successful fence. Check csi-addons and the Ceph caps. |
 | `storage fence unconfirmed for <prefix>: ... unfence not yet reported` | An earlier release is still unfencing that CR. The fencer waits for it, then fences afresh. |
 | `storage fence unconfirmed for <prefix>: NetworkFence <name> was unfenced; replacing it with a fresh Fenced one` or `... is being deleted; awaiting it to re-fence` | Normal for one pass while a spent CR is replaced. |
 | `network fence unconfirmed for <prefix>` | The reflector admin API is unreachable or not configured. |
-| `fenced the N reported node /64s ... coverage is not provably complete` | Several /64s and no `spec.underlayPrefix`. |
+| `fenced spec.underlayPrefix ..., but coverage is not provably complete: the pool reports node prefixes outside it` | A reported node prefix lies outside the declared aggregate. Correct `spec.underlayPrefix`, or find out why the pool reports it. |
 | `no pool to fail over to: ...` | Fenced and complete, but no `Ready` pool fits this VM. |
 
 ### Rebind
@@ -209,32 +214,45 @@ its multi-year expiry. This section describes what a returning pool must show be
 comes off, and why each condition exists.
 
 Every pass, before it checks whether the pool is lost, the reconciler runs `releaseDrained` over
-`status.fencedPrefixes`. A prefix is released only when all three gates pass:
+`status.fencedPrefixes`. A prefix is released only when all four gates pass:
 
 | Gate | Passes when | Prevents |
 |---|---|---|
+| This pool's fence | the prefix's `NetworkFence` carries the label `ectobase.dev/fenced-for-pool=<this pool>` | A pool's broker writes its own `status.fencedPrefixes` and `status.nodeDrain`, so a compromised pool could list another pool's fence as its own and drained, and have it lifted while that pool's VMs run elsewhere |
 | Reachable | `clusterpool.Reachable`: phase `Ready` and a lease renewed within `HealthStale`, both | Unfencing a pool that is still, or again, partitioned |
 | Drained | the broker's current `status.nodeDrain` entry for the prefix says `drained: true` | Unfencing storage while a stale VMI still runs there |
 | Routes withdrawn | the reflector holds, from inside the prefix, no route of an address placed on another pool | Unfencing a node that still announces, and may still run, a VM that moved |
 
-For a prefix that passes, the storage fence is released first (flip to `Unfenced`, wait for the
-unfence message, delete the CR), then the network fence (`RouteBusAdmin.ClearFence`), and the prefix
-leaves `fencedPrefixes`. A release still in progress keeps the prefix and is retried. When the
-reflector's fence clears, it re-advertises the routes it was hiding from what it stored; the agents
-do not need to re-announce them.
+The first gate reads the dispatch's own record, never the pool's status. The storage fencer labels
+each `NetworkFence` with the pool it fenced for, and `NetworkFence` CRs live on the dispatch host
+cluster, which no broker has credentials for. An entry in `status.fencedPrefixes` whose
+`NetworkFence` is labelled for another pool, carries no label, or no longer exists is dropped from
+status (and logged), and released at neither backend. The storage fencer's own `Release` refuses
+such a CR as well. A `nodeDrain` entry is consulted only for prefixes that pass this gate, so a pool
+can affect only its own fences. If the operator changes `spec.underlayPrefix` while a fence is held,
+the old prefix's `NetworkFence` is still labelled for the pool and is released as usual.
+
+For a prefix that passes, the network fence is released first (`RouteBusAdmin.ClearFence`), then
+the storage fence (flip to `Unfenced`, wait for the unfence message, delete the CR), and the prefix
+leaves `fencedPrefixes`. The `NetworkFence` holds the ownership record, so it goes last: a pass that
+stops in between leaves the record for the next one. A release still in progress keeps the prefix
+and is retried. When the reflector's fence clears, it re-advertises the routes it was hiding from
+what it stored; the agents do not need to re-announce them.
 
 ```mermaid
 flowchart TD
-    start["prefix in status.fencedPrefixes"] --> r{"Reachable?<br/>phase Ready AND lease fresh"}
+    start["prefix in status.fencedPrefixes"] --> o{"NetworkFence labelled<br/>for this pool?"}
+    o -- no --> drop["drop from fencedPrefixes,<br/>release nothing"]
+    o -- yes --> r{"Reachable?<br/>phase Ready AND lease fresh"}
     r -- no --> hold["hold"]
     r -- yes --> d{"broker reports<br/>drained: true?"}
     d -- no --> hold
     d -- yes --> q{"reflector: any address placed<br/>on another pool still announced<br/>from this prefix?"}
     q -- "cannot ask" --> blk1["hold<br/>FenceReleaseBlocked=True<br/>RouteCheckFailed"]
     q -- yes --> blk2["hold, recheck in 5s<br/>FenceReleaseBlocked=True<br/>RoutesStillAnnounced"]
-    q -- no --> sr["release storage fence<br/>(Unfenced, then delete CR)"]
-    sr --> nr["release network fence<br/>(ClearFence)"]
-    nr --> done["drop from fencedPrefixes"]
+    q -- no --> nr["release network fence<br/>(ClearFence)"]
+    nr --> sr["release storage fence<br/>(Unfenced, then delete CR)"]
+    sr --> done["drop from fencedPrefixes"]
 ```
 
 ### Gate 1: reachable
@@ -253,12 +271,14 @@ fences and rebinds their VMs elsewhere. `forgetDrain` covers the same hole from 
 The broker reports drain every 10 seconds, separately from its lease heartbeat:
 
 1. `gatherNodes` reads each node's /64 from the annotation `net.ectobase.dev/underlay-prefix`, which
-   the agent stamps on its own `Node`. A node without it is not reported, and a VMI on such a
-   node does not hold any prefix's drain.
+   the agent stamps on its own `Node`. A node without it is not reported in `nodePrefixes`.
 2. `gatherVMNodes` lists the pool's KubeVirt `VirtualMachineInstance`s and maps each scheduled VMI
    to its node.
-3. `ReportStatus` marks a fenced prefix busy if any VMI runs on a node in it, and writes
-   `status.nodeDrain` as one entry per fenced prefix with `drained: !busy`.
+3. `ReportStatus` marks each node /64 that runs a VMI busy, and writes `status.nodeDrain` as one
+   entry per fenced prefix with `drained: !busy`. A fenced prefix is busy when a busy /64 overlaps
+   it, in either family, not only when one equals it. That is what makes a pool fenced as its
+   `spec.underlayPrefix` aggregate work: a busy node /64 inside the `/48` holds the `/48`. A VMI on a
+   node whose /64 is unknown could be inside any fenced prefix, so it holds every one.
 
 The report fails closed. If the VMI list fails for any reason except `kubevirtAbsent`, the broker
 leaves `nodeDrain` exactly as stored for that tick: "could not list" must never read as "nothing runs
@@ -328,9 +348,10 @@ traffic could reach the wrong copy.
 |---|---|
 | No failover without lease timing | A pool that never reported would be fenced and emptied on no evidence. |
 | Fence before rebind | The partitioned source keeps writing the RBD image while the target boots from it: filesystem corruption. `ReadWriteOnce` is enforced per cluster, and the lab's images carry only `layering`, so Ceph does not refuse a second writer. |
-| Coverage check | A node that joined during the outage, in an unreported /64, stays writable while the VM starts elsewhere. |
+| Coverage check, declared prefix only | A node outside the declared prefix stays writable while the VM starts elsewhere. Fencing broker-reported prefixes instead could miss a node that joined during the outage, or fence another pool's. |
 | Retired twin plus `releaseFencedTwins` | The target would start the VM while nothing had shown that the source stopped. |
 | `forgetDrain` | A pool lost again carries `drained: true` from its previous recovery into the next one. |
+| Ownership gate (the `NetworkFence` label) | A compromised pool lists another pool's fence in its own status as fenced and drained, and the dispatch unfences that pool at Ceph and the reflector while its VMs run elsewhere. |
 | Reachable gate | A partition that also empties the reflector passes the route gate and reopens Ceph to live, partitioned nodes. |
 | Drain gate | A stale VMI on the recovered pool regains write access to an image the new pool is using. |
 | Route gate | A stale source still announcing a moved VM's /32 attracts its traffic, and may still be running it. |
@@ -416,7 +437,6 @@ give.
 
 | Gap | Consequence |
 |---|---|
-| In aggregate mode, drain is reported immediately. With `spec.underlayPrefix` set, `fencedPrefixes` holds the aggregate, but the broker marks a prefix busy by matching each node's /64, and no node /64 equals the aggregate. | The aggregate reads `drained: true` as soon as the pool is back, so only the route gate holds the release. It catches a stale VM whose interface is still announced, not one whose node has lost its route-bus session. |
 | A reflector restart loses fences, which it keeps in memory only; see [HA and restarts](ha-and-restarts.md#reflector-restarts). | A lost pool is fenced again on the next failover pass; a recovered pool held on drain or routes stays storage-fenced but is no longer hidden at the reflector. |
 | `releaseFencedTwins` runs only for a pool that is lost, fenced with every fence confirmed and complete coverage, and only in namespace `pool-<name>`. | A retired twin is never released for a pool whose `ClusterPool` was deleted, a pool that never had a lease, a pool fenced with incomplete coverage, a pool whose fences never confirm (for example a dispatch-controller without `--reflector-admin`, or csi-addons not running), or a twin in a namespace outside that convention. A VM moving off such a pool waits for an operator; see [Moving a VM between clusters](vm-moves.md#a-move-that-does-not-finish). |
 | A fence that was never confirmed is not tracked. The first pass creates the `NetworkFence`; the prefix enters `status.fencedPrefixes` only on a later pass that sees it confirmed. | If the pool comes back within the roughly 2 minutes before that pass, the CR stays `Fenced`, csi-addons has likely blocklisted the prefix, and no `ClusterPool` lists it, so nothing releases it. See [A stranded Ceph blocklist entry](../operations/runbook.md#a-stranded-ceph-blocklist-entry). |

@@ -589,8 +589,9 @@ func deployEctobase(ctx context.Context, cfg *config.Config) error {
 		if cl.Name == dispatchCluster {
 			continue
 		}
-		// Constrain this pool's route-bus intermediate to its own underlay /48 so it can only
-		// mint node leaves inside the pool's underlay (the reflector then binds nexthops to that).
+		// The pool's underlay /48 becomes its ClusterPool's spec.underlayPrefix: the signer
+		// constrains the pool's route-bus intermediate to it (so it can only mint node leaves inside
+		// the pool's underlay, which the reflector binds nexthops to), and failover fences it whole.
 		compute = append(compute, deploy.ComputeCluster{
 			Name:          cl.Name,
 			Kubeconfig:    p.clusterKubeconfig(cl.Name),

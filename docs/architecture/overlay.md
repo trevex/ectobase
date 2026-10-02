@@ -71,11 +71,14 @@ The earlier design was different. A bare IP-in-IPv6 header carries no VNI, so th
 had to identify the endpoint itself, and every interface got its own `/128` carved from the node's
 `/64`. Geneve retired that model.
 
-### The node /64 is the fence coordinate
+### The node /64 is a drain coordinate
 
-The `/64` that contains a node's VTEP survives with one job: it is the coordinate failover uses to
-[fence](../concepts/what-is-ectobase.md#vocabulary) the node. The agent writes it onto its own `Node` as an annotation (`StampNodePrefix` in
-`mesh/agent/nodeprefix.go`), and failover fences that prefix on both the route bus and Ceph. See
+The `/64` that contains a node's VTEP survives with one job: the broker's drain report. The agent
+writes it onto its own `Node` as an annotation (`StampNodePrefix` in `mesh/agent/nodeprefix.go`),
+the broker reports it in `status.nodePrefixes`, and a fenced prefix stays held while any node `/64`
+inside it still runs a VMI. It is never what failover
+[fences](../concepts/what-is-ectobase.md#vocabulary): that is only the operator-declared
+`spec.underlayPrefix`, because the pool being fenced writes `status.nodePrefixes` itself. See
 [failover](failover.md).
 
 The `/64` is not an address-ownership unit. In the lab every node in a cluster takes its `/128` from
